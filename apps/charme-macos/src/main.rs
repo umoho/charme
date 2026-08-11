@@ -1,7 +1,22 @@
-fn main() {
-    #[cfg(target_os = "macos")]
-    println!("Charme macOS frontend has not been implemented yet.");
+#![cfg_attr(target_os = "macos", allow(unexpected_cfgs))]
 
-    #[cfg(not(target_os = "macos"))]
-    println!("This package is the macOS frontend for Charme.");
+#[cfg(target_os = "macos")]
+mod app;
+#[cfg(target_os = "macos")]
+mod bridge;
+#[cfg(target_os = "macos")]
+mod frame_image;
+#[cfg(target_os = "macos")]
+mod interaction;
+#[cfg(target_os = "macos")]
+mod slider;
+
+#[cfg(target_os = "macos")]
+fn main() {
+    app::run();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("charme-macos requires macOS");
 }

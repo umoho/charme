@@ -14,6 +14,8 @@ charme-renderer = { path = "../../crates/charme-renderer" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cacao.workspace = true
+core-graphics.workspace = true
+foreign-types.workspace = true
 
 [lints]
 workspace = true

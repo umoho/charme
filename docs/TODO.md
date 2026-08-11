@@ -1,6 +1,13 @@
 # Charme TODO
 
-本文档记录 Charme 的产品与工程任务。任务按依赖关系大致排序；完成任务时应同步更新 checkbox，并在必要时补充测试与文档。
+本文档记录 Charme 的产品与工程任务。完成任务时应同步更新 checkbox，并在必要时补充测试与文档。
+
+## 当前实现优先级
+
+1. 做出可体验的 macOS 原生编辑器 UI，并持续完善 Viewport、PMX 打开和材质面板。
+2. 将 Shader reflection 接入原生 Inspector 控件。
+3. 实现 `charme-bevy` 固定材质 ABI，让 UI 参数可以真正改变角色材质。
+4. 完善项目保存、导出和跨平台前端。
 
 ## 0. 项目基础
 
@@ -102,17 +109,19 @@
 
 ## 5. `charme-macos`：原生 macOS UI
 
-- [ ] 创建 Cacao/AppKit 应用和原生主窗口。
-- [ ] 建立主线程 UI 与 renderer worker 的生命周期桥接。
-- [ ] 实现顶部工具栏和原生菜单。
-- [ ] 实现 Viewport、Scene/Materials、Inspector 和 Diagnostics 面板。
-- [ ] 实现可调整尺寸的初始 Docking 布局。
-- [ ] 将 BGRA frame 显示为 `CGImage`/`NSImage`。
-- [ ] 正确处理 points、物理像素和 Retina scale factor。
-- [ ] 将鼠标拖动和滚轮事件转换为 Orbit/Zoom 命令。
-- [ ] 实现打开 PMX 的原生文件对话框。
+- [x] 创建 Cacao/AppKit 应用和原生主窗口。
+- [x] 建立主线程 UI 与 renderer worker 的生命周期桥接。
+- [ ] 完善顶部工具栏；原生应用菜单和“Open PMX”菜单已可用。
+- [x] 建立 Viewport、Scene/Materials 和 Inspector 三栏初始界面。
+- [ ] 增加 Diagnostics 面板。
+- [ ] 将固定三栏升级为可调整尺寸的 Docking 布局。
+- [x] 将 BGRA frame 显示为 `CGImage`/`NSImage`。
+- [x] 正确处理 points、物理像素和 Retina scale factor。
+- [x] 将鼠标拖动和滚轮事件转换为 Orbit/Zoom 命令。
+- [x] 实现打开 PMX 的原生文件对话框。
 - [ ] 支持拖放 PMX、WGSL 和纹理文件。
-- [ ] 展示 PMX material slot 列表和加载 warning。
+- [x] 展示 PMX material slot 列表、纹理摘要和加载 warning 数量。
+- [ ] 增加可展开的加载 warning 详情。
 - [ ] 根据 Shader reflection 生成原生 Inspector 控件。
 - [ ] 支持 float、integer、boolean、vector、color 和 texture 控件。
 - [ ] 实现参数编辑的连续事务与 Undo/Redo。

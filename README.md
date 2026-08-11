@@ -30,8 +30,11 @@ Implemented foundations:
   CPU readback, resize suspension, and orbit camera controls.
 - Asynchronous PMX loading from arbitrary file-system paths, texture fallback,
   material-slot summaries, scene replacement, and automatic camera framing.
+- A native macOS editor window with Scene/Materials, Viewport and Inspector
+  columns, Retina-aware frame display, Orbit controls, and an Open PMX dialog.
 
-Charme's Bevy material ABI and the native application UI are the next layers.
+The next UI milestone is a reflection-driven native material Inspector, followed
+by Charme's reusable Bevy material ABI.
 
 ## Development
 
@@ -40,4 +43,10 @@ cargo test -p charme-shader --all-targets
 cargo test -p charme-renderer --all-targets
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Run the current macOS UI with:
+
+```sh
+cargo run -p charme-macos
 ```
