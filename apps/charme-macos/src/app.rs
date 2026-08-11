@@ -39,8 +39,9 @@ use crate::{
 };
 
 pub(crate) enum Message {
-    ChooseFile,
-    OpenPath(PathBuf),
+    ChooseProject,
+    OpenProject(PathBuf),
+    NewProject,
     Frame {
         frame: Frame,
         scale: f64,
@@ -51,6 +52,8 @@ pub(crate) enum Message {
         delta_y: f32,
     },
     Zoom(f32),
+    ChoosePmx,
+    LoadPmx(PathBuf),
     ChooseShader,
     InspectShader(PathBuf),
     ShaderInspected {
@@ -99,8 +102,10 @@ impl Dispatcher for CharmeApp {
 
     fn on_ui_message(&self, message: Self::Message) {
         match message {
-            Message::ChooseFile => self.choose_file(),
-            Message::OpenPath(path) => self.open_path(path),
+            Message::ChooseProject => self.choose_project(),
+            Message::OpenProject(path) => self.open_project(path),
+            Message::NewProject => self.new_project(),
+            Message::ChoosePmx => self.choose_pmx(),
             other => {
                 let editor = self.editor.borrow();
                 let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref())
@@ -112,6 +117,7 @@ impl Dispatcher for CharmeApp {
                     Message::Brightness(value) => window.set_brightness(value),
                     Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
                     Message::Zoom(delta) => window.zoom(delta),
+                    Message::LoadPmx(path) => window.load_pmx(path),
                     Message::ChooseShader => window.choose_shader(),
                     Message::InspectShader(path) => window.inspect_shader(path),
                     Message::ShaderInspected { path, result } => {
@@ -124,7 +130,10 @@ impl Dispatcher for CharmeApp {
                         window.handle_renderer_notification(notification);
                     }
                     Message::Failed(error) => window.show_error(&error),
-                    Message::ChooseFile | Message::OpenPath(_) => unreachable!(),
+                    Message::ChooseProject
+                    | Message::OpenProject(_)
+                    | Message::NewProject
+                    | Message::ChoosePmx => unreachable!(),
                 }
             }
         }
@@ -132,33 +141,41 @@ impl Dispatcher for CharmeApp {
 }
 
 impl CharmeApp {
-    fn choose_file(&self) {
+    fn choose_project(&self) {
         let mut panel = FileSelectPanel::new();
         panel.set_can_choose_files(true);
         panel.set_can_choose_directories(false);
         panel.set_allows_multiple_selection(false);
-        panel.set_message(localization::text(Key::ChooseFileMessage));
+        panel.set_message(localization::text(Key::ChooseProjectMessage));
         panel.show(|urls| {
             if let Some(url) = urls.first() {
-                App::<CharmeApp, Message>::dispatch_main(Message::OpenPath(url.pathbuf()));
+                App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(url.pathbuf()));
             }
         });
     }
 
-    fn open_path(&self, path: PathBuf) {
-        match file_kind(&path) {
-            Some(FileKind::Project) => self.open_project(path),
-            Some(FileKind::Pmx) => {
-                self.with_editor(|editor| editor.load_pmx(path));
+    fn choose_pmx(&self) {
+        let mut panel = FileSelectPanel::new();
+        panel.set_can_choose_files(true);
+        panel.set_can_choose_directories(false);
+        panel.set_allows_multiple_selection(false);
+        panel.set_message(localization::text(Key::ChoosePmxMessage));
+        panel.show(|urls| {
+            if let Some(url) = urls.first() {
+                App::<CharmeApp, Message>::dispatch_main(Message::LoadPmx(url.pathbuf()));
             }
-            Some(FileKind::Shader) => {
-                self.with_editor(|editor| editor.inspect_shader(path));
-            }
-            None => self.show_startup_error(&format!("无法识别此文件类型\n\n{}", path.display())),
-        }
+        });
     }
 
     fn open_project(&self, path: PathBuf) {
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("charme"))
+        {
+            self.show_startup_error(&format!("请选择.charme项目文件\n\n{}", path.display()));
+            return;
+        }
         let session = match EditorSession::open(&path) {
             Ok(session) => session,
             Err(error) => {
@@ -178,6 +195,10 @@ impl CharmeApp {
             }
         });
         remember_project(&path);
+    }
+
+    fn new_project(&self) {
+        self.with_editor(|editor| editor.reset_session());
     }
 
     fn ensure_editor(&self) {
@@ -216,22 +237,6 @@ impl CharmeApp {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FileKind {
-    Project,
-    Pmx,
-    Shader,
-}
-
-fn file_kind(path: &Path) -> Option<FileKind> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "charme" => Some(FileKind::Project),
-        "pmx" => Some(FileKind::Pmx),
-        "wgsl" => Some(FileKind::Shader),
-        _ => None,
-    }
-}
-
 const RECENT_PROJECTS_KEY: &str = "recent-projects";
 
 fn recent_projects() -> Vec<PathBuf> {
@@ -252,7 +257,7 @@ fn recent_projects() -> Vec<PathBuf> {
                         .is_some_and(|extension| extension.eq_ignore_ascii_case("charme"))
                         && path.is_file()
                 })
-                .take(8)
+                .take(5)
                 .collect()
         })
         .unwrap_or_default()
@@ -279,10 +284,10 @@ fn hide_window<T>(window: &Window<T>) {
 
 struct StartupWindow {
     content: View,
-    brand: Label,
     title: Label,
     subtitle: Label,
     open_button: Button,
+    new_button: Button,
     formats: Label,
     recent_heading: Label,
     recent_buttons: Vec<Button>,
@@ -292,7 +297,6 @@ struct StartupWindow {
 impl StartupWindow {
     fn new() -> Self {
         let content = panel(Color::rgb(24, 25, 30));
-        let brand = label("CHARME", 16.0, true, Color::SystemWhite);
         let title = label(
             localization::text(Key::StartupTitle),
             28.0,
@@ -318,11 +322,17 @@ impl StartupWindow {
             Color::SystemWhite,
         );
         let status = label("", 11.0, false, Color::SystemRed);
-        let mut open_button = Button::new(localization::text(Key::OpenFile));
+        let mut open_button = Button::new(localization::text(Key::OpenProject));
         open_button.set_bezel_style(BezelStyle::Rounded);
         open_button.set_key_equivalent("o");
         open_button.set_action(|| {
-            App::<CharmeApp, Message>::dispatch_main(Message::ChooseFile);
+            App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
+        });
+        let mut new_button = Button::new(localization::text(Key::NewProject));
+        new_button.set_bordered(false);
+        new_button.set_text_color(Color::SystemBlue);
+        new_button.set_action(|| {
+            App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
         });
 
         let projects = recent_projects();
@@ -335,7 +345,7 @@ impl StartupWindow {
             let mut button = Button::new(&format!("{name} · {}", project.display()));
             button.set_bezel_style(BezelStyle::TexturedRounded);
             button.set_action(move || {
-                App::<CharmeApp, Message>::dispatch_main(Message::OpenPath(project.clone()));
+                App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(project.clone()));
             });
             recent_buttons.push(button);
         }
@@ -343,10 +353,10 @@ impl StartupWindow {
 
         Self {
             content,
-            brand,
             title,
             subtitle,
             open_button,
+            new_button,
             formats,
             recent_heading,
             recent_buttons,
@@ -371,7 +381,6 @@ impl WindowDelegate for StartupWindow {
         window.set_content_view(&self.content);
 
         for label in [
-            &self.brand,
             &self.title,
             &self.subtitle,
             &self.formats,
@@ -381,19 +390,12 @@ impl WindowDelegate for StartupWindow {
             self.content.add_subview(label);
         }
         self.content.add_subview(&self.open_button);
+        self.content.add_subview(&self.new_button);
         for button in &self.recent_buttons {
             self.content.add_subview(button);
         }
 
         let mut constraints = vec![
-            self.brand
-                .top
-                .constraint_equal_to(&self.content.top)
-                .offset(24.0),
-            self.brand
-                .leading
-                .constraint_equal_to(&self.content.leading)
-                .offset(72.0),
             self.title
                 .center_x
                 .constraint_equal_to(&self.content.center_x),
@@ -417,12 +419,21 @@ impl WindowDelegate for StartupWindow {
                 .offset(28.0),
             self.open_button.width.constraint_equal_to_constant(150.0),
             self.open_button.height.constraint_equal_to_constant(34.0),
+            self.new_button
+                .center_x
+                .constraint_equal_to(&self.content.center_x),
+            self.new_button
+                .top
+                .constraint_equal_to(&self.open_button.bottom)
+                .offset(8.0),
+            self.new_button.width.constraint_equal_to_constant(150.0),
+            self.new_button.height.constraint_equal_to_constant(30.0),
             self.formats
                 .center_x
                 .constraint_equal_to(&self.content.center_x),
             self.formats
                 .top
-                .constraint_equal_to(&self.open_button.bottom)
+                .constraint_equal_to(&self.new_button.bottom)
                 .offset(12.0),
             self.recent_heading
                 .leading
@@ -476,7 +487,6 @@ struct EditorWindow {
     image_view: ImageView,
     orbit_input: OrbitInputView,
     status: Label,
-    app_title: Label,
     open_button: Button,
     scene_heading: Label,
     scene_info: Label,
@@ -506,11 +516,10 @@ impl EditorWindow {
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
 
-        let app_title = label("CHARME", 16.0, true, Color::SystemWhite);
-        let mut open_button = Button::new(localization::text(Key::OpenFile));
+        let mut open_button = Button::new(localization::text(Key::ImportPmx));
         open_button.set_bezel_style(BezelStyle::TexturedRounded);
         open_button.set_action(|| {
-            App::<CharmeApp, Message>::dispatch_main(Message::ChooseFile);
+            App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
         });
         let scene_heading = label(
             localization::text(Key::Scene),
@@ -577,7 +586,6 @@ impl EditorWindow {
             image_view,
             orbit_input,
             status,
-            app_title,
             open_button,
             scene_heading,
             scene_info,
@@ -604,6 +612,20 @@ impl EditorWindow {
             .set_text(localization::text(Key::ProjectOpened));
         self.material_list
             .set_text(localization::text(Key::WaitingCharacter));
+        self.inspector_heading
+            .set_text(localization::text(Key::Inspector));
+        self.inspector_body
+            .set_text(localization::text(Key::InspectorBody));
+    }
+
+    fn reset_session(&self) {
+        self.session.replace(EditorSession::new("未命名项目"));
+        self.active_material.replace(None);
+        self.parameter_controls.borrow_mut().clear();
+        self.scene_info
+            .set_text(localization::text(Key::EmptyScene));
+        self.material_list
+            .set_text(localization::text(Key::EmptyMaterials));
         self.inspector_heading
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
@@ -919,7 +941,6 @@ impl WindowDelegate for EditorWindow {
         self.viewport.add_subview(&self.status);
         self.sidebar.add_subview(&self.open_button);
         for label in [
-            &self.app_title,
             &self.scene_heading,
             &self.scene_info,
             &self.materials_heading,
@@ -1012,18 +1033,10 @@ impl WindowDelegate for EditorWindow {
                 .bottom
                 .constraint_equal_to(&self.viewport.bottom)
                 .offset(-12.0),
-            self.app_title
-                .top
-                .constraint_equal_to(&self.sidebar.top)
-                .offset(18.0),
-            self.app_title
+            self.open_button
                 .leading
                 .constraint_equal_to(&self.sidebar.leading)
                 .offset(72.0),
-            self.open_button
-                .leading
-                .constraint_equal_to(&self.app_title.trailing)
-                .offset(16.0),
             self.open_button
                 .top
                 .constraint_equal_to(&self.sidebar.top)
@@ -1210,8 +1223,16 @@ fn menus() -> Vec<Menu> {
         Menu::new(
             localization::text(Key::FileMenu),
             vec![
-                MenuItem::new("打开文件…").key("o").action(|| {
-                    App::<CharmeApp, Message>::dispatch_main(Message::ChooseFile);
+                MenuItem::new(localization::text(Key::NewProjectMenu)).action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
+                }),
+                MenuItem::new(localization::text(Key::OpenProjectMenu))
+                    .key("o")
+                    .action(|| {
+                        App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
+                    }),
+                MenuItem::new(localization::text(Key::ImportPmxMenu)).action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
                 }),
                 MenuItem::new(localization::text(Key::InspectShaderMenu)).action(|| {
                     App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);

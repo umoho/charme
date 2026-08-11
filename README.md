@@ -31,8 +31,8 @@ Implemented foundations:
 - Asynchronous PMX loading from arbitrary file-system paths, texture fallback,
   material-slot summaries, scene replacement, and automatic camera framing.
 - A native macOS application with a macOS-style startup window, automatic
-  `.charme`/PMX/WGSL file routing, recent Charme projects, and an editor window
-  with Scene/Materials, Viewport and Inspector columns.
+  `.charme` project startup, recent Charme projects, and an editor window with
+  project-scoped PMX import plus Scene/Materials, Viewport and Inspector columns.
 - Retina-aware frame display, Orbit controls, native file dialogs, and background
   WGSL reflection with metadata-driven native float and integer Inspector controls.
 
