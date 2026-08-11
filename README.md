@@ -22,6 +22,9 @@ See [`docs/architecture.md`](docs/architecture.md) for dependency boundaries and
 
 Implemented foundations:
 
+- Versioned project documents with stable IDs, portable resource paths, material
+  instances and slot bindings, transactional editor commands, Undo/Redo,
+  dirty tracking, snapshots, and RON persistence.
 - WGSL composition, metadata scanning, reflection, validation, and uniform packing.
 - A private Bevy render worker with on-demand offscreen rendering, asynchronous
   CPU readback, resize suspension, and orbit camera controls.

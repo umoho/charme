@@ -16,19 +16,22 @@
 
 ## 1. `charme-core`：编辑器文档模型
 
-- [ ] 定义稳定的 `DocumentId`、`MaterialId`、`MaterialSlotId` 和资源 ID。
-- [ ] 定义 Charme 项目文档及版本号。
-- [ ] 定义角色模型资源引用，首期支持 PMX。
-- [ ] 定义 PMX material slot 到 Charme material instance 的绑定。
-- [ ] 定义与渲染后端无关的参数值类型。
-- [ ] 定义材质实例、Shader 引用、纹理引用和渲染状态。
-- [ ] 设计相对路径、绝对路径和缺失资源的处理规则。
-- [ ] 定义 `EditorCommand`、`EditorEvent` 和只读 UI snapshot。
-- [ ] 实现文档 dirty 状态。
-- [ ] 实现 Undo/Redo 命令栈和事务合并。
-- [ ] 实现新建、打开、保存和另存为。
+- [x] 定义稳定的 `DocumentId`、`ShaderId`、`MaterialId` 和 `MaterialSlotId`。
+- [ ] 评估并定义纹理等独立资源是否需要稳定 ID。
+- [x] 定义 Charme 项目文档及版本号。
+- [x] 定义角色模型资源引用，首期支持 PMX。
+- [x] 定义 PMX material slot 到 Charme material instance 的绑定。
+- [x] 定义与渲染后端无关的参数值类型。
+- [x] 定义材质实例、Shader 引用、纹理引用和渲染状态。
+- [x] 设计安全的项目相对路径和机器本地绝对路径规则。
+- [ ] 定义缺失资源的文档状态和重新定位流程。
+- [x] 定义 `EditorCommand`、`EditorEvent` 和只读 UI snapshot。
+- [x] 实现事务式命令应用和文档 dirty 状态。
+- [x] 实现 Undo/Redo 文档历史和保存状态恢复。
+- [ ] 实现 slider、拖动等连续编辑的事务合并。
+- [x] 实现新建、打开、保存和另存为。
 - [ ] 为项目格式实现向前兼容的版本迁移。
-- [ ] 为文档模型和序列化添加单元测试。
+- [x] 为文档模型、命令、路径和序列化添加单元测试。
 
 ## 2. `charme-shader`：WGSL 工具链
 

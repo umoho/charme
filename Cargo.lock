@@ -1285,7 +1285,10 @@ dependencies = [
 name = "charme-core"
 version = "0.1.0"
 dependencies = [
+ "ron",
  "serde",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
