@@ -11,8 +11,10 @@ mod config;
 mod error;
 mod frame;
 mod renderer;
+mod scene;
 
 pub use config::{BackgroundColor, OutputSize, PixelFormat, RendererConfig};
 pub use error::RendererError;
 pub use frame::Frame;
-pub use renderer::Renderer;
+pub use renderer::{Renderer, RendererNotification};
+pub use scene::{PmxMaterialSlot, PmxSceneInfo};

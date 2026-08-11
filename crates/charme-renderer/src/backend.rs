@@ -1,5 +1,6 @@
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
     sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError},
     thread,
     time::Duration,
@@ -13,8 +14,8 @@ use bevy::{
     core_pipeline::tonemapping::Tonemapping,
     image::Image,
     prelude::{
-        Color, Commands, Cuboid, Entity, Mesh, Mesh3d, MeshMaterial3d, Meshable, On, Plane3d,
-        PointLight, Quat, StandardMaterial, Transform, Vec3,
+        Color, Commands, Cuboid, DirectionalLight, Entity, Mesh, Mesh3d, MeshMaterial3d, Meshable,
+        On, Plane3d, Quat, StandardMaterial, Transform, Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
@@ -24,7 +25,11 @@ use bevy::{
     },
 };
 
-use crate::{BackgroundColor, Frame, OutputSize, PixelFormat, RendererConfig, RendererError};
+use crate::{
+    BackgroundColor, Frame, OutputSize, PixelFormat, RendererConfig, RendererError,
+    renderer::RendererNotification,
+    scene::{SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene},
+};
 
 pub(crate) enum Command {
     Resize(OutputSize),
@@ -32,12 +37,14 @@ pub(crate) enum Command {
     Orbit { delta_x: f32, delta_y: f32 },
     Zoom(f32),
     ResetCamera,
+    LoadPmx(PathBuf),
     Redraw,
     Shutdown,
 }
 
 pub(crate) enum WorkerEvent {
     Frame(Frame),
+    Notification(RendererNotification),
     Error(RendererError),
 }
 
@@ -131,6 +138,9 @@ fn run(
                     backend.reset_camera()?;
                     dirty = true;
                 }
+                Command::LoadPmx(path) => {
+                    dirty |= backend.load_pmx(path)?;
+                }
                 Command::Redraw => dirty = true,
                 Command::Shutdown => return Ok(()),
             }
@@ -157,6 +167,9 @@ fn run(
                 Ok(Command::ResetCamera) => {
                     backend.reset_camera()?;
                     dirty = true;
+                }
+                Ok(Command::LoadPmx(path)) => {
+                    dirty |= backend.load_pmx(path)?;
                 }
                 Ok(Command::Redraw) => dirty = true,
                 Ok(Command::Shutdown) => return Ok(()),
@@ -185,7 +198,10 @@ struct Backend {
     pixel_format: PixelFormat,
     target: bevy::prelude::Handle<Image>,
     camera: Entity,
+    placeholder_entities: Vec<Entity>,
+    pmx_scene: Option<SpawnedPmxScene>,
     orbit: OrbitState,
+    initial_orbit: OrbitState,
     next_sequence: u64,
     events: Sender<WorkerEvent>,
     completion: Sender<()>,
@@ -221,7 +237,7 @@ impl Backend {
         let texture_size = usable_texture_size(config.output_size);
         let target = add_target_image(&mut app, texture_size, config.pixel_format);
         let orbit = OrbitState::default();
-        let camera = spawn_scene(
+        let (camera, placeholder_entities) = spawn_scene(
             &mut app,
             target.clone(),
             config.background,
@@ -239,7 +255,10 @@ impl Backend {
             pixel_format: config.pixel_format,
             target,
             camera,
+            placeholder_entities,
+            pmx_scene: None,
             orbit,
+            initial_orbit: orbit,
             next_sequence: 1,
             events,
             completion,
@@ -293,13 +312,44 @@ impl Backend {
     }
 
     fn zoom(&mut self, delta: f32) -> Result<(), RendererError> {
-        self.orbit.distance = (self.orbit.distance * delta.exp()).clamp(2.5, 16.0);
+        self.orbit.distance = (self.orbit.distance * delta.exp())
+            .clamp(self.orbit.minimum_distance, self.orbit.maximum_distance);
         self.update_camera_transform()
     }
 
     fn reset_camera(&mut self) -> Result<(), RendererError> {
-        self.orbit = OrbitState::default();
+        self.orbit = self.initial_orbit;
         self.update_camera_transform()
+    }
+
+    fn load_pmx(&mut self, path: PathBuf) -> Result<bool, RendererError> {
+        let prepared = match prepare_pmx_scene(&path) {
+            Ok(prepared) => prepared,
+            Err(message) => {
+                let _ = self.events.send(WorkerEvent::Notification(
+                    RendererNotification::PmxLoadFailed { path, message },
+                ));
+                return Ok(false);
+            }
+        };
+
+        for entity in self.placeholder_entities.drain(..) {
+            let _ = self.app.world_mut().despawn(entity);
+        }
+        if let Some(scene) = self.pmx_scene.take() {
+            scene.despawn(&mut self.app);
+        }
+        self.pmx_scene = Some(spawn_pmx_scene(&mut self.app, &prepared));
+        let (bounds_min, bounds_max) = prepared.normalized_bounds();
+        self.orbit = OrbitState::framing(bounds_min, bounds_max);
+        self.initial_orbit = self.orbit;
+        self.update_camera_transform()?;
+        let _ = self
+            .events
+            .send(WorkerEvent::Notification(RendererNotification::PmxLoaded(
+                prepared.info,
+            )));
+        Ok(true)
     }
 
     fn update_camera_transform(&mut self) -> Result<(), RendererError> {
@@ -384,6 +434,8 @@ struct OrbitState {
     yaw: f32,
     pitch: f32,
     distance: f32,
+    minimum_distance: f32,
+    maximum_distance: f32,
 }
 
 impl Default for OrbitState {
@@ -393,11 +445,26 @@ impl Default for OrbitState {
             yaw: -0.55,
             pitch: -0.35,
             distance: 7.0,
+            minimum_distance: 2.5,
+            maximum_distance: 16.0,
         }
     }
 }
 
 impl OrbitState {
+    fn framing(bounds_min: Vec3, bounds_max: Vec3) -> Self {
+        let extent = bounds_max - bounds_min;
+        let radius = (extent * 0.5).length().max(0.1);
+        let distance = radius * 2.8;
+        Self {
+            target: (bounds_min + bounds_max) * 0.5,
+            distance,
+            minimum_distance: (radius * 0.2).max(0.01),
+            maximum_distance: (radius * 20.0).max(distance),
+            ..Self::default()
+        }
+    }
+
     fn transform(self) -> Transform {
         let rotation = Quat::from_euler(bevy::math::EulerRot::YXZ, self.yaw, self.pitch, 0.0);
         Transform::from_translation(self.target + rotation * Vec3::new(0.0, 0.0, self.distance))
@@ -411,7 +478,7 @@ fn spawn_scene(
     background: BackgroundColor,
     active: bool,
     orbit: OrbitState,
-) -> Entity {
+) -> (Entity, Vec<Entity>) {
     let cube_mesh = app
         .world_mut()
         .resource_mut::<Assets<Mesh>>()
@@ -440,32 +507,33 @@ fn spawn_scene(
         });
 
     let world = app.world_mut();
-    world.spawn((
-        Mesh3d(cube_mesh),
-        MeshMaterial3d(cube_material),
-        Transform::from_xyz(0.0, 0.8, 0.0).with_rotation(Quat::from_euler(
-            bevy::math::EulerRot::XYZ,
-            0.15,
-            0.35,
-            0.05,
-        )),
-    ));
+    let placeholder = world
+        .spawn((
+            Mesh3d(cube_mesh),
+            MeshMaterial3d(cube_material),
+            Transform::from_xyz(0.0, 0.8, 0.0).with_rotation(Quat::from_euler(
+                bevy::math::EulerRot::XYZ,
+                0.15,
+                0.35,
+                0.05,
+            )),
+        ))
+        .id();
     world.spawn((
         Mesh3d(floor_mesh),
         MeshMaterial3d(floor_material),
         Transform::default(),
     ));
     world.spawn((
-        PointLight {
-            intensity: 1_400_000.0,
-            range: 30.0,
+        DirectionalLight {
+            illuminance: 20_000.0,
             shadow_maps_enabled: true,
             ..Default::default()
         },
-        Transform::from_xyz(4.0, 7.0, 5.0),
+        Transform::from_rotation(Quat::from_euler(bevy::math::EulerRot::XYZ, -1.0, 0.9, 0.0)),
     ));
 
-    world
+    let camera = world
         .spawn((
             Camera3d::default(),
             Tonemapping::None,
@@ -481,7 +549,8 @@ fn spawn_scene(
             },
             orbit.transform(),
         ))
-        .id()
+        .id();
+    (camera, vec![placeholder])
 }
 
 const fn usable_texture_size(size: OutputSize) -> OutputSize {

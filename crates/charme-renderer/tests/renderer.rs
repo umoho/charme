@@ -1,12 +1,16 @@
 use std::{
+    fs,
+    path::PathBuf,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use charme_renderer::{BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig};
+use charme_renderer::{
+    BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig, RendererNotification,
+};
 
 #[test]
-fn renders_and_resizes_an_opaque_cpu_frame() {
+fn renders_resizes_and_loads_pmx() {
     let config = RendererConfig::new(17, 9)
         .pixel_format(PixelFormat::Bgra8Srgb)
         .background(BackgroundColor::rgb(0.8, 0.1, 0.2));
@@ -72,7 +76,36 @@ fn renders_and_resizes_an_opaque_cpu_frame() {
     let reset = wait_for_frame(&mut renderer);
     assert!(reset.sequence() > zoomed.sequence());
 
+    let pmx_path = write_minimal_pmx();
+    renderer
+        .load_pmx(&pmx_path)
+        .expect("PMX load should be accepted");
+    let loaded = wait_for_notification(&mut renderer);
+    let RendererNotification::PmxLoaded(info) = loaded else {
+        panic!("expected a successful PMX notification");
+    };
+    assert_eq!(info.path(), pmx_path);
+    assert_eq!(info.name(), "Charme fixture");
+    assert_eq!(info.vertex_count(), 3);
+    assert_eq!(info.index_count(), 3);
+    assert_eq!(info.material_slots().len(), 1);
+    assert_eq!(info.material_slots()[0].name(), "Body");
+    assert!(info.warnings().is_empty());
+    let pmx_frame = wait_for_frame(&mut renderer);
+    assert!(pmx_frame.sequence() > reset.sequence());
+
+    let missing = pmx_path.with_file_name("missing-model.pmx");
+    renderer
+        .load_pmx(&missing)
+        .expect("failed PMX load should still be accepted asynchronously");
+    let failed = wait_for_notification(&mut renderer);
+    assert!(matches!(
+        failed,
+        RendererNotification::PmxLoadFailed { path, .. } if path == missing
+    ));
+
     renderer.shutdown().expect("renderer should stop cleanly");
+    fs::remove_file(pmx_path).expect("fixture should be removable");
 }
 
 fn wait_for_frame(renderer: &mut Renderer) -> charme_renderer::Frame {
@@ -86,4 +119,113 @@ fn wait_for_frame(renderer: &mut Renderer) -> charme_renderer::Frame {
         assert!(Instant::now() < deadline, "renderer timed out");
         thread::sleep(Duration::from_millis(2));
     }
+}
+
+fn wait_for_notification(renderer: &mut Renderer) -> RendererNotification {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match renderer.try_recv_notification() {
+            Ok(Some(notification)) => return notification,
+            Ok(None) => {}
+            Err(error) => panic!("renderer failed: {error}"),
+        }
+        assert!(Instant::now() < deadline, "renderer notification timed out");
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn write_minimal_pmx() -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after the Unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("charme_renderer_{unique}.pmx"));
+    fs::write(&path, minimal_pmx_bytes()).expect("fixture should be writable");
+    path
+}
+
+fn minimal_pmx_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"PMX ");
+    push_f32(&mut bytes, 2.0);
+    bytes.push(8);
+    bytes.push(1); // UTF-8
+    bytes.push(0); // additional UV count
+    bytes.extend_from_slice(&[4, 4, 4, 4, 4, 4]);
+    push_text(&mut bytes, "Charme fixture");
+    push_text(&mut bytes, "Charme fixture");
+    push_text(&mut bytes, "");
+    push_text(&mut bytes, "");
+
+    push_i32(&mut bytes, 3);
+    push_vertex(&mut bytes, [-1.0, 0.0, 0.0], [0.0, 0.0]);
+    push_vertex(&mut bytes, [1.0, 0.0, 0.0], [1.0, 0.0]);
+    push_vertex(&mut bytes, [0.0, 2.0, 0.0], [0.5, 1.0]);
+    push_i32(&mut bytes, 3);
+    push_u32(&mut bytes, 0);
+    push_u32(&mut bytes, 1);
+    push_u32(&mut bytes, 2);
+
+    push_i32(&mut bytes, 0); // textures
+    push_i32(&mut bytes, 1); // materials
+    push_text(&mut bytes, "Body");
+    push_text(&mut bytes, "Body");
+    push_vec4(&mut bytes, [0.8, 0.6, 0.5, 1.0]);
+    push_vec3(&mut bytes, [0.0, 0.0, 0.0]);
+    push_f32(&mut bytes, 1.0);
+    push_vec3(&mut bytes, [0.0, 0.0, 0.0]);
+    bytes.push(0); // material flags
+    push_vec4(&mut bytes, [0.0, 0.0, 0.0, 0.0]);
+    push_f32(&mut bytes, 1.0);
+    push_i32(&mut bytes, -1); // diffuse texture
+    push_i32(&mut bytes, -1); // sphere texture
+    bytes.push(0); // sphere mode
+    bytes.push(0); // individual toon texture
+    push_i32(&mut bytes, -1);
+    push_text(&mut bytes, "");
+    push_i32(&mut bytes, 3); // surface index count
+
+    for _ in 0..5 {
+        push_i32(&mut bytes, 0); // bones, morphs, frames, rigid bodies, joints
+    }
+    bytes
+}
+
+fn push_vertex(bytes: &mut Vec<u8>, position: [f32; 3], uv: [f32; 2]) {
+    push_vec3(bytes, position);
+    push_vec3(bytes, [0.0, 0.0, 1.0]);
+    push_f32(bytes, uv[0]);
+    push_f32(bytes, uv[1]);
+    bytes.push(0); // BDEF1
+    push_i32(bytes, -1);
+    push_f32(bytes, 1.0); // edge scale
+}
+
+fn push_text(bytes: &mut Vec<u8>, value: &str) {
+    push_i32(bytes, value.len() as i32);
+    bytes.extend_from_slice(value.as_bytes());
+}
+
+fn push_vec3(bytes: &mut Vec<u8>, value: [f32; 3]) {
+    for component in value {
+        push_f32(bytes, component);
+    }
+}
+
+fn push_vec4(bytes: &mut Vec<u8>, value: [f32; 4]) {
+    for component in value {
+        push_f32(bytes, component);
+    }
+}
+
+fn push_i32(bytes: &mut Vec<u8>, value: i32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u32(bytes: &mut Vec<u8>, value: u32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_f32(bytes: &mut Vec<u8>, value: f32) {
+    bytes.extend_from_slice(&value.to_le_bytes());
 }

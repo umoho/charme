@@ -24,9 +24,10 @@ Implemented foundations:
 - WGSL composition, metadata scanning, reflection, validation, and uniform packing.
 - A private Bevy render worker with on-demand offscreen rendering, asynchronous
   CPU readback, resize suspension, and orbit camera controls.
+- Asynchronous PMX loading from arbitrary file-system paths, texture fallback,
+  material-slot summaries, scene replacement, and automatic camera framing.
 
-The renderer currently displays a placeholder lookdev scene. PMX scene loading,
-Charme's Bevy material ABI, and the native application UI are the next layers.
+Charme's Bevy material ABI and the native application UI are the next layers.
 
 ## Development
 

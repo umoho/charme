@@ -1,12 +1,29 @@
 use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
     sync::{Mutex, mpsc},
     thread::JoinHandle,
 };
 
 use crate::{
-    BackgroundColor, Frame, OutputSize, RendererConfig, RendererError,
+    BackgroundColor, Frame, OutputSize, PmxSceneInfo, RendererConfig, RendererError,
     backend::{self, Command, WorkerEvent},
 };
+
+/// A non-frame event produced by the renderer worker.
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RendererNotification {
+    /// A PMX model was loaded and installed in the preview scene.
+    PmxLoaded(PmxSceneInfo),
+    /// A PMX model could not be loaded; the previous scene remains active.
+    PmxLoadFailed {
+        /// The path that was requested.
+        path: PathBuf,
+        /// A human-readable import error.
+        message: String,
+    },
+}
 
 /// A windowless renderer that produces CPU image frames on demand.
 ///
@@ -30,6 +47,10 @@ struct RendererInner {
     commands: mpsc::Sender<Command>,
     events: mpsc::Receiver<WorkerEvent>,
     output_size: Mutex<OutputSize>,
+    pending_frame: Option<Frame>,
+    notifications: VecDeque<RendererNotification>,
+    pending_error: Option<RendererError>,
+    disconnected: bool,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -50,6 +71,10 @@ impl Renderer {
                     commands: command_tx,
                     events: event_rx,
                     output_size: Mutex::new(size),
+                    pending_frame: None,
+                    notifications: VecDeque::new(),
+                    pending_error: None,
+                    disconnected: false,
                     worker: Some(worker),
                 }),
             }),
@@ -114,9 +139,18 @@ impl Renderer {
         self.send(Command::Zoom(delta))
     }
 
-    /// Restores the default orbit camera position.
+    /// Restores the camera framing for the current preview scene.
     pub fn reset_camera(&self) -> Result<(), RendererError> {
         self.send(Command::ResetCamera)
+    }
+
+    /// Loads a PMX model from an arbitrary file-system path.
+    ///
+    /// Loading happens on the renderer worker. Completion or failure is
+    /// reported through [`Renderer::try_recv_notification`]. A failed load does
+    /// not replace the currently displayed scene.
+    pub fn load_pmx(&self, path: impl AsRef<Path>) -> Result<(), RendererError> {
+        self.send(Command::LoadPmx(path.as_ref().to_path_buf()))
     }
 
     /// Requests a frame representing the latest renderer state.
@@ -130,19 +164,32 @@ impl Renderer {
     ///
     /// Older completed frames are discarded when more than one is waiting.
     pub fn try_recv_frame(&mut self) -> Result<Option<Frame>, RendererError> {
-        let mut latest = None;
-
-        loop {
-            match self.inner.events.try_recv() {
-                Ok(WorkerEvent::Frame(frame)) => latest = Some(frame),
-                Ok(WorkerEvent::Error(error)) => return Err(error),
-                Err(mpsc::TryRecvError::Empty) => return Ok(latest),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    return latest
-                        .map_or(Err(RendererError::WorkerStopped), |frame| Ok(Some(frame)));
-                }
-            }
+        self.poll_worker_events();
+        if let Some(error) = self.inner.pending_error.take() {
+            return Err(error);
         }
+        if let Some(frame) = self.inner.pending_frame.take() {
+            return Ok(Some(frame));
+        }
+        if self.inner.disconnected {
+            return Err(RendererError::WorkerStopped);
+        }
+        Ok(None)
+    }
+
+    /// Returns the oldest pending renderer notification without blocking.
+    pub fn try_recv_notification(&mut self) -> Result<Option<RendererNotification>, RendererError> {
+        self.poll_worker_events();
+        if let Some(error) = self.inner.pending_error.take() {
+            return Err(error);
+        }
+        if let Some(notification) = self.inner.notifications.pop_front() {
+            return Ok(Some(notification));
+        }
+        if self.inner.disconnected {
+            return Err(RendererError::WorkerStopped);
+        }
+        Ok(None)
     }
 
     /// Stops the worker and waits for all private rendering resources to be released.
@@ -155,6 +202,23 @@ impl Renderer {
             .commands
             .send(command)
             .map_err(|_| RendererError::WorkerStopped)
+    }
+
+    fn poll_worker_events(&mut self) {
+        loop {
+            match self.inner.events.try_recv() {
+                Ok(WorkerEvent::Frame(frame)) => self.inner.pending_frame = Some(frame),
+                Ok(WorkerEvent::Notification(notification)) => {
+                    self.inner.notifications.push_back(notification);
+                }
+                Ok(WorkerEvent::Error(error)) => self.inner.pending_error = Some(error),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.inner.disconnected = true;
+                    break;
+                }
+            }
+        }
     }
 
     fn stop(&mut self) -> Result<(), RendererError> {
