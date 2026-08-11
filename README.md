@@ -31,10 +31,12 @@ Implemented foundations:
 - Asynchronous PMX loading from arbitrary file-system paths, texture fallback,
   material-slot summaries, scene replacement, and automatic camera framing.
 - A native macOS editor window with Scene/Materials, Viewport and Inspector
-  columns, Retina-aware frame display, Orbit controls, and an Open PMX dialog.
+  columns, Retina-aware frame display, Orbit controls, and native file dialogs.
+- Background WGSL reflection with metadata-driven native float and integer
+  Inspector controls; a built-in sample Shader makes the controls visible at startup.
 
-The next UI milestone is a reflection-driven native material Inspector, followed
-by Charme's reusable Bevy material ABI.
+Inspector scalar edits are recorded in the core document model. The next UI
+milestone is applying them to the renderer through Charme's reusable Bevy material ABI.
 
 ## Development
 

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 charme-core = { path = "../../crates/charme-core" }
 charme-renderer = { path = "../../crates/charme-renderer" }
+charme-shader = { path = "../../crates/charme-shader" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cacao.workspace = true

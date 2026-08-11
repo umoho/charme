@@ -118,12 +118,15 @@
 - [x] 将 BGRA frame 显示为 `CGImage`/`NSImage`。
 - [x] 正确处理 points、物理像素和 Retina scale factor。
 - [x] 将鼠标拖动和滚轮事件转换为 Orbit/Zoom 命令。
-- [x] 实现打开 PMX 的原生文件对话框。
+- [x] 实现打开 PMX 和选择外部 WGSL 的原生文件对话框。
 - [ ] 支持拖放 PMX、WGSL 和纹理文件。
 - [x] 展示 PMX material slot 列表、纹理摘要和加载 warning 数量。
 - [ ] 增加可展开的加载 warning 详情。
-- [ ] 根据 Shader reflection 生成原生 Inspector 控件。
-- [ ] 支持 float、integer、boolean、vector、color 和 texture 控件。
+- [x] 在后台反射 WGSL，并根据 metadata 生成原生 Inspector scalar 控件。
+- [x] 支持 float、i32 和 u32 原生 slider，显示 label、范围和当前值。
+- [ ] 支持 boolean、vector、color 和 texture 控件。
+- [x] 将 Inspector scalar 编辑写入 `charme-core` 材质实例和 dirty 历史。
+- [ ] 将 Inspector 参数编辑连接到 renderer 并实时改变角色材质。
 - [ ] 实现参数编辑的连续事务与 Undo/Redo。
 - [ ] 实现 Shader diagnostics 列表及源码位置跳转。
 - [ ] 提供“在外部编辑器中打开”操作。

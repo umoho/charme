@@ -16,21 +16,46 @@ use cacao::{
     text::{Font, Label},
     view::View,
 };
+use charme_core::{
+    EditorCommand, EditorSession, MaterialId, MaterialInstance, ParameterValue, ResourcePath,
+    ShaderSource as DocumentShaderSource,
+};
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
 use core_graphics::geometry::CGRect;
 
 use crate::{
-    bridge::RenderBridge, frame_image::make_image, interaction::OrbitInputView,
+    bridge::RenderBridge,
+    frame_image::make_image,
+    interaction::OrbitInputView,
+    parameter_control::ParameterControl,
+    shader_inspection::{self, ParameterControlKind, ShaderInspection},
     slider::BrightnessSlider,
 };
 
 pub(crate) enum Message {
-    Frame { frame: Frame, scale: f64 },
+    Frame {
+        frame: Frame,
+        scale: f64,
+    },
     Brightness(f32),
-    Orbit { delta_x: f32, delta_y: f32 },
+    Orbit {
+        delta_x: f32,
+        delta_y: f32,
+    },
     Zoom(f32),
     ChoosePmx,
     LoadPmx(PathBuf),
+    ChooseShader,
+    InspectShader(PathBuf),
+    ShaderInspected {
+        path: PathBuf,
+        result: Result<ShaderInspection, String>,
+    },
+    ParameterChanged {
+        key: String,
+        value: f64,
+        kind: ParameterControlKind,
+    },
     RendererNotification(RendererNotification),
     Failed(String),
 }
@@ -58,6 +83,7 @@ impl AppDelegate for CharmeApp {
             .as_ref()
             .expect("window delegate should exist")
             .start_renderer();
+        shader_inspection::inspect_built_in_shader();
         activate_app();
     }
 
@@ -82,6 +108,14 @@ impl Dispatcher for CharmeApp {
             Message::Zoom(delta) => window.zoom(delta),
             Message::ChoosePmx => window.choose_pmx(),
             Message::LoadPmx(path) => window.load_pmx(path),
+            Message::ChooseShader => window.choose_shader(),
+            Message::InspectShader(path) => window.inspect_shader(path),
+            Message::ShaderInspected { path, result } => {
+                window.show_shader_result(path, result);
+            }
+            Message::ParameterChanged { key, value, kind } => {
+                window.set_parameter_value(&key, value, kind);
+            }
             Message::RendererNotification(notification) => {
                 window.handle_renderer_notification(notification);
             }
@@ -107,6 +141,10 @@ struct EditorWindow {
     material_list: Label,
     inspector_heading: Label,
     inspector_body: Label,
+    parameter_panel: View,
+    parameter_controls: RefCell<Vec<ParameterControl>>,
+    session: RefCell<EditorSession>,
+    active_material: RefCell<Option<MaterialId>>,
     brightness_label: Label,
     brightness: BrightnessSlider,
     current_image: RefCell<Option<Image>>,
@@ -146,6 +184,7 @@ impl EditorWindow {
             Color::SystemWhite,
         );
         inspector_body.set_max_number_of_lines(0);
+        let parameter_panel = View::new();
         let brightness_label = label("Viewport brightness", 12.0, false, Color::SystemWhite);
         let brightness = BrightnessSlider::new(0.3);
         let status = label(
@@ -172,6 +211,10 @@ impl EditorWindow {
             material_list,
             inspector_heading,
             inspector_body,
+            parameter_panel,
+            parameter_controls: RefCell::new(Vec::new()),
+            session: RefCell::new(EditorSession::new("Untitled Character")),
+            active_material: RefCell::new(None),
             brightness_label,
             brightness,
             current_image: RefCell::new(None),
@@ -248,6 +291,142 @@ impl EditorWindow {
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             bridge.load_pmx(path);
         }
+    }
+
+    fn choose_shader(&self) {
+        let mut panel = FileSelectPanel::new();
+        panel.set_can_choose_files(true);
+        panel.set_can_choose_directories(false);
+        panel.set_allows_multiple_selection(false);
+        panel.set_message("Choose a WGSL material shader to inspect in Charme.");
+        panel.show(|urls| {
+            if let Some(url) = urls.first() {
+                App::<CharmeApp, Message>::dispatch_main(Message::InspectShader(url.pathbuf()));
+            }
+        });
+    }
+
+    fn inspect_shader(&self, path: PathBuf) {
+        self.inspector_heading.set_text("INSPECTING SHADER…");
+        self.inspector_body.set_text(path.display().to_string());
+        self.parameter_controls.borrow_mut().clear();
+        shader_inspection::inspect_shader(path);
+    }
+
+    fn show_shader_result(&self, path: PathBuf, result: Result<ShaderInspection, String>) {
+        let inspection = match result {
+            Ok(inspection) => inspection,
+            Err(error) => {
+                self.inspector_heading.set_text("SHADER ERROR");
+                self.inspector_body
+                    .set_text(format!("{}\n\n{error}", path.display()));
+                self.status.set_text("WGSL reflection failed");
+                return;
+            }
+        };
+
+        self.inspector_heading.set_text("MATERIAL INSPECTOR");
+        let file_name = inspection
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("WGSL Shader");
+        self.install_document_material(&inspection.path, file_name);
+        self.inspector_body.set_text(format!(
+            "{file_name}\n{} parameter block(s) · {} diagnostic(s){}",
+            inspection.parameter_block_count,
+            inspection.diagnostics.len(),
+            if inspection.non_scalar_field_count == 0 {
+                String::new()
+            } else {
+                format!(
+                    " · {} non-scalar field(s)",
+                    inspection.non_scalar_field_count
+                )
+            }
+        ));
+
+        let mut controls = self.parameter_controls.borrow_mut();
+        controls.clear();
+        for (index, spec) in inspection.controls.iter().take(8).enumerate() {
+            let control = ParameterControl::new(spec);
+            self.parameter_panel.add_subview(&control.view);
+            LayoutConstraint::activate(&[
+                control
+                    .view
+                    .top
+                    .constraint_equal_to(&self.parameter_panel.top)
+                    .offset(index as f64 * 58.0),
+                control
+                    .view
+                    .leading
+                    .constraint_equal_to(&self.parameter_panel.leading),
+                control
+                    .view
+                    .trailing
+                    .constraint_equal_to(&self.parameter_panel.trailing),
+                control.view.height.constraint_equal_to_constant(48.0),
+            ]);
+            controls.push(control);
+        }
+        self.status.set_text(format!(
+            "Reflected {file_name} · {} native scalar control(s)",
+            controls.len()
+        ));
+    }
+
+    fn install_document_material(&self, path: &std::path::Path, name: &str) {
+        let resource = if path.is_absolute() {
+            ResourcePath::absolute(path.to_path_buf())
+        } else {
+            ResourcePath::project_relative("assets/shaders/preview_material.wgsl")
+        };
+        let Ok(resource) = resource else {
+            return;
+        };
+        let shader = DocumentShaderSource::new(name, resource);
+        let material = MaterialInstance::new(name, shader.id());
+        let material_id = material.id();
+        let mut session = self.session.borrow_mut();
+        if session
+            .apply(EditorCommand::UpsertShader(shader))
+            .and_then(|_| session.apply(EditorCommand::UpsertMaterial(material)))
+            .is_ok()
+        {
+            *self.active_material.borrow_mut() = Some(material_id);
+        }
+    }
+
+    fn set_parameter_value(&self, key: &str, value: f64, kind: ParameterControlKind) {
+        if let Some(control) = self
+            .parameter_controls
+            .borrow()
+            .iter()
+            .find(|control| control.key() == key)
+        {
+            control.set_value(value, kind);
+        }
+        let parameter = match kind {
+            ParameterControlKind::Float => ParameterValue::F32(value as f32),
+            ParameterControlKind::SignedInteger => ParameterValue::I32(value as i32),
+            ParameterControlKind::UnsignedInteger => ParameterValue::U32(value.max(0.0) as u32),
+        };
+        let active_material = *self.active_material.borrow();
+        let updated = active_material.and_then(|material| {
+            self.session
+                .borrow_mut()
+                .apply(EditorCommand::SetMaterialParameter {
+                    material,
+                    path: key.to_owned(),
+                    value: Some(parameter),
+                })
+                .ok()
+        });
+        self.status.set_text(if updated.is_some() {
+            format!("{key} = {value:.3} · document modified · renderer binding pending")
+        } else {
+            format!("{key} = {value:.3} · renderer binding pending")
+        });
     }
 
     fn handle_renderer_notification(&self, notification: RendererNotification) {
@@ -365,6 +544,7 @@ impl WindowDelegate for EditorWindow {
         }
         self.inspector.add_subview(&self.inspector_heading);
         self.inspector.add_subview(&self.inspector_body);
+        self.inspector.add_subview(&self.parameter_panel);
         self.inspector.add_subview(&self.brightness_label);
         self.inspector.add_subview(&self.brightness.view);
 
@@ -515,6 +695,22 @@ impl WindowDelegate for EditorWindow {
                 .trailing
                 .constraint_equal_to(&self.inspector.trailing)
                 .offset(-18.0),
+            self.parameter_panel
+                .top
+                .constraint_equal_to(&self.inspector.top)
+                .offset(132.0),
+            self.parameter_panel
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.parameter_panel
+                .trailing
+                .constraint_equal_to(&self.inspector.trailing)
+                .offset(-18.0),
+            self.parameter_panel
+                .bottom
+                .constraint_equal_to(&self.brightness_label.top)
+                .offset(-12.0),
             self.brightness
                 .view
                 .leading
@@ -622,6 +818,9 @@ fn menus() -> Vec<Menu> {
             vec![
                 MenuItem::new("Open PMX…").key("o").action(|| {
                     App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
+                }),
+                MenuItem::new("Inspect WGSL Shader…").action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);
                 }),
                 MenuItem::Separator,
                 MenuItem::CloseWindow,
