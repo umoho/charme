@@ -19,9 +19,12 @@ bevy = { version = "0.19.0", default-features = false }
 bevy_pmx = { git = "https://github.com/umoho/bevy_pmx.git", rev = "9b7b90b02da76ba9ce6f1ad48e63a0384073ea35", default-features = false }
 cacao = "0.3.2"
 naga = { version = "29.0.3", features = ["wgsl-in"] }
-naga_oil = "0.22.0"
+# Enabling naga-oil's default `glsl` feature affects Bevy through Cargo feature
+# unification and currently makes Bevy's built-in shader composition panic.
+naga_oil = { version = "0.22.0", default-features = false }
 nom = "8.0.0"
 serde = { version = "1.0.228", features = ["derive"] }
+unicode-ident = "1.0.24"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

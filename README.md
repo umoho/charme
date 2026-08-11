@@ -19,4 +19,20 @@ See [`docs/architecture.md`](docs/architecture.md) for dependency boundaries.
 
 ## Status
 
-The workspace structure is in place; product features have not been implemented yet.
+Implemented foundations:
+
+- WGSL composition, metadata scanning, reflection, validation, and uniform packing.
+- A private Bevy render worker with on-demand offscreen rendering, asynchronous
+  CPU readback, resize suspension, and orbit camera controls.
+
+The renderer currently displays a placeholder lookdev scene. PMX scene loading,
+Charme's Bevy material ABI, and the native application UI are the next layers.
+
+## Development
+
+```sh
+cargo test -p charme-shader --all-targets
+cargo test -p charme-renderer --all-targets
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+```

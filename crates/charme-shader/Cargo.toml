@@ -9,6 +9,7 @@ charme-core = { path = "../charme-core" }
 naga.workspace = true
 naga_oil.workspace = true
 nom.workspace = true
+unicode-ident.workspace = true
 
 [lints]
 workspace = true

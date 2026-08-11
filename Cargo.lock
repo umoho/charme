@@ -1315,6 +1315,7 @@ dependencies = [
  "naga",
  "naga_oil",
  "nom",
+ "unicode-ident",
 ]
 
 [[package]]
