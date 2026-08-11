@@ -5,6 +5,8 @@ use std::{
     thread::JoinHandle,
 };
 
+use charme_core::ParameterValue;
+
 use crate::{
     BackgroundColor, Frame, OutputSize, PmxSceneInfo, RendererConfig, RendererError,
     backend::{self, Command, WorkerEvent},
@@ -21,6 +23,13 @@ pub enum RendererNotification {
         /// The path that was requested.
         path: PathBuf,
         /// A human-readable import error.
+        message: String,
+    },
+    /// A material parameter was rejected without disturbing the current scene.
+    MaterialParameterRejected {
+        /// The reflected parameter path.
+        path: String,
+        /// A human-readable validation error.
         message: String,
     },
 }
@@ -151,6 +160,27 @@ impl Renderer {
     /// not replace the currently displayed scene.
     pub fn load_pmx(&self, path: impl AsRef<Path>) -> Result<(), RendererError> {
         self.send(Command::LoadPmx(path.as_ref().to_path_buf()))
+    }
+
+    /// Updates a fixed-ABI material parameter and requests a new frame.
+    ///
+    /// The path and value are renderer-independent core types. Unsupported
+    /// paths or types produce a notification and leave all current materials
+    /// unchanged.
+    pub fn set_material_parameter(
+        &self,
+        path: impl Into<String>,
+        value: ParameterValue,
+    ) -> Result<(), RendererError> {
+        if !value.is_finite() {
+            return Err(RendererError::InvalidConfiguration {
+                message: "material parameters must be finite".to_owned(),
+            });
+        }
+        self.send(Command::SetMaterialParameter {
+            path: path.into(),
+            value,
+        })
     }
 
     /// Requests a frame representing the latest renderer state.

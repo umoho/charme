@@ -6,6 +6,7 @@ use std::{
 };
 
 use cacao::appkit::App;
+use charme_core::ParameterValue;
 use charme_renderer::{BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig};
 
 use crate::app::{CharmeApp, Message};
@@ -16,6 +17,7 @@ enum Command {
     Orbit { delta_x: f32, delta_y: f32 },
     Zoom(f32),
     LoadPmx(PathBuf),
+    SetMaterialParameter { path: String, value: ParameterValue },
     Redraw,
     Stop,
 }
@@ -78,6 +80,12 @@ impl RenderBridge {
                             }
                             Ok(Command::LoadPmx(path)) => {
                                 if let Err(error) = renderer.load_pmx(path) {
+                                    dispatch(Message::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::SetMaterialParameter { path, value }) => {
+                                if let Err(error) = renderer.set_material_parameter(path, value) {
                                     dispatch(Message::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -155,6 +163,12 @@ impl RenderBridge {
 
     pub(crate) fn load_pmx(&self, path: PathBuf) {
         let _ = self.commands.send(Command::LoadPmx(path));
+    }
+
+    pub(crate) fn set_material_parameter(&self, path: String, value: ParameterValue) {
+        let _ = self
+            .commands
+            .send(Command::SetMaterialParameter { path, value });
     }
 
     pub(crate) fn request_redraw(&self) {

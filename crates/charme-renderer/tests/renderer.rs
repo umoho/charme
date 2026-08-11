@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use charme_core::ParameterValue;
 use charme_renderer::{
     BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig, RendererNotification,
 };
@@ -27,6 +28,22 @@ fn renders_resizes_and_loads_pmx() {
     assert_eq!(first.pixels().len(), first.bytes_per_row() * 9);
     assert_eq!(first.pixels()[3], 255);
     assert!(first.pixels()[2] > first.pixels()[0]);
+
+    renderer
+        .set_material_parameter("material.roughness", ParameterValue::F32(1.0))
+        .expect("material parameter should be accepted");
+    let tinted = wait_for_frame(&mut renderer);
+    assert!(tinted.sequence() > first.sequence());
+    assert_ne!(tinted.pixels(), first.pixels());
+
+    renderer
+        .set_material_parameter("material.not_a_fixed_parameter", ParameterValue::F32(1.0))
+        .expect("invalid material parameters are reported asynchronously");
+    assert!(matches!(
+        wait_for_notification(&mut renderer),
+        RendererNotification::MaterialParameterRejected { path, .. }
+            if path == "material.not_a_fixed_parameter"
+    ));
 
     renderer
         .resize(OutputSize::new(0, 0))

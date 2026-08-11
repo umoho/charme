@@ -10,12 +10,14 @@ bevy = { workspace = true, features = [
     "bevy_color",
     "bevy_image",
     "bevy_mesh",
+    "bevy_pbr",
     "bevy_render",
     "bevy_shader",
     "std",
 ] }
 charme-core = { path = "../charme-core" }
 charme-shader = { path = "../charme-shader" }
+thiserror.workspace = true
 
 [lints]
 workspace = true

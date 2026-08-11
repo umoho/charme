@@ -26,6 +26,8 @@ var<uniform> material: PreviewMaterialParams;
 @fragment
 fn fragment() -> @location(0) vec4<f32> {
     let bands = max(material.toon_bands, 1u);
-    let preview = material.roughness + material.rim_strength + material.outline_width + f32(bands);
-    return material.base_tint + vec4<f32>(preview * 0.0);
+    let band = floor((0.35 + material.rim_strength * 0.2) * f32(bands)) / f32(bands);
+    let intensity = band * (1.0 - material.roughness * 0.35)
+        + material.outline_width * 0.02;
+    return vec4<f32>(material.base_tint.rgb * intensity, material.base_tint.a);
 }

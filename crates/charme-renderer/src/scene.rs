@@ -7,15 +7,16 @@ use bevy::{
     asset::RenderAssetUsages,
     image::{CompressedImageFormats, ImageSampler, ImageType},
     prelude::{
-        AlphaMode, App, Assets, Color, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
-        StandardMaterial, Transform, Vec3,
+        AlphaMode, App, Assets, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
+        Transform, Vec3,
     },
-    render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat},
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use bevy_pmx::{
     Pmx, PmxImportContext, PmxMaterialRecord, PmxResolvedPath, PmxSource, PmxSourceLocation,
-    import_pmx, parse_pmx, prelude::PmxMaterialFlags,
+    import_pmx, parse_pmx,
 };
+use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 
 /// A PMX material slot exposed to the editor UI.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,7 +155,7 @@ pub(crate) struct SpawnedPmxScene {
     entities: Vec<Entity>,
     images: Vec<Handle<Image>>,
     meshes: Vec<Handle<Mesh>>,
-    materials: Vec<Handle<StandardMaterial>>,
+    pub(crate) materials: Vec<Handle<CharmeMaterial>>,
 }
 
 impl SpawnedPmxScene {
@@ -164,7 +165,7 @@ impl SpawnedPmxScene {
         }
         for handle in self.materials {
             app.world_mut()
-                .resource_mut::<Assets<StandardMaterial>>()
+                .resource_mut::<Assets<CharmeMaterial>>()
                 .remove(handle.id());
         }
         for handle in self.meshes {
@@ -216,7 +217,7 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
             .add(prepared.model.geometry().to_mesh_for_primitive(*primitive));
         let material = app
             .world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
+            .resource_mut::<Assets<CharmeMaterial>>()
             .add(material_for_record(
                 record,
                 &texture_handles,
@@ -246,8 +247,8 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
             .add(prepared.model.geometry().to_mesh());
         let material = app
             .world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
-            .add(default_material());
+            .resource_mut::<Assets<CharmeMaterial>>()
+            .add(CharmeMaterial::default());
         mesh_handles.push(mesh.clone());
         material_handles.push(material.clone());
         entities.push(
@@ -379,42 +380,17 @@ fn load_texture(source: &PmxSource, path: &PmxResolvedPath) -> Result<DecodedTex
 
 fn material_for_record(
     record: &PmxMaterialRecord,
-    textures: &[Handle<Image>],
-    texture_has_alpha: &[bool],
-) -> StandardMaterial {
-    let material = &record.material;
-    let texture_index = (material.texture_index >= 0).then_some(material.texture_index as usize);
-    let base_color_texture = texture_index.and_then(|index| textures.get(index).cloned());
-    let texture_has_alpha = texture_index
-        .and_then(|index| texture_has_alpha.get(index).copied())
-        .unwrap_or(false);
-    let [red, green, blue, alpha] = material.diffuse;
-    let double_sided = material.flags.contains(PmxMaterialFlags::NO_CULL);
-
-    StandardMaterial {
-        base_color: Color::srgba(red, green, blue, alpha),
-        base_color_texture,
-        cull_mode: (!double_sided).then_some(Face::Back),
-        double_sided,
+    _textures: &[Handle<Image>],
+    _texture_has_alpha: &[bool],
+) -> CharmeMaterial {
+    let [red, green, blue, alpha] = record.material.diffuse;
+    CharmeMaterial {
+        parameters: CharmeMaterialParams::with_tint([red, green, blue, alpha]),
         alpha_mode: if alpha < 0.999 {
             AlphaMode::Blend
-        } else if texture_has_alpha {
-            AlphaMode::AlphaToCoverage
         } else {
             AlphaMode::Opaque
         },
-        perceptual_roughness: 0.95,
-        metallic: 0.0,
-        ..Default::default()
-    }
-}
-
-fn default_material() -> StandardMaterial {
-    StandardMaterial {
-        base_color: Color::srgb(0.85, 0.85, 0.85),
-        perceptual_roughness: 0.95,
-        metallic: 0.0,
-        ..Default::default()
     }
 }
 

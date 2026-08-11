@@ -35,13 +35,18 @@ Implemented foundations:
 - Background WGSL reflection with metadata-driven native float and integer
   Inspector controls; a built-in sample Shader makes the controls visible at startup.
 
-Inspector scalar edits are recorded in the core document model. The next UI
-milestone is applying them to the renderer through Charme's reusable Bevy material ABI.
+Inspector scalar edits are recorded in the core document model and now flow
+through the renderer into Charme's reusable Bevy material ABI. The first fixed
+ABI uses a 16-lane uniform block (256 bytes); its roughness, rim strength,
+outline width, toon bands, and base tint controls visibly update the viewport.
+Unsupported parameter paths are rejected without replacing the last valid
+material and are reported as renderer notifications.
 
 ## Development
 
 ```sh
 cargo test -p charme-shader --all-targets
+cargo test -p charme-bevy --all-targets
 cargo test -p charme-renderer --all-targets
 cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings

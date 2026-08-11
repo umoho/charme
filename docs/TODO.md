@@ -62,12 +62,12 @@
 
 ## 3. `charme-bevy`：Bevy 材质运行时
 
-- [ ] 确定第一版固定 bind group ABI。
-- [ ] 确定参数 buffer 的容量、对齐和更新策略。
+- [x] 确定第一版固定 bind group ABI（group 3、binding 0 参数块）。
+- [x] 确定参数 buffer 的容量、对齐和更新策略（256 bytes、16 个 vec4 lane）。
 - [ ] 确定 diffuse、normal、sphere、toon/ramp 等固定纹理槽位。
-- [ ] 定义 `CharmeMaterial` Bevy asset。
-- [ ] 实现 `CharmeMaterialPlugin`。
-- [ ] 将 `charme-shader` 的参数布局连接到 GPU buffer。
+- [x] 定义 `CharmeMaterial` Bevy asset。
+- [x] 实现 `CharmeMaterialPlugin`。
+- [x] 将第一版固定参数布局连接到 GPU uniform buffer。
 - [ ] 实现纹理和 sampler 绑定。
 - [ ] 实现 opaque、mask、blend 和 double-sided 渲染状态。
 - [ ] 实现 Shader pipeline 创建、缓存和失效。
@@ -92,9 +92,9 @@
 - [x] 根据模型包围盒自动居中、落地和 framing。
 - [x] 加载失败时保留当前场景。
 - [x] 替换 PMX 场景时清理对应 mesh、material 和 image assets。
-- [ ] 将 StandardMaterial 预览替换为 `charme-bevy` 材质。
+- [x] 将 StandardMaterial 预览替换为 `charme-bevy` 材质（首版固定参数 ABI）。
 - [ ] 支持选择和高亮 material slot。
-- [ ] 支持从 UI 更新材质参数和纹理。
+- [x] 支持从 UI 更新固定材质参数并立即重绘；纹理仍待接入。
 - [ ] 增加材质球与材质缩略图 render session。
 - [ ] 增加灯光、背景和环境 preset。
 - [ ] 增加网格、法线、UV、材质 ID 等调试视图。
@@ -126,7 +126,7 @@
 - [x] 支持 float、i32 和 u32 原生 slider，显示 label、范围和当前值。
 - [ ] 支持 boolean、vector、color 和 texture 控件。
 - [x] 将 Inspector scalar 编辑写入 `charme-core` 材质实例和 dirty 历史。
-- [ ] 将 Inspector 参数编辑连接到 renderer 并实时改变角色材质。
+- [x] 将 Inspector 参数编辑连接到 renderer 并实时改变角色材质。
 - [ ] 实现参数编辑的连续事务与 Undo/Redo。
 - [ ] 实现 Shader diagnostics 列表及源码位置跳转。
 - [ ] 提供“在外部编辑器中打开”操作。

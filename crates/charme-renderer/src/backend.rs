@@ -25,6 +25,9 @@ use bevy::{
     },
 };
 
+use charme_bevy::{CharmeMaterial, CharmeMaterialPlugin, ParameterError};
+use charme_core::ParameterValue;
+
 use crate::{
     BackgroundColor, Frame, OutputSize, PixelFormat, RendererConfig, RendererError,
     renderer::RendererNotification,
@@ -38,6 +41,7 @@ pub(crate) enum Command {
     Zoom(f32),
     ResetCamera,
     LoadPmx(PathBuf),
+    SetMaterialParameter { path: String, value: ParameterValue },
     Redraw,
     Shutdown,
 }
@@ -141,6 +145,9 @@ fn run(
                 Command::LoadPmx(path) => {
                     dirty |= backend.load_pmx(path)?;
                 }
+                Command::SetMaterialParameter { path, value } => {
+                    dirty |= backend.set_material_parameter(path, value);
+                }
                 Command::Redraw => dirty = true,
                 Command::Shutdown => return Ok(()),
             }
@@ -171,6 +178,9 @@ fn run(
                 Ok(Command::LoadPmx(path)) => {
                     dirty |= backend.load_pmx(path)?;
                 }
+                Ok(Command::SetMaterialParameter { path, value }) => {
+                    dirty |= backend.set_material_parameter(path, value);
+                }
                 Ok(Command::Redraw) => dirty = true,
                 Ok(Command::Shutdown) => return Ok(()),
                 Err(TryRecvError::Empty) => break,
@@ -199,6 +209,7 @@ struct Backend {
     target: bevy::prelude::Handle<Image>,
     camera: Entity,
     placeholder_entities: Vec<Entity>,
+    placeholder_materials: Vec<bevy::prelude::Handle<CharmeMaterial>>,
     pmx_scene: Option<SpawnedPmxScene>,
     orbit: OrbitState,
     initial_orbit: OrbitState,
@@ -223,6 +234,7 @@ impl Backend {
                 .build()
                 .disable::<PipelinedRenderingPlugin>(),
         );
+        app.add_plugins(CharmeMaterialPlugin);
 
         while app.plugins_state() == PluginsState::Adding {
             thread::yield_now();
@@ -237,7 +249,7 @@ impl Backend {
         let texture_size = usable_texture_size(config.output_size);
         let target = add_target_image(&mut app, texture_size, config.pixel_format);
         let orbit = OrbitState::default();
-        let (camera, placeholder_entities) = spawn_scene(
+        let (camera, placeholder_entities, placeholder_materials) = spawn_scene(
             &mut app,
             target.clone(),
             config.background,
@@ -256,6 +268,7 @@ impl Backend {
             target,
             camera,
             placeholder_entities,
+            placeholder_materials,
             pmx_scene: None,
             orbit,
             initial_orbit: orbit,
@@ -336,6 +349,12 @@ impl Backend {
         for entity in self.placeholder_entities.drain(..) {
             let _ = self.app.world_mut().despawn(entity);
         }
+        for handle in self.placeholder_materials.drain(..) {
+            self.app
+                .world_mut()
+                .resource_mut::<Assets<CharmeMaterial>>()
+                .remove(handle.id());
+        }
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }
@@ -350,6 +369,39 @@ impl Backend {
                 prepared.info,
             )));
         Ok(true)
+    }
+
+    fn set_material_parameter(&mut self, path: String, value: ParameterValue) -> bool {
+        let mut changed = false;
+        let handles = self.placeholder_materials.iter().chain(
+            self.pmx_scene
+                .iter()
+                .flat_map(|scene| scene.materials.iter()),
+        );
+        for handle in handles {
+            let result = self
+                .app
+                .world_mut()
+                .resource_mut::<Assets<CharmeMaterial>>()
+                .get_mut(handle.id())
+                .ok_or_else(|| ParameterError::Unknown {
+                    path: "material handle".to_owned(),
+                })
+                .and_then(|mut material| material.set_parameter(&path, &value));
+            match result {
+                Ok(()) => changed = true,
+                Err(error) => {
+                    let _ = self.events.send(WorkerEvent::Notification(
+                        RendererNotification::MaterialParameterRejected {
+                            path: path.clone(),
+                            message: error.to_string(),
+                        },
+                    ));
+                    return false;
+                }
+            }
+        }
+        changed
     }
 
     fn update_camera_transform(&mut self) -> Result<(), RendererError> {
@@ -478,7 +530,11 @@ fn spawn_scene(
     background: BackgroundColor,
     active: bool,
     orbit: OrbitState,
-) -> (Entity, Vec<Entity>) {
+) -> (
+    Entity,
+    Vec<Entity>,
+    Vec<bevy::prelude::Handle<CharmeMaterial>>,
+) {
     let cube_mesh = app
         .world_mut()
         .resource_mut::<Assets<Mesh>>()
@@ -489,13 +545,8 @@ fn spawn_scene(
         .add(Plane3d::default().mesh().size(10.0, 10.0));
     let cube_material = app
         .world_mut()
-        .resource_mut::<Assets<StandardMaterial>>()
-        .add(StandardMaterial {
-            base_color: Color::srgb(0.24, 0.48, 0.95),
-            metallic: 0.15,
-            perceptual_roughness: 0.32,
-            ..Default::default()
-        });
+        .resource_mut::<Assets<CharmeMaterial>>()
+        .add(CharmeMaterial::with_tint([0.24, 0.48, 0.95, 1.0]));
     let floor_material = app
         .world_mut()
         .resource_mut::<Assets<StandardMaterial>>()
@@ -510,7 +561,7 @@ fn spawn_scene(
     let placeholder = world
         .spawn((
             Mesh3d(cube_mesh),
-            MeshMaterial3d(cube_material),
+            MeshMaterial3d(cube_material.clone()),
             Transform::from_xyz(0.0, 0.8, 0.0).with_rotation(Quat::from_euler(
                 bevy::math::EulerRot::XYZ,
                 0.15,
@@ -550,7 +601,7 @@ fn spawn_scene(
             orbit.transform(),
         ))
         .id();
-    (camera, vec![placeholder])
+    (camera, vec![placeholder], vec![cube_material])
 }
 
 const fn usable_texture_size(size: OutputSize) -> OutputSize {

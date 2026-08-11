@@ -418,14 +418,19 @@ impl EditorWindow {
                 .apply(EditorCommand::SetMaterialParameter {
                     material,
                     path: key.to_owned(),
-                    value: Some(parameter),
+                    value: Some(parameter.clone()),
                 })
                 .ok()
         });
+        if updated.is_some()
+            && let Some(bridge) = self.bridge.borrow().as_ref()
+        {
+            bridge.set_material_parameter(key.to_owned(), parameter);
+        }
         self.status.set_text(if updated.is_some() {
-            format!("{key} = {value:.3} · document modified · renderer binding pending")
+            format!("{key} = {value:.3} · document modified · preview updated")
         } else {
-            format!("{key} = {value:.3} · renderer binding pending")
+            format!("{key} = {value:.3} · preview binding pending")
         });
     }
 
@@ -436,6 +441,9 @@ impl EditorWindow {
                 self.scene_info
                     .set_text(format!("Could not load\n{}", path.display()));
                 self.show_error(&message);
+            }
+            RendererNotification::MaterialParameterRejected { path, message } => {
+                self.show_error(&format!("Parameter {path} was rejected: {message}"));
             }
             _ => {}
         }

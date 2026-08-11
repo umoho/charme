@@ -7,6 +7,8 @@
 - Bevy and its ECS types do not cross the renderer/UI boundary.
 - The editor document is the source of truth; the render world is a projection.
 - Shader compilation failures preserve the last successfully rendered material.
+- Parameter validation failures preserve the last successfully rendered material
+  and are reported through renderer notifications.
 - Exported Charme materials should be consumable by an ordinary Bevy application.
 
 ## Packages
@@ -39,7 +41,11 @@ layout, and runtime value packing. It may use Naga but does not depend on Bevy.
 
 Owns the fixed Charme shader ABI and the reusable Bevy material integration.
 This is the package intended to be embedded in Bevy applications that consume
-Charme output.
+Charme output. The first ABI uses Bevy material bind group 3, binding 0, with a
+256-byte (16 `vec4`) uniform block. The first five semantic fields occupy
+roughness, rim strength, outline width, toon bands, and base tint slots; the
+remaining lanes are reserved for compatible additions. `CharmeMaterialPlugin`
+embeds the runtime shader so consumers do not need Charme's editor assets.
 
 ### `charme-renderer`
 
