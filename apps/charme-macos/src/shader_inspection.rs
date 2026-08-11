@@ -7,6 +7,7 @@ use charme_shader::{
 
 use crate::app::{CharmeApp, Message};
 
+#[cfg(test)]
 const BUILT_IN_SHADER: &str = include_str!("../../../assets/shaders/preview_material.wgsl");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,13 +36,6 @@ pub(crate) struct ShaderInspection {
     pub(crate) diagnostics: Vec<String>,
 }
 
-pub(crate) fn inspect_built_in_shader() {
-    inspect_source(
-        PathBuf::from("Built-in Character Preview"),
-        BUILT_IN_SHADER.to_owned(),
-    );
-}
-
 pub(crate) fn inspect_shader(path: PathBuf) {
     thread::Builder::new()
         .name("charme-shader-inspection".to_owned())
@@ -49,16 +43,6 @@ pub(crate) fn inspect_shader(path: PathBuf) {
             let result = fs::read_to_string(&path)
                 .map_err(|error| format!("failed to read {}: {error}", path.display()))
                 .and_then(|source| reflect_source(path.clone(), source));
-            App::<CharmeApp, Message>::dispatch_main(Message::ShaderInspected { path, result });
-        })
-        .expect("failed to start shader inspection worker");
-}
-
-fn inspect_source(path: PathBuf, source: String) {
-    thread::Builder::new()
-        .name("charme-shader-inspection".to_owned())
-        .spawn(move || {
-            let result = reflect_source(path.clone(), source);
             App::<CharmeApp, Message>::dispatch_main(Message::ShaderInspected { path, result });
         })
         .expect("failed to start shader inspection worker");

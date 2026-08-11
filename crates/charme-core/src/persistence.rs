@@ -171,7 +171,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("charme_core_{unique}.charme.ron"));
+        let path = std::env::temp_dir().join(format!("charme_core_{unique}.charme"));
         let mut session = populated_session();
         assert!(session.is_dirty());
 

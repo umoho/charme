@@ -1,14 +1,19 @@
-use std::{cell::RefCell, path::PathBuf};
+use std::{
+    cell::RefCell,
+    path::{Path, PathBuf},
+};
 
 use cacao::{
     appkit::{
         App, AppDelegate,
         menu::{Menu, MenuItem},
-        window::{Window, WindowConfig, WindowDelegate},
+        window::{TitleVisibility, Window, WindowConfig, WindowDelegate},
     },
+    button::{BezelStyle, Button},
     color::Color,
+    defaults::{UserDefaults, Value},
     filesystem::FileSelectPanel,
-    foundation::{YES, id},
+    foundation::{YES, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     notification_center::Dispatcher,
@@ -27,12 +32,15 @@ use crate::{
     bridge::RenderBridge,
     frame_image::make_image,
     interaction::OrbitInputView,
+    localization::{self, Key},
     parameter_control::ParameterControl,
     shader_inspection::{self, ParameterControlKind, ShaderInspection},
     slider::BrightnessSlider,
 };
 
 pub(crate) enum Message {
+    ChooseFile,
+    OpenPath(PathBuf),
     Frame {
         frame: Frame,
         scale: f64,
@@ -43,8 +51,6 @@ pub(crate) enum Message {
         delta_y: f32,
     },
     Zoom(f32),
-    ChoosePmx,
-    LoadPmx(PathBuf),
     ChooseShader,
     InspectShader(PathBuf),
     ShaderInspected {
@@ -61,15 +67,17 @@ pub(crate) enum Message {
 }
 
 pub(crate) struct CharmeApp {
-    window: Window<EditorWindow>,
+    startup: Window<StartupWindow>,
+    editor: RefCell<Option<Window<EditorWindow>>>,
 }
 
 impl Default for CharmeApp {
     fn default() -> Self {
         let mut config = WindowConfig::default();
-        config.set_initial_dimensions(80.0, 80.0, 1280.0, 800.0);
+        config.set_initial_dimensions(160.0, 160.0, 720.0, 520.0);
         Self {
-            window: Window::with(config, EditorWindow::new()),
+            startup: Window::with(config, StartupWindow::new()),
+            editor: RefCell::new(None),
         }
     }
 }
@@ -77,13 +85,7 @@ impl Default for CharmeApp {
 impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         App::set_menu(menus());
-        self.window.show();
-        self.window
-            .delegate
-            .as_ref()
-            .expect("window delegate should exist")
-            .start_renderer();
-        shader_inspection::inspect_built_in_shader();
+        self.startup.show();
         activate_app();
     }
 
@@ -96,31 +98,371 @@ impl Dispatcher for CharmeApp {
     type Message = Message;
 
     fn on_ui_message(&self, message: Self::Message) {
-        let window = self
-            .window
-            .delegate
-            .as_ref()
-            .expect("window delegate should exist");
         match message {
-            Message::Frame { frame, scale } => window.display(frame, scale),
-            Message::Brightness(value) => window.set_brightness(value),
-            Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
-            Message::Zoom(delta) => window.zoom(delta),
-            Message::ChoosePmx => window.choose_pmx(),
-            Message::LoadPmx(path) => window.load_pmx(path),
-            Message::ChooseShader => window.choose_shader(),
-            Message::InspectShader(path) => window.inspect_shader(path),
-            Message::ShaderInspected { path, result } => {
-                window.show_shader_result(path, result);
+            Message::ChooseFile => self.choose_file(),
+            Message::OpenPath(path) => self.open_path(path),
+            other => {
+                let editor = self.editor.borrow();
+                let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref())
+                else {
+                    return;
+                };
+                match other {
+                    Message::Frame { frame, scale } => window.display(frame, scale),
+                    Message::Brightness(value) => window.set_brightness(value),
+                    Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
+                    Message::Zoom(delta) => window.zoom(delta),
+                    Message::ChooseShader => window.choose_shader(),
+                    Message::InspectShader(path) => window.inspect_shader(path),
+                    Message::ShaderInspected { path, result } => {
+                        window.show_shader_result(path, result);
+                    }
+                    Message::ParameterChanged { key, value, kind } => {
+                        window.set_parameter_value(&key, value, kind);
+                    }
+                    Message::RendererNotification(notification) => {
+                        window.handle_renderer_notification(notification);
+                    }
+                    Message::Failed(error) => window.show_error(&error),
+                    Message::ChooseFile | Message::OpenPath(_) => unreachable!(),
+                }
             }
-            Message::ParameterChanged { key, value, kind } => {
-                window.set_parameter_value(&key, value, kind);
-            }
-            Message::RendererNotification(notification) => {
-                window.handle_renderer_notification(notification);
-            }
-            Message::Failed(error) => window.show_error(&error),
         }
+    }
+}
+
+impl CharmeApp {
+    fn choose_file(&self) {
+        let mut panel = FileSelectPanel::new();
+        panel.set_can_choose_files(true);
+        panel.set_can_choose_directories(false);
+        panel.set_allows_multiple_selection(false);
+        panel.set_message(localization::text(Key::ChooseFileMessage));
+        panel.show(|urls| {
+            if let Some(url) = urls.first() {
+                App::<CharmeApp, Message>::dispatch_main(Message::OpenPath(url.pathbuf()));
+            }
+        });
+    }
+
+    fn open_path(&self, path: PathBuf) {
+        match file_kind(&path) {
+            Some(FileKind::Project) => self.open_project(path),
+            Some(FileKind::Pmx) => {
+                self.with_editor(|editor| editor.load_pmx(path));
+            }
+            Some(FileKind::Shader) => {
+                self.with_editor(|editor| editor.inspect_shader(path));
+            }
+            None => self.show_startup_error(&format!("无法识别此文件类型\n\n{}", path.display())),
+        }
+    }
+
+    fn open_project(&self, path: PathBuf) {
+        let session = match EditorSession::open(&path) {
+            Ok(session) => session,
+            Err(error) => {
+                self.show_startup_error(&format!("无法打开项目\n\n{error}"));
+                return;
+            }
+        };
+        let project_directory = path.parent().unwrap_or_else(|| Path::new("."));
+        let character = session
+            .document()
+            .character()
+            .map(|character| character.path.resolve(project_directory));
+        self.with_editor(|editor| {
+            editor.install_session(session);
+            if let Some(character) = character {
+                editor.load_pmx(character);
+            }
+        });
+        remember_project(&path);
+    }
+
+    fn ensure_editor(&self) {
+        if self.editor.borrow().is_none() {
+            let mut config = WindowConfig::default();
+            config.set_initial_dimensions(80.0, 80.0, 1280.0, 800.0);
+            let window = Window::with(config, EditorWindow::new());
+            window.show();
+            window
+                .delegate
+                .as_ref()
+                .expect("editor window delegate should exist")
+                .start_renderer();
+            *self.editor.borrow_mut() = Some(window);
+            hide_window(&self.startup);
+        } else if let Some(window) = self.editor.borrow().as_ref() {
+            window.show();
+            hide_window(&self.startup);
+        }
+    }
+
+    fn with_editor(&self, action: impl FnOnce(&EditorWindow)) {
+        self.ensure_editor();
+        let editor = self.editor.borrow();
+        let window = editor
+            .as_ref()
+            .and_then(|window| window.delegate.as_deref())
+            .expect("editor window should exist");
+        action(window);
+    }
+
+    fn show_startup_error(&self, error: &str) {
+        if let Some(startup) = self.startup.delegate.as_ref() {
+            startup.show_error(error);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileKind {
+    Project,
+    Pmx,
+    Shader,
+}
+
+fn file_kind(path: &Path) -> Option<FileKind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "charme" => Some(FileKind::Project),
+        "pmx" => Some(FileKind::Pmx),
+        "wgsl" => Some(FileKind::Shader),
+        _ => None,
+    }
+}
+
+const RECENT_PROJECTS_KEY: &str = "recent-projects";
+
+fn recent_projects() -> Vec<PathBuf> {
+    let defaults = UserDefaults::standard();
+    defaults
+        .get(RECENT_PROJECTS_KEY)
+        .and_then(|value| match value {
+            Value::String(value) => Some(value),
+            _ => None,
+        })
+        .map(|value| {
+            value
+                .lines()
+                .map(PathBuf::from)
+                .filter(|path| {
+                    path.extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("charme"))
+                        && path.is_file()
+                })
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn remember_project(path: &Path) {
+    let mut projects = recent_projects();
+    projects.retain(|candidate| candidate != path);
+    projects.insert(0, path.to_path_buf());
+    projects.truncate(8);
+    let value = projects
+        .iter()
+        .map(|project| project.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
+    UserDefaults::standard().insert(RECENT_PROJECTS_KEY, Value::string(value));
+}
+
+fn hide_window<T>(window: &Window<T>) {
+    unsafe {
+        let _: () = msg_send![&*window.objc, orderOut: nil];
+    }
+}
+
+struct StartupWindow {
+    content: View,
+    brand: Label,
+    title: Label,
+    subtitle: Label,
+    open_button: Button,
+    formats: Label,
+    recent_heading: Label,
+    recent_buttons: Vec<Button>,
+    status: Label,
+}
+
+impl StartupWindow {
+    fn new() -> Self {
+        let content = panel(Color::rgb(24, 25, 30));
+        let brand = label("CHARME", 16.0, true, Color::SystemWhite);
+        let title = label(
+            localization::text(Key::StartupTitle),
+            28.0,
+            true,
+            Color::SystemWhite,
+        );
+        let subtitle = label(
+            localization::text(Key::StartupSubtitle),
+            14.0,
+            false,
+            Color::LabelSecondary,
+        );
+        let formats = label(
+            localization::text(Key::StartupFormats),
+            12.0,
+            false,
+            Color::LabelSecondary,
+        );
+        let recent_heading = label(
+            localization::text(Key::RecentProjects),
+            13.0,
+            true,
+            Color::SystemWhite,
+        );
+        let status = label("", 11.0, false, Color::SystemRed);
+        let mut open_button = Button::new(localization::text(Key::OpenFile));
+        open_button.set_bezel_style(BezelStyle::Rounded);
+        open_button.set_key_equivalent("o");
+        open_button.set_action(|| {
+            App::<CharmeApp, Message>::dispatch_main(Message::ChooseFile);
+        });
+
+        let projects = recent_projects();
+        let mut recent_buttons = Vec::new();
+        for project in projects {
+            let name = project
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or(localization::text(Key::ProjectFallback));
+            let mut button = Button::new(&format!("{name} · {}", project.display()));
+            button.set_bezel_style(BezelStyle::TexturedRounded);
+            button.set_action(move || {
+                App::<CharmeApp, Message>::dispatch_main(Message::OpenPath(project.clone()));
+            });
+            recent_buttons.push(button);
+        }
+        recent_heading.set_hidden(recent_buttons.is_empty());
+
+        Self {
+            content,
+            brand,
+            title,
+            subtitle,
+            open_button,
+            formats,
+            recent_heading,
+            recent_buttons,
+            status,
+        }
+    }
+
+    fn show_error(&self, error: &str) {
+        self.status.set_text(error);
+    }
+}
+
+impl WindowDelegate for StartupWindow {
+    const NAME: &'static str = "CharmeStartupWindow";
+
+    fn did_load(&mut self, window: Window) {
+        window.set_title("Charme");
+        window.set_title_visibility(TitleVisibility::Hidden);
+        window.set_titlebar_appears_transparent(true);
+        window.set_titlebar_separator_style(0);
+        window.set_minimum_content_size(560.0, 420.0);
+        window.set_content_view(&self.content);
+
+        for label in [
+            &self.brand,
+            &self.title,
+            &self.subtitle,
+            &self.formats,
+            &self.recent_heading,
+            &self.status,
+        ] {
+            self.content.add_subview(label);
+        }
+        self.content.add_subview(&self.open_button);
+        for button in &self.recent_buttons {
+            self.content.add_subview(button);
+        }
+
+        let mut constraints = vec![
+            self.brand
+                .top
+                .constraint_equal_to(&self.content.top)
+                .offset(24.0),
+            self.brand
+                .leading
+                .constraint_equal_to(&self.content.leading)
+                .offset(72.0),
+            self.title
+                .center_x
+                .constraint_equal_to(&self.content.center_x),
+            self.title
+                .top
+                .constraint_equal_to(&self.content.top)
+                .offset(150.0),
+            self.subtitle
+                .center_x
+                .constraint_equal_to(&self.content.center_x),
+            self.subtitle
+                .top
+                .constraint_equal_to(&self.title.bottom)
+                .offset(12.0),
+            self.open_button
+                .center_x
+                .constraint_equal_to(&self.content.center_x),
+            self.open_button
+                .top
+                .constraint_equal_to(&self.subtitle.bottom)
+                .offset(28.0),
+            self.open_button.width.constraint_equal_to_constant(150.0),
+            self.open_button.height.constraint_equal_to_constant(34.0),
+            self.formats
+                .center_x
+                .constraint_equal_to(&self.content.center_x),
+            self.formats
+                .top
+                .constraint_equal_to(&self.open_button.bottom)
+                .offset(12.0),
+            self.recent_heading
+                .leading
+                .constraint_equal_to(&self.content.leading)
+                .offset(48.0),
+            self.recent_heading
+                .top
+                .constraint_equal_to(&self.formats.bottom)
+                .offset(42.0),
+            self.status
+                .leading
+                .constraint_equal_to(&self.content.leading)
+                .offset(48.0),
+            self.status
+                .trailing
+                .constraint_equal_to(&self.content.trailing)
+                .offset(-48.0),
+            self.status
+                .bottom
+                .constraint_equal_to(&self.content.bottom)
+                .offset(-20.0),
+        ];
+        for (index, button) in self.recent_buttons.iter().enumerate() {
+            constraints.extend([
+                button
+                    .leading
+                    .constraint_equal_to(&self.content.leading)
+                    .offset(48.0),
+                button
+                    .trailing
+                    .constraint_equal_to(&self.content.trailing)
+                    .offset(-48.0),
+                button
+                    .top
+                    .constraint_equal_to(&self.recent_heading.bottom)
+                    .offset(10.0 + index as f64 * 34.0),
+                button.height.constraint_equal_to_constant(28.0),
+            ]);
+        }
+        LayoutConstraint::activate(&constraints);
     }
 }
 
@@ -135,6 +477,7 @@ struct EditorWindow {
     orbit_input: OrbitInputView,
     status: Label,
     app_title: Label,
+    open_button: Button,
     scene_heading: Label,
     scene_info: Label,
     materials_heading: Label,
@@ -163,32 +506,62 @@ impl EditorWindow {
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
 
-        let app_title = label("CHARME", 18.0, true, Color::SystemWhite);
-        let scene_heading = label("SCENE", 11.0, true, Color::LabelSecondary);
+        let app_title = label("CHARME", 16.0, true, Color::SystemWhite);
+        let mut open_button = Button::new(localization::text(Key::OpenFile));
+        open_button.set_bezel_style(BezelStyle::TexturedRounded);
+        open_button.set_action(|| {
+            App::<CharmeApp, Message>::dispatch_main(Message::ChooseFile);
+        });
+        let scene_heading = label(
+            localization::text(Key::Scene),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
         let scene_info = label(
-            "No character loaded\n\nChoose File → Open PMX…",
+            localization::text(Key::EmptyScene),
             13.0,
             false,
             Color::SystemWhite,
         );
         scene_info.set_max_number_of_lines(0);
-        let materials_heading = label("MATERIAL SLOTS", 11.0, true, Color::LabelSecondary);
-        let material_list = label("—", 12.0, false, Color::SystemWhite);
+        let materials_heading = label(
+            localization::text(Key::Materials),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
+        let material_list = label(
+            localization::text(Key::EmptyMaterials),
+            12.0,
+            false,
+            Color::SystemWhite,
+        );
         material_list.set_max_number_of_lines(0);
 
-        let inspector_heading = label("INSPECTOR", 11.0, true, Color::LabelSecondary);
+        let inspector_heading = label(
+            localization::text(Key::Inspector),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
         let inspector_body = label(
-            "Select a material slot to edit its Charme material.\n\nShader-driven controls will appear here.",
+            localization::text(Key::InspectorBody),
             13.0,
             false,
             Color::SystemWhite,
         );
         inspector_body.set_max_number_of_lines(0);
         let parameter_panel = View::new();
-        let brightness_label = label("Viewport brightness", 12.0, false, Color::SystemWhite);
+        let brightness_label = label(
+            localization::text(Key::Brightness),
+            12.0,
+            false,
+            Color::SystemWhite,
+        );
         let brightness = BrightnessSlider::new(0.3);
         let status = label(
-            "Initializing Bevy renderer…",
+            localization::text(Key::RendererStarting),
             11.0,
             false,
             Color::SystemWhite,
@@ -205,6 +578,7 @@ impl EditorWindow {
             orbit_input,
             status,
             app_title,
+            open_button,
             scene_heading,
             scene_info,
             materials_heading,
@@ -213,13 +587,27 @@ impl EditorWindow {
             inspector_body,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
-            session: RefCell::new(EditorSession::new("Untitled Character")),
+            session: RefCell::new(EditorSession::new("未命名角色")),
             active_material: RefCell::new(None),
             brightness_label,
             brightness,
             current_image: RefCell::new(None),
             bridge: RefCell::new(None),
         }
+    }
+
+    fn install_session(&self, session: EditorSession) {
+        self.session.replace(session);
+        self.active_material.replace(None);
+        self.parameter_controls.borrow_mut().clear();
+        self.scene_info
+            .set_text(localization::text(Key::ProjectOpened));
+        self.material_list
+            .set_text(localization::text(Key::WaitingCharacter));
+        self.inspector_heading
+            .set_text(localization::text(Key::Inspector));
+        self.inspector_body
+            .set_text(localization::text(Key::InspectorBody));
     }
 
     fn start_renderer(&self) {
@@ -263,31 +651,20 @@ impl EditorWindow {
                 self.image_view.set_image(&image);
                 *self.current_image.borrow_mut() = Some(image);
                 self.status.set_text(format!(
-                    "Frame {sequence} · {width}×{height} px · Drag to orbit · Scroll to zoom"
+                    "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 滚动缩放"
                 ));
             }
             Err(error) => self.show_error(&error),
         }
     }
 
-    fn choose_pmx(&self) {
-        let mut panel = FileSelectPanel::new();
-        panel.set_can_choose_files(true);
-        panel.set_can_choose_directories(false);
-        panel.set_allows_multiple_selection(false);
-        panel.set_message("Choose a PMX character model to preview in Charme.");
-        panel.show(|urls| {
-            if let Some(url) = urls.first() {
-                App::<CharmeApp, Message>::dispatch_main(Message::LoadPmx(url.pathbuf()));
-            }
-        });
-    }
-
     fn load_pmx(&self, path: PathBuf) {
         self.scene_info
-            .set_text(format!("Loading…\n{}", path.display()));
-        self.material_list.set_text("Loading material slots…");
-        self.status.set_text("Loading PMX and textures…");
+            .set_text(format!("加载中…\n{}", path.display()));
+        self.material_list
+            .set_text(localization::text(Key::LoadingMaterials));
+        self.status
+            .set_text(localization::text(Key::LoadingPmxTextures));
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             bridge.load_pmx(path);
         }
@@ -298,7 +675,7 @@ impl EditorWindow {
         panel.set_can_choose_files(true);
         panel.set_can_choose_directories(false);
         panel.set_allows_multiple_selection(false);
-        panel.set_message("Choose a WGSL material shader to inspect in Charme.");
+        panel.set_message(localization::text(Key::ChooseShaderMessage));
         panel.show(|urls| {
             if let Some(url) = urls.first() {
                 App::<CharmeApp, Message>::dispatch_main(Message::InspectShader(url.pathbuf()));
@@ -307,7 +684,8 @@ impl EditorWindow {
     }
 
     fn inspect_shader(&self, path: PathBuf) {
-        self.inspector_heading.set_text("INSPECTING SHADER…");
+        self.inspector_heading
+            .set_text(localization::text(Key::InspectingShader));
         self.inspector_body.set_text(path.display().to_string());
         self.parameter_controls.borrow_mut().clear();
         shader_inspection::inspect_shader(path);
@@ -317,32 +695,32 @@ impl EditorWindow {
         let inspection = match result {
             Ok(inspection) => inspection,
             Err(error) => {
-                self.inspector_heading.set_text("SHADER ERROR");
+                self.inspector_heading
+                    .set_text(localization::text(Key::ShaderError));
                 self.inspector_body
                     .set_text(format!("{}\n\n{error}", path.display()));
-                self.status.set_text("WGSL reflection failed");
+                self.status
+                    .set_text(localization::text(Key::ReflectionFailed));
                 return;
             }
         };
 
-        self.inspector_heading.set_text("MATERIAL INSPECTOR");
+        self.inspector_heading
+            .set_text(localization::text(Key::MaterialInspector));
         let file_name = inspection
             .path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("WGSL Shader");
+            .unwrap_or(localization::text(Key::WgslShader));
         self.install_document_material(&inspection.path, file_name);
         self.inspector_body.set_text(format!(
-            "{file_name}\n{} parameter block(s) · {} diagnostic(s){}",
+            "{file_name}\n{}个参数块 · {}个诊断{}",
             inspection.parameter_block_count,
             inspection.diagnostics.len(),
             if inspection.non_scalar_field_count == 0 {
                 String::new()
             } else {
-                format!(
-                    " · {} non-scalar field(s)",
-                    inspection.non_scalar_field_count
-                )
+                format!(" · {}个非标量字段", inspection.non_scalar_field_count)
             }
         ));
 
@@ -369,10 +747,8 @@ impl EditorWindow {
             ]);
             controls.push(control);
         }
-        self.status.set_text(format!(
-            "Reflected {file_name} · {} native scalar control(s)",
-            controls.len()
-        ));
+        self.status
+            .set_text(format!("已反射{file_name} · {}个标量控件", controls.len()));
     }
 
     fn install_document_material(&self, path: &std::path::Path, name: &str) {
@@ -428,9 +804,9 @@ impl EditorWindow {
             bridge.set_material_parameter(key.to_owned(), parameter);
         }
         self.status.set_text(if updated.is_some() {
-            format!("{key} = {value:.3} · document modified · preview updated")
+            format!("{key} = {value:.3} · 文档已修改 · 预览已更新")
         } else {
-            format!("{key} = {value:.3} · preview binding pending")
+            format!("{key} = {value:.3} · 等待预览绑定")
         });
     }
 
@@ -439,11 +815,11 @@ impl EditorWindow {
             RendererNotification::PmxLoaded(info) => self.show_scene_info(&info),
             RendererNotification::PmxLoadFailed { path, message } => {
                 self.scene_info
-                    .set_text(format!("Could not load\n{}", path.display()));
+                    .set_text(format!("无法加载\n{}", path.display()));
                 self.show_error(&message);
             }
             RendererNotification::MaterialParameterRejected { path, message } => {
-                self.show_error(&format!("Parameter {path} was rejected: {message}"));
+                self.show_error(&format!("参数{path}被拒绝：{message}"));
             }
             _ => {}
         }
@@ -451,7 +827,7 @@ impl EditorWindow {
 
     fn show_scene_info(&self, info: &PmxSceneInfo) {
         self.scene_info.set_text(format!(
-            "{}\n\n{} vertices · {} indices",
+            "{}\n\n{}个顶点 · {}个索引",
             info.name(),
             info.vertex_count(),
             info.index_count()
@@ -464,18 +840,18 @@ impl EditorWindow {
             .collect::<Vec<_>>();
         let remaining = info.material_slots().len().saturating_sub(slots.len());
         let mut text = if slots.is_empty() {
-            "No material slots".to_owned()
+            localization::text(Key::NoMaterials).to_owned()
         } else {
             slots.join("\n")
         };
         if remaining > 0 {
-            text.push_str(&format!("\n… and {remaining} more"));
+            text.push_str(&format!("\n…以及{remaining}个"));
         }
         self.material_list.set_text(text);
 
         if let Some(slot) = info.material_slots().first() {
             self.inspector_body.set_text(format!(
-                "{}\n\nSource slot {}\nDiffuse: {}\nSphere: {}\nToon: {}\n\nCharme material controls are coming next.",
+                "{}\n\n源材质槽{}\n漫反射：{}\nSphere：{}\nToon：{}\n\nCharme材质控件即将支持。",
                 slot.name(),
                 slot.index(),
                 slot.diffuse_texture().unwrap_or("—"),
@@ -485,16 +861,12 @@ impl EditorWindow {
         }
         self.status.set_text(if info.warnings().is_empty() {
             format!(
-                "Loaded {} · {} material slots",
+                "已加载{} · {}个材质槽",
                 info.name(),
                 info.material_slots().len()
             )
         } else {
-            format!(
-                "Loaded {} with {} warning(s)",
-                info.name(),
-                info.warnings().len()
-            )
+            format!("已加载{} · {}个警告", info.name(), info.warnings().len())
         });
     }
 
@@ -517,7 +889,8 @@ impl EditorWindow {
     }
 
     fn show_error(&self, error: &str) {
-        self.status.set_text(format!("Error: {error}"));
+        self.status
+            .set_text(format!("{}{error}", localization::text(Key::ErrorPrefix)));
     }
 }
 
@@ -525,7 +898,10 @@ impl WindowDelegate for EditorWindow {
     const NAME: &'static str = "CharmeEditorWindow";
 
     fn did_load(&mut self, window: Window) {
-        window.set_title("Charme · Character Material Editor");
+        window.set_title("Charme");
+        window.set_title_visibility(TitleVisibility::Hidden);
+        window.set_titlebar_appears_transparent(true);
+        window.set_titlebar_separator_style(0);
         window.set_minimum_content_size(900.0, 560.0);
         window.set_content_view(&self.content);
 
@@ -541,6 +917,7 @@ impl WindowDelegate for EditorWindow {
         self.viewport.add_subview(&self.image_view);
         self.viewport.add_subview(&self.orbit_input.view);
         self.viewport.add_subview(&self.status);
+        self.sidebar.add_subview(&self.open_button);
         for label in [
             &self.app_title,
             &self.scene_heading,
@@ -642,11 +1019,20 @@ impl WindowDelegate for EditorWindow {
             self.app_title
                 .leading
                 .constraint_equal_to(&self.sidebar.leading)
+                .offset(72.0),
+            self.open_button
+                .leading
+                .constraint_equal_to(&self.app_title.trailing)
                 .offset(16.0),
+            self.open_button
+                .top
+                .constraint_equal_to(&self.sidebar.top)
+                .offset(16.0),
+            self.open_button.height.constraint_equal_to_constant(26.0),
             self.scene_heading
                 .top
-                .constraint_equal_to(&self.app_title.bottom)
-                .offset(28.0),
+                .constraint_equal_to(&self.open_button.bottom)
+                .offset(24.0),
             self.scene_heading
                 .leading
                 .constraint_equal_to(&self.sidebar.leading)
@@ -822,12 +1208,12 @@ fn menus() -> Vec<Menu> {
             ],
         ),
         Menu::new(
-            "File",
+            localization::text(Key::FileMenu),
             vec![
-                MenuItem::new("Open PMX…").key("o").action(|| {
-                    App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
+                MenuItem::new("打开文件…").key("o").action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::ChooseFile);
                 }),
-                MenuItem::new("Inspect WGSL Shader…").action(|| {
+                MenuItem::new(localization::text(Key::InspectShaderMenu)).action(|| {
                     App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);
                 }),
                 MenuItem::Separator,
@@ -835,7 +1221,7 @@ fn menus() -> Vec<Menu> {
             ],
         ),
         Menu::new(
-            "Edit",
+            localization::text(Key::EditMenu),
             vec![
                 MenuItem::Undo,
                 MenuItem::Redo,
@@ -843,8 +1229,14 @@ fn menus() -> Vec<Menu> {
                 MenuItem::Copy,
             ],
         ),
-        Menu::new("View", vec![MenuItem::EnterFullScreen]),
-        Menu::new("Window", vec![MenuItem::Minimize, MenuItem::Zoom]),
+        Menu::new(
+            localization::text(Key::ViewMenu),
+            vec![MenuItem::EnterFullScreen],
+        ),
+        Menu::new(
+            localization::text(Key::WindowMenu),
+            vec![MenuItem::Minimize, MenuItem::Zoom],
+        ),
     ]
 }
 

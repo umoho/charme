@@ -9,6 +9,8 @@ mod frame_image;
 #[cfg(target_os = "macos")]
 mod interaction;
 #[cfg(target_os = "macos")]
+mod localization;
+#[cfg(target_os = "macos")]
 mod parameter_control;
 #[cfg(target_os = "macos")]
 mod shader_inspection;

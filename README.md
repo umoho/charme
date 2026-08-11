@@ -30,10 +30,11 @@ Implemented foundations:
   CPU readback, resize suspension, and orbit camera controls.
 - Asynchronous PMX loading from arbitrary file-system paths, texture fallback,
   material-slot summaries, scene replacement, and automatic camera framing.
-- A native macOS editor window with Scene/Materials, Viewport and Inspector
-  columns, Retina-aware frame display, Orbit controls, and native file dialogs.
-- Background WGSL reflection with metadata-driven native float and integer
-  Inspector controls; a built-in sample Shader makes the controls visible at startup.
+- A native macOS application with a macOS-style startup window, automatic
+  `.charme`/PMX/WGSL file routing, recent Charme projects, and an editor window
+  with Scene/Materials, Viewport and Inspector columns.
+- Retina-aware frame display, Orbit controls, native file dialogs, and background
+  WGSL reflection with metadata-driven native float and integer Inspector controls.
 
 Inspector scalar edits are recorded in the core document model and now flow
 through the renderer into Charme's reusable Bevy material ABI. The first fixed
