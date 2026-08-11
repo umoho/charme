@@ -15,7 +15,8 @@ and reloaded by the application.
 - `crates/charme-renderer`: editor preview renderer and PMX scene integration.
 - `apps/charme-macos`: macOS native application shell.
 
-See [`docs/architecture.md`](docs/architecture.md) for dependency boundaries.
+See [`docs/architecture.md`](docs/architecture.md) for dependency boundaries and
+[`docs/TODO.md`](docs/TODO.md) for the implementation checklist.
 
 ## Status
 
