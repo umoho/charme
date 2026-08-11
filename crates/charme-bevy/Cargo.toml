@@ -1,0 +1,21 @@
+[package]
+name = "charme-bevy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = [
+    "bevy_asset",
+    "bevy_color",
+    "bevy_image",
+    "bevy_mesh",
+    "bevy_render",
+    "bevy_shader",
+    "std",
+] }
+charme-core = { path = "../charme-core" }
+charme-shader = { path = "../charme-shader" }
+
+[lints]
+workspace = true
