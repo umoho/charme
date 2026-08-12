@@ -538,6 +538,7 @@ struct DockDivider {
 impl DockDivider {
     fn new(node: NodeId, axis: Axis) -> Self {
         let visual = panel(editor_separator_color());
+        visual.set_translates_autoresizing_mask_into_constraints(true);
         let input = unsafe {
             let input: id = msg_send![dock_divider_input_class(), new];
             let _: () = msg_send![input, setTranslatesAutoresizingMaskIntoConstraints: YES];
@@ -679,6 +680,7 @@ impl EditorWindow {
     fn new() -> Self {
         let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar);
         let toolbar_divider = panel(editor_separator_color());
+        toolbar_divider.set_translates_autoresizing_mask_into_constraints(true);
         let content = panel(Color::MacOSWindowBackgroundColor);
         let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
         let viewport = panel(Color::SystemBlack);
@@ -1565,8 +1567,8 @@ fn dock_divider_input_class() -> &'static Class {
 
 fn editor_separator_color() -> Color {
     Color::dynamic(|style| match style.theme {
-        Theme::Light => Color::rgb(190, 190, 190),
-        Theme::Dark => Color::rgb(0, 0, 0),
+        Theme::Light => Color::rgb(170, 170, 170),
+        Theme::Dark => Color::rgb(8, 8, 8),
     })
 }
 
