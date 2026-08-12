@@ -17,7 +17,7 @@ use cacao::{
         window::{TitleVisibility, Window, WindowConfig, WindowDelegate, WindowToolbarStyle},
     },
     button::{BezelStyle, Button},
-    color::Color,
+    color::{Color, Theme},
     defaults::{UserDefaults, Value},
     filesystem::FileSelectPanel,
     foundation::{BOOL, NO, YES, id, nil},
@@ -537,7 +537,7 @@ struct DockDivider {
 
 impl DockDivider {
     fn new(node: NodeId, axis: Axis) -> Self {
-        let visual = panel(Color::Separator);
+        let visual = panel(editor_separator_color());
         let input = unsafe {
             let input: id = msg_send![dock_divider_input_class(), new];
             let _: () = msg_send![input, setTranslatesAutoresizingMaskIntoConstraints: YES];
@@ -678,7 +678,7 @@ struct EditorWindow {
 impl EditorWindow {
     fn new() -> Self {
         let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar);
-        let toolbar_divider = panel(Color::SystemBlack);
+        let toolbar_divider = panel(editor_separator_color());
         let content = panel(Color::MacOSWindowBackgroundColor);
         let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
         let viewport = panel(Color::SystemBlack);
@@ -1560,6 +1560,13 @@ fn dock_divider_input_class() -> &'static Class {
             dock_divider_reset_cursor_rects as extern "C" fn(&Object, Sel),
         );
         declaration.register()
+    })
+}
+
+fn editor_separator_color() -> Color {
+    Color::dynamic(|style| match style.theme {
+        Theme::Light => Color::rgb(190, 190, 190),
+        Theme::Dark => Color::rgb(0, 0, 0),
     })
 }
 
