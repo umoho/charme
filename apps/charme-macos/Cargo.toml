@@ -8,6 +8,9 @@ rust-version.workspace = true
 name = "charme"
 path = "src/main.rs"
 
+[features]
+debug-ui = []
+
 [dependencies]
 charme-core = { path = "../../crates/charme-core" }
 charme-renderer = { path = "../../crates/charme-renderer" }

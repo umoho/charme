@@ -34,6 +34,9 @@ use charme_core::{
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
 use core_graphics::geometry::{CGPoint, CGRect};
 
+#[cfg(feature = "debug-ui")]
+use crate::debug::DebugState;
+
 use crate::{
     bridge::RenderBridge,
     docking::{
@@ -82,15 +85,33 @@ pub(crate) enum Message {
 pub(crate) struct CharmeApp {
     startup: Window<StartupWindow>,
     editor: RefCell<Option<Window<EditorWindow>>>,
+    #[cfg(feature = "debug-ui")]
+    debug_state: DebugState,
 }
 
 impl Default for CharmeApp {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CharmeApp {
+    fn new() -> Self {
         let mut config = WindowConfig::default();
         config.set_initial_dimensions(160.0, 160.0, 720.0, 520.0);
         Self {
             startup: Window::with(config, StartupWindow::new()),
             editor: RefCell::new(None),
+            #[cfg(feature = "debug-ui")]
+            debug_state: DebugState::Startup,
+        }
+    }
+
+    #[cfg(feature = "debug-ui")]
+    pub(crate) fn new_debug(debug_state: DebugState) -> Self {
+        Self {
+            debug_state,
+            ..Self::new()
         }
     }
 }
@@ -98,6 +119,12 @@ impl Default for CharmeApp {
 impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         App::set_menu(menus());
+        #[cfg(feature = "debug-ui")]
+        if !matches!(self.debug_state, DebugState::Startup) {
+            self.ensure_editor();
+            activate_app();
+            return;
+        }
         self.startup.show();
         activate_app();
     }
@@ -1216,6 +1243,11 @@ impl WindowDelegate for EditorWindow {
 
 pub(crate) fn run() {
     App::new("com.umoho.charme", CharmeApp::default()).run();
+}
+
+#[cfg(feature = "debug-ui")]
+pub(crate) fn run_with_debug_state(state: DebugState) {
+    App::new("com.umoho.charme", CharmeApp::new_debug(state)).run();
 }
 
 fn default_dock_layout() -> (DockTree, BTreeMap<NodeId, DockDivider>) {
