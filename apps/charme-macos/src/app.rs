@@ -682,9 +682,9 @@ impl EditorWindow {
         let toolbar_divider = panel(editor_separator_color());
         toolbar_divider.set_translates_autoresizing_mask_into_constraints(true);
         let content = panel(Color::MacOSWindowBackgroundColor);
-        let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
+        let sidebar = panel(editor_panel_color());
         let viewport = panel(Color::SystemBlack);
-        let inspector = panel(Color::MacOSUnderPageBackgroundColor);
+        let inspector = panel(editor_panel_color());
         let (tree, dividers) = default_dock_layout();
         let image_view = ImageView::new();
         image_view.set_background_color(Color::SystemBlack);
@@ -1562,6 +1562,13 @@ fn dock_divider_input_class() -> &'static Class {
             dock_divider_reset_cursor_rects as extern "C" fn(&Object, Sel),
         );
         declaration.register()
+    })
+}
+
+fn editor_panel_color() -> Color {
+    Color::dynamic(|style| match style.theme {
+        Theme::Light => Color::rgb(246, 246, 248),
+        Theme::Dark => Color::rgb(38, 38, 38),
     })
 }
 
