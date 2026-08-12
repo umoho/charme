@@ -13,7 +13,8 @@ use cacao::{
     appkit::{
         App, AppDelegate,
         menu::{Menu, MenuItem},
-        window::{TitleVisibility, Window, WindowConfig, WindowDelegate},
+        toolbar::{ItemIdentifier, Toolbar, ToolbarDelegate, ToolbarItem},
+        window::{TitleVisibility, Window, WindowConfig, WindowDelegate, WindowToolbarStyle},
     },
     button::{BezelStyle, Button},
     color::Color,
@@ -241,6 +242,7 @@ impl CharmeApp {
     fn ensure_editor(&self) {
         if self.editor.borrow().is_none() {
             let mut config = WindowConfig::default();
+            config.set_toolbar_style(WindowToolbarStyle::Unified);
             config.set_initial_dimensions(80.0, 80.0, 1280.0, 800.0);
             let window = Window::with(config, EditorWindow::new());
             window.show();
@@ -515,6 +517,7 @@ impl WindowDelegate for StartupWindow {
 }
 
 const DOCK_DIVIDER_THICKNESS: f64 = 1.0;
+const EDITOR_CONTENT_TOP_INSET: f64 = 52.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
@@ -620,7 +623,26 @@ struct DividerDrag {
     available_extent: f64,
 }
 
+struct EditorToolbar;
+
+impl ToolbarDelegate for EditorToolbar {
+    const NAME: &'static str = "CharmeEditorToolbar";
+
+    fn allowed_item_identifiers(&self) -> Vec<ItemIdentifier> {
+        vec![ItemIdentifier::Space]
+    }
+
+    fn default_item_identifiers(&self) -> Vec<ItemIdentifier> {
+        vec![ItemIdentifier::Space]
+    }
+
+    fn item_for(&self, _: &str) -> &ToolbarItem {
+        unreachable!("the empty Charme toolbar has no items")
+    }
+}
+
 struct EditorWindow {
+    toolbar: Toolbar<EditorToolbar>,
     content: View,
     tree: DockTree,
     dividers: BTreeMap<NodeId, DockDivider>,
@@ -649,6 +671,7 @@ struct EditorWindow {
 
 impl EditorWindow {
     fn new() -> Self {
+        let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar);
         let content = panel(Color::MacOSWindowBackgroundColor);
         let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
         let viewport = panel(Color::SystemBlack);
@@ -714,6 +737,7 @@ impl EditorWindow {
         );
 
         Self {
+            toolbar,
             content,
             tree,
             dividers,
@@ -1057,7 +1081,12 @@ impl EditorWindow {
             .content
             .objc
             .get(|view| unsafe { msg_send![view, bounds] });
-        Rect::new(0.0, 0.0, bounds.size.width, bounds.size.height)
+        Rect::new(
+            0.0,
+            EDITOR_CONTENT_TOP_INSET,
+            bounds.size.width,
+            (bounds.size.height - EDITOR_CONTENT_TOP_INSET).max(0.0),
+        )
     }
 
     fn layout_dock(&self) {
@@ -1164,8 +1193,10 @@ impl WindowDelegate for EditorWindow {
         window.set_title_visibility(TitleVisibility::Hidden);
         window.set_titlebar_appears_transparent(true);
         window.set_titlebar_separator_style(0);
-        window.set_minimum_content_size(900.0, 560.0);
+        window.set_toolbar(&self.toolbar);
+        window.set_shows_toolbar_button(false);
         window.set_content_view(&self.content);
+        window.set_minimum_content_size(900.0, 560.0);
 
         self.content
             .set_translates_autoresizing_mask_into_constraints(true);
