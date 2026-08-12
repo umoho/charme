@@ -514,7 +514,7 @@ impl WindowDelegate for StartupWindow {
     }
 }
 
-const DOCK_DIVIDER_THICKNESS: f64 = 6.0;
+const DOCK_DIVIDER_THICKNESS: f64 = 1.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
@@ -631,7 +631,6 @@ struct EditorWindow {
     image_view: ImageView,
     orbit_input: OrbitInputView,
     status: Label,
-    open_button: Button,
     scene_heading: Label,
     scene_info: Label,
     materials_heading: Label,
@@ -659,11 +658,6 @@ impl EditorWindow {
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
 
-        let mut open_button = Button::new(localization::text(Key::ImportPmx));
-        open_button.set_bezel_style(BezelStyle::TexturedRounded);
-        open_button.set_action(|| {
-            App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
-        });
         let scene_heading = label(
             localization::text(Key::Scene),
             11.0,
@@ -730,7 +724,6 @@ impl EditorWindow {
             image_view,
             orbit_input,
             status,
-            open_button,
             scene_heading,
             scene_info,
             materials_heading,
@@ -1168,8 +1161,9 @@ impl WindowDelegate for EditorWindow {
 
     fn did_load(&mut self, window: Window) {
         window.set_title("Charme");
-        window.set_title_visibility(TitleVisibility::Visible);
-        window.set_titlebar_appears_transparent(false);
+        window.set_title_visibility(TitleVisibility::Hidden);
+        window.set_titlebar_appears_transparent(true);
+        window.set_titlebar_separator_style(0);
         window.set_minimum_content_size(900.0, 560.0);
         window.set_content_view(&self.content);
 
@@ -1189,7 +1183,6 @@ impl WindowDelegate for EditorWindow {
         self.viewport.add_subview(&self.image_view);
         self.viewport.add_subview(&self.orbit_input.view);
         self.viewport.add_subview(&self.status);
-        self.sidebar.add_subview(&self.open_button);
         for label in [
             &self.scene_heading,
             &self.scene_info,
@@ -1239,19 +1232,10 @@ impl WindowDelegate for EditorWindow {
                 .bottom
                 .constraint_equal_to(&self.viewport.bottom)
                 .offset(-12.0),
-            self.open_button
-                .leading
-                .constraint_equal_to(&self.sidebar.leading)
-                .offset(72.0),
-            self.open_button
-                .top
-                .constraint_equal_to(&self.sidebar.top)
-                .offset(16.0),
-            self.open_button.height.constraint_equal_to_constant(26.0),
             self.scene_heading
                 .top
-                .constraint_equal_to(&self.open_button.bottom)
-                .offset(24.0),
+                .constraint_equal_to(&self.sidebar.top)
+                .offset(22.0),
             self.scene_heading
                 .leading
                 .constraint_equal_to(&self.sidebar.leading)

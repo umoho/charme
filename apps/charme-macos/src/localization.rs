@@ -7,7 +7,6 @@ pub(crate) enum Locale {
 pub(crate) enum Key {
     OpenProject,
     NewProject,
-    ImportPmx,
     StartupTitle,
     StartupSubtitle,
     StartupFormats,
@@ -53,7 +52,6 @@ pub(crate) fn text(key: Key) -> &'static str {
     match (current(), key) {
         (Locale::ZhCn, Key::OpenProject) => "打开项目",
         (Locale::ZhCn, Key::NewProject) => "新建项目",
-        (Locale::ZhCn, Key::ImportPmx) => "导入PMX",
         (Locale::ZhCn, Key::StartupTitle) => "开始使用Charme",
         (Locale::ZhCn, Key::StartupSubtitle) => "打开或新建一个项目以开始编辑角色材质",
         (Locale::ZhCn, Key::StartupFormats) => "支持.charme项目文件",

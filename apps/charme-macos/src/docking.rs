@@ -52,6 +52,7 @@ pub enum Axis {
     /// Children are arranged left-to-right.
     Horizontal,
     /// Children are arranged top-to-bottom.
+    #[allow(dead_code)]
     Vertical,
 }
 
@@ -118,14 +119,6 @@ impl DockTree {
 
         *ratio = SplitRatio::new(value);
         Ok(*ratio)
-    }
-
-    pub fn len(&self) -> usize {
-        self.nodes.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.nodes.is_empty()
     }
 }
 
