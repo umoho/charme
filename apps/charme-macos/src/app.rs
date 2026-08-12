@@ -1168,12 +1168,13 @@ impl WindowDelegate for EditorWindow {
 
     fn did_load(&mut self, window: Window) {
         window.set_title("Charme");
-        window.set_title_visibility(TitleVisibility::Hidden);
-        window.set_titlebar_appears_transparent(true);
-        window.set_titlebar_separator_style(0);
+        window.set_title_visibility(TitleVisibility::Visible);
+        window.set_titlebar_appears_transparent(false);
         window.set_minimum_content_size(900.0, 560.0);
         window.set_content_view(&self.content);
 
+        self.content
+            .set_translates_autoresizing_mask_into_constraints(true);
         for view in [&self.sidebar, &self.viewport, &self.inspector] {
             view.set_translates_autoresizing_mask_into_constraints(true);
             self.content.add_subview(view);
@@ -1202,6 +1203,155 @@ impl WindowDelegate for EditorWindow {
         self.inspector.add_subview(&self.parameter_panel);
         self.inspector.add_subview(&self.brightness_label);
         self.inspector.add_subview(&self.brightness.view);
+
+        LayoutConstraint::activate(&[
+            self.image_view.top.constraint_equal_to(&self.viewport.top),
+            self.image_view
+                .bottom
+                .constraint_equal_to(&self.viewport.bottom),
+            self.image_view
+                .leading
+                .constraint_equal_to(&self.viewport.leading),
+            self.image_view
+                .trailing
+                .constraint_equal_to(&self.viewport.trailing),
+            self.orbit_input
+                .view
+                .top
+                .constraint_equal_to(&self.viewport.top),
+            self.orbit_input
+                .view
+                .bottom
+                .constraint_equal_to(&self.viewport.bottom),
+            self.orbit_input
+                .view
+                .leading
+                .constraint_equal_to(&self.viewport.leading),
+            self.orbit_input
+                .view
+                .trailing
+                .constraint_equal_to(&self.viewport.trailing),
+            self.status
+                .leading
+                .constraint_equal_to(&self.viewport.leading)
+                .offset(14.0),
+            self.status
+                .bottom
+                .constraint_equal_to(&self.viewport.bottom)
+                .offset(-12.0),
+            self.open_button
+                .leading
+                .constraint_equal_to(&self.sidebar.leading)
+                .offset(72.0),
+            self.open_button
+                .top
+                .constraint_equal_to(&self.sidebar.top)
+                .offset(16.0),
+            self.open_button.height.constraint_equal_to_constant(26.0),
+            self.scene_heading
+                .top
+                .constraint_equal_to(&self.open_button.bottom)
+                .offset(24.0),
+            self.scene_heading
+                .leading
+                .constraint_equal_to(&self.sidebar.leading)
+                .offset(16.0),
+            self.scene_info
+                .top
+                .constraint_equal_to(&self.scene_heading.bottom)
+                .offset(10.0),
+            self.scene_info
+                .leading
+                .constraint_equal_to(&self.sidebar.leading)
+                .offset(16.0),
+            self.scene_info
+                .trailing
+                .constraint_equal_to(&self.sidebar.trailing)
+                .offset(-16.0),
+            self.materials_heading
+                .top
+                .constraint_equal_to(&self.scene_info.bottom)
+                .offset(26.0),
+            self.materials_heading
+                .leading
+                .constraint_equal_to(&self.sidebar.leading)
+                .offset(16.0),
+            self.material_list
+                .top
+                .constraint_equal_to(&self.materials_heading.bottom)
+                .offset(10.0),
+            self.material_list
+                .leading
+                .constraint_equal_to(&self.sidebar.leading)
+                .offset(16.0),
+            self.material_list
+                .trailing
+                .constraint_equal_to(&self.sidebar.trailing)
+                .offset(-16.0),
+            self.inspector_heading
+                .top
+                .constraint_equal_to(&self.inspector.top)
+                .offset(22.0),
+            self.inspector_heading
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.inspector_body
+                .top
+                .constraint_equal_to(&self.inspector_heading.bottom)
+                .offset(14.0),
+            self.inspector_body
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.inspector_body
+                .trailing
+                .constraint_equal_to(&self.inspector.trailing)
+                .offset(-18.0),
+            self.parameter_panel
+                .top
+                .constraint_equal_to(&self.inspector.top)
+                .offset(132.0),
+            self.parameter_panel
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.parameter_panel
+                .trailing
+                .constraint_equal_to(&self.inspector.trailing)
+                .offset(-18.0),
+            self.parameter_panel
+                .bottom
+                .constraint_equal_to(&self.brightness_label.top)
+                .offset(-12.0),
+            self.brightness
+                .view
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.brightness
+                .view
+                .trailing
+                .constraint_equal_to(&self.inspector.trailing)
+                .offset(-18.0),
+            self.brightness
+                .view
+                .bottom
+                .constraint_equal_to(&self.inspector.bottom)
+                .offset(-18.0),
+            self.brightness
+                .view
+                .height
+                .constraint_equal_to_constant(28.0),
+            self.brightness_label
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.brightness_label
+                .bottom
+                .constraint_equal_to(&self.brightness.view.top)
+                .offset(-4.0),
+        ]);
 
         self.layout_dock();
 
@@ -1241,6 +1391,7 @@ impl WindowDelegate for EditorWindow {
     }
 }
 
+#[cfg(not(feature = "debug-ui"))]
 pub(crate) fn run() {
     App::new("com.umoho.charme", CharmeApp::default()).run();
 }
