@@ -296,12 +296,12 @@ struct StartupWindow {
 
 impl StartupWindow {
     fn new() -> Self {
-        let content = panel(Color::rgb(24, 25, 30));
+        let content = panel(Color::MacOSWindowBackgroundColor);
         let title = label(
             localization::text(Key::StartupTitle),
             28.0,
             true,
-            Color::SystemWhite,
+            Color::Label,
         );
         let subtitle = label(
             localization::text(Key::StartupSubtitle),
@@ -319,7 +319,7 @@ impl StartupWindow {
             localization::text(Key::RecentProjects),
             13.0,
             true,
-            Color::SystemWhite,
+            Color::Label,
         );
         let status = label("", 11.0, false, Color::SystemRed);
         let mut open_button = Button::new(localization::text(Key::OpenProject));
@@ -506,12 +506,12 @@ struct EditorWindow {
 
 impl EditorWindow {
     fn new() -> Self {
-        let content = panel(Color::rgb(24, 25, 30));
-        let sidebar = panel(Color::rgb(31, 33, 39));
+        let content = panel(Color::MacOSWindowBackgroundColor);
+        let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
         let viewport = panel(Color::SystemBlack);
-        let inspector = panel(Color::rgb(31, 33, 39));
-        let left_divider = panel(Color::rgb(52, 54, 62));
-        let right_divider = panel(Color::rgb(52, 54, 62));
+        let inspector = panel(Color::MacOSUnderPageBackgroundColor);
+        let left_divider = panel(Color::Separator);
+        let right_divider = panel(Color::Separator);
         let image_view = ImageView::new();
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
@@ -531,7 +531,7 @@ impl EditorWindow {
             localization::text(Key::EmptyScene),
             13.0,
             false,
-            Color::SystemWhite,
+            Color::Label,
         );
         scene_info.set_max_number_of_lines(0);
         let materials_heading = label(
@@ -544,7 +544,7 @@ impl EditorWindow {
             localization::text(Key::EmptyMaterials),
             12.0,
             false,
-            Color::SystemWhite,
+            Color::Label,
         );
         material_list.set_max_number_of_lines(0);
 
@@ -558,7 +558,7 @@ impl EditorWindow {
             localization::text(Key::InspectorBody),
             13.0,
             false,
-            Color::SystemWhite,
+            Color::Label,
         );
         inspector_body.set_max_number_of_lines(0);
         let parameter_panel = View::new();
@@ -566,7 +566,7 @@ impl EditorWindow {
             localization::text(Key::Brightness),
             12.0,
             false,
-            Color::SystemWhite,
+            Color::Label,
         );
         let brightness = BrightnessSlider::new(0.3);
         let status = label(
