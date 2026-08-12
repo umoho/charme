@@ -5,6 +5,8 @@ mod app;
 #[cfg(target_os = "macos")]
 mod bridge;
 #[cfg(target_os = "macos")]
+mod docking;
+#[cfg(target_os = "macos")]
 mod frame_image;
 #[cfg(target_os = "macos")]
 mod interaction;

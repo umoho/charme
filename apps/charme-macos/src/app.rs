@@ -1,8 +1,14 @@
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
+    ptr,
+    sync::OnceLock,
 };
 
+use cacao::objc::declare::ClassDecl;
+use cacao::objc::runtime::{Class, Object, Sel};
 use cacao::{
     appkit::{
         App, AppDelegate,
@@ -13,7 +19,7 @@ use cacao::{
     color::Color,
     defaults::{UserDefaults, Value},
     filesystem::FileSelectPanel,
-    foundation::{YES, id, nil},
+    foundation::{BOOL, NO, YES, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     notification_center::Dispatcher,
@@ -26,10 +32,14 @@ use charme_core::{
     ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
-use core_graphics::geometry::CGRect;
+use core_graphics::geometry::{CGPoint, CGRect};
 
 use crate::{
     bridge::RenderBridge,
+    docking::{
+        Axis, DockNode, DockTree, DockTreeBuilder, LayoutOptions, NodeId, PanelId, Rect,
+        compute_geometry,
+    },
     frame_image::make_image,
     interaction::OrbitInputView,
     localization::{self, Key},
@@ -477,13 +487,120 @@ impl WindowDelegate for StartupWindow {
     }
 }
 
+const DOCK_DIVIDER_THICKNESS: f64 = 6.0;
+const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
+const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
+const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
+
+struct DockDividerTarget {
+    owner: *mut EditorWindow,
+    node: NodeId,
+}
+
+struct DockDivider {
+    visual: View,
+    input: id,
+    target: Box<DockDividerTarget>,
+    axis: Axis,
+}
+
+impl DockDivider {
+    fn new(node: NodeId, axis: Axis) -> Self {
+        let visual = panel(Color::Separator);
+        let input = unsafe {
+            let input: id = msg_send![dock_divider_input_class(), new];
+            let _: () = msg_send![input, setTranslatesAutoresizingMaskIntoConstraints: YES];
+            input
+        };
+        let mut target = Box::new(DockDividerTarget {
+            owner: ptr::null_mut(),
+            node,
+        });
+
+        unsafe {
+            let target_ptr = (&mut *target as *mut DockDividerTarget) as usize;
+            (&mut *input).set_ivar(DOCK_DIVIDER_TARGET_IVAR, target_ptr);
+            (&mut *input).set_ivar(
+                DOCK_DIVIDER_AXIS_IVAR,
+                match axis {
+                    Axis::Horizontal => 0usize,
+                    Axis::Vertical => 1usize,
+                },
+            );
+        }
+
+        Self {
+            visual,
+            input,
+            target,
+            axis,
+        }
+    }
+
+    fn set_owner(&mut self, owner: *mut EditorWindow) {
+        self.target.owner = owner;
+    }
+
+    fn install(&self, parent: &View) {
+        parent.add_subview(&self.visual);
+        parent.objc.with_mut(|parent| unsafe {
+            let _: () = msg_send![parent, addSubview: self.input];
+        });
+    }
+
+    fn set_frame(&self, rect: Rect) {
+        self.visual.set_frame(to_cacao_rect(rect));
+        let input_rect = match self.axis {
+            Axis::Horizontal => Rect::new(
+                rect.x - DOCK_DIVIDER_HIT_SLOP,
+                rect.y,
+                rect.width + DOCK_DIVIDER_HIT_SLOP * 2.0,
+                rect.height,
+            ),
+            Axis::Vertical => Rect::new(
+                rect.x,
+                rect.y - DOCK_DIVIDER_HIT_SLOP,
+                rect.width,
+                rect.height + DOCK_DIVIDER_HIT_SLOP * 2.0,
+            ),
+        };
+        let frame: CGRect = to_cacao_rect(input_rect).into();
+        unsafe {
+            let _: () = msg_send![self.input, setFrame: frame];
+            let window: id = msg_send![self.input, window];
+            if !window.is_null() {
+                let _: () = msg_send![window, invalidateCursorRectsForView: self.input];
+            }
+        }
+    }
+}
+
+impl Drop for DockDivider {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.input, removeFromSuperview];
+            let _: () = msg_send![self.input, release];
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DividerDrag {
+    node: NodeId,
+    axis: Axis,
+    start_coordinate: f64,
+    start_first_extent: f64,
+    available_extent: f64,
+}
+
 struct EditorWindow {
     content: View,
+    tree: DockTree,
+    dividers: BTreeMap<NodeId, DockDivider>,
+    drag: Option<DividerDrag>,
     sidebar: View,
     viewport: View,
     inspector: View,
-    left_divider: View,
-    right_divider: View,
     image_view: ImageView,
     orbit_input: OrbitInputView,
     status: Label,
@@ -510,8 +627,7 @@ impl EditorWindow {
         let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
         let viewport = panel(Color::SystemBlack);
         let inspector = panel(Color::MacOSUnderPageBackgroundColor);
-        let left_divider = panel(Color::Separator);
-        let right_divider = panel(Color::Separator);
+        let (tree, dividers) = default_dock_layout();
         let image_view = ImageView::new();
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
@@ -578,11 +694,12 @@ impl EditorWindow {
 
         Self {
             content,
+            tree,
+            dividers,
+            drag: None,
             sidebar,
             viewport,
             inspector,
-            left_divider,
-            right_divider,
             image_view,
             orbit_input,
             status,
@@ -914,6 +1031,109 @@ impl EditorWindow {
         self.status
             .set_text(format!("{}{error}", localization::text(Key::ErrorPrefix)));
     }
+
+    fn content_bounds(&self) -> Rect {
+        let bounds: CGRect = self
+            .content
+            .objc
+            .get(|view| unsafe { msg_send![view, bounds] });
+        Rect::new(0.0, 0.0, bounds.size.width, bounds.size.height)
+    }
+
+    fn layout_dock(&self) {
+        let geometry = compute_geometry(
+            &self.tree,
+            self.content_bounds(),
+            LayoutOptions {
+                divider_thickness: DOCK_DIVIDER_THICKNESS,
+            },
+        )
+        .expect("the default dock tree should produce valid geometry");
+
+        for pane in geometry.panes {
+            let view = match self.tree.node(pane.node) {
+                Some(DockNode::Tabs { panels, .. })
+                    if panels.iter().any(|id| id.as_str() == "hierarchy") =>
+                {
+                    &self.sidebar
+                }
+                Some(DockNode::Tabs { panels, .. })
+                    if panels.iter().any(|id| id.as_str() == "viewport") =>
+                {
+                    &self.viewport
+                }
+                Some(DockNode::Tabs { panels, .. })
+                    if panels.iter().any(|id| id.as_str() == "inspector") =>
+                {
+                    &self.inspector
+                }
+                _ => continue,
+            };
+            view.set_frame(to_cacao_rect(pane.rect));
+        }
+
+        for divider in geometry.dividers {
+            if let Some(view) = self.dividers.get(&divider.node) {
+                view.set_frame(divider.rect);
+            }
+        }
+    }
+
+    fn event_position(&self, event: id) -> CGPoint {
+        let window_position: CGPoint = unsafe { msg_send![event, locationInWindow] };
+        let no_view: id = ptr::null_mut();
+        self.content
+            .objc
+            .get(|view| unsafe { msg_send![view, convertPoint: window_position fromView: no_view] })
+    }
+
+    fn begin_divider_drag(&mut self, node: NodeId, event: id) {
+        let (axis, ratio) = match self.tree.node(node) {
+            Some(DockNode::Split { axis, ratio, .. }) => (*axis, *ratio),
+            _ => return,
+        };
+        let Ok(geometry) = compute_geometry(
+            &self.tree,
+            self.content_bounds(),
+            LayoutOptions {
+                divider_thickness: DOCK_DIVIDER_THICKNESS,
+            },
+        ) else {
+            return;
+        };
+        let Some(divider) = geometry.dividers.iter().find(|item| item.node == node) else {
+            return;
+        };
+        let split_extent = axis_extent(axis, divider.split_rect);
+        let divider_extent = axis_extent(axis, divider.rect);
+        let available_extent = split_extent - divider_extent;
+        if available_extent <= 0.0 {
+            return;
+        }
+        self.drag = Some(DividerDrag {
+            node,
+            axis,
+            start_coordinate: axis_coordinate(axis, self.event_position(event)),
+            start_first_extent: available_extent * ratio.get(),
+            available_extent,
+        });
+    }
+
+    fn update_divider_drag(&mut self, _node: NodeId, event: id) {
+        let Some(drag) = self.drag else {
+            return;
+        };
+        let delta = axis_coordinate(drag.axis, self.event_position(event)) - drag.start_coordinate;
+        let ratio = (drag.start_first_extent + delta) / drag.available_extent;
+        if self.tree.set_split_ratio(drag.node, ratio).is_ok() {
+            self.layout_dock();
+        }
+    }
+
+    fn end_divider_drag(&mut self, node: NodeId, event: id) {
+        self.update_divider_drag(node, event);
+        self.drag = None;
+    }
 }
 
 impl WindowDelegate for EditorWindow {
@@ -927,14 +1147,16 @@ impl WindowDelegate for EditorWindow {
         window.set_minimum_content_size(900.0, 560.0);
         window.set_content_view(&self.content);
 
-        for view in [
-            &self.sidebar,
-            &self.left_divider,
-            &self.viewport,
-            &self.right_divider,
-            &self.inspector,
-        ] {
+        for view in [&self.sidebar, &self.viewport, &self.inspector] {
+            view.set_translates_autoresizing_mask_into_constraints(true);
             self.content.add_subview(view);
+        }
+        for divider in self.dividers.values() {
+            divider.install(&self.content);
+        }
+        let owner = self as *mut EditorWindow;
+        for divider in self.dividers.values_mut() {
+            divider.set_owner(owner);
         }
         self.viewport.add_subview(&self.image_view);
         self.viewport.add_subview(&self.orbit_input.view);
@@ -954,198 +1176,7 @@ impl WindowDelegate for EditorWindow {
         self.inspector.add_subview(&self.brightness_label);
         self.inspector.add_subview(&self.brightness.view);
 
-        LayoutConstraint::activate(&[
-            self.sidebar.top.constraint_equal_to(&self.content.top),
-            self.sidebar
-                .bottom
-                .constraint_equal_to(&self.content.bottom),
-            self.sidebar
-                .leading
-                .constraint_equal_to(&self.content.leading),
-            self.sidebar.width.constraint_equal_to_constant(248.0),
-            self.left_divider.top.constraint_equal_to(&self.content.top),
-            self.left_divider
-                .bottom
-                .constraint_equal_to(&self.content.bottom),
-            self.left_divider
-                .leading
-                .constraint_equal_to(&self.sidebar.trailing),
-            self.left_divider.width.constraint_equal_to_constant(1.0),
-            self.inspector.top.constraint_equal_to(&self.content.top),
-            self.inspector
-                .bottom
-                .constraint_equal_to(&self.content.bottom),
-            self.inspector
-                .trailing
-                .constraint_equal_to(&self.content.trailing),
-            self.inspector.width.constraint_equal_to_constant(300.0),
-            self.right_divider
-                .top
-                .constraint_equal_to(&self.content.top),
-            self.right_divider
-                .bottom
-                .constraint_equal_to(&self.content.bottom),
-            self.right_divider
-                .trailing
-                .constraint_equal_to(&self.inspector.leading),
-            self.right_divider.width.constraint_equal_to_constant(1.0),
-            self.viewport.top.constraint_equal_to(&self.content.top),
-            self.viewport
-                .bottom
-                .constraint_equal_to(&self.content.bottom),
-            self.viewport
-                .leading
-                .constraint_equal_to(&self.left_divider.trailing),
-            self.viewport
-                .trailing
-                .constraint_equal_to(&self.right_divider.leading),
-            self.image_view.top.constraint_equal_to(&self.viewport.top),
-            self.image_view
-                .bottom
-                .constraint_equal_to(&self.viewport.bottom),
-            self.image_view
-                .leading
-                .constraint_equal_to(&self.viewport.leading),
-            self.image_view
-                .trailing
-                .constraint_equal_to(&self.viewport.trailing),
-            self.orbit_input
-                .view
-                .top
-                .constraint_equal_to(&self.viewport.top),
-            self.orbit_input
-                .view
-                .bottom
-                .constraint_equal_to(&self.viewport.bottom),
-            self.orbit_input
-                .view
-                .leading
-                .constraint_equal_to(&self.viewport.leading),
-            self.orbit_input
-                .view
-                .trailing
-                .constraint_equal_to(&self.viewport.trailing),
-            self.status
-                .leading
-                .constraint_equal_to(&self.viewport.leading)
-                .offset(14.0),
-            self.status
-                .bottom
-                .constraint_equal_to(&self.viewport.bottom)
-                .offset(-12.0),
-            self.open_button
-                .leading
-                .constraint_equal_to(&self.sidebar.leading)
-                .offset(72.0),
-            self.open_button
-                .top
-                .constraint_equal_to(&self.sidebar.top)
-                .offset(16.0),
-            self.open_button.height.constraint_equal_to_constant(26.0),
-            self.scene_heading
-                .top
-                .constraint_equal_to(&self.open_button.bottom)
-                .offset(24.0),
-            self.scene_heading
-                .leading
-                .constraint_equal_to(&self.sidebar.leading)
-                .offset(16.0),
-            self.scene_info
-                .top
-                .constraint_equal_to(&self.scene_heading.bottom)
-                .offset(10.0),
-            self.scene_info
-                .leading
-                .constraint_equal_to(&self.sidebar.leading)
-                .offset(16.0),
-            self.scene_info
-                .trailing
-                .constraint_equal_to(&self.sidebar.trailing)
-                .offset(-16.0),
-            self.materials_heading
-                .top
-                .constraint_equal_to(&self.scene_info.bottom)
-                .offset(26.0),
-            self.materials_heading
-                .leading
-                .constraint_equal_to(&self.sidebar.leading)
-                .offset(16.0),
-            self.material_list
-                .top
-                .constraint_equal_to(&self.materials_heading.bottom)
-                .offset(10.0),
-            self.material_list
-                .leading
-                .constraint_equal_to(&self.sidebar.leading)
-                .offset(16.0),
-            self.material_list
-                .trailing
-                .constraint_equal_to(&self.sidebar.trailing)
-                .offset(-16.0),
-            self.inspector_heading
-                .top
-                .constraint_equal_to(&self.inspector.top)
-                .offset(22.0),
-            self.inspector_heading
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.inspector_body
-                .top
-                .constraint_equal_to(&self.inspector_heading.bottom)
-                .offset(14.0),
-            self.inspector_body
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.inspector_body
-                .trailing
-                .constraint_equal_to(&self.inspector.trailing)
-                .offset(-18.0),
-            self.parameter_panel
-                .top
-                .constraint_equal_to(&self.inspector.top)
-                .offset(132.0),
-            self.parameter_panel
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.parameter_panel
-                .trailing
-                .constraint_equal_to(&self.inspector.trailing)
-                .offset(-18.0),
-            self.parameter_panel
-                .bottom
-                .constraint_equal_to(&self.brightness_label.top)
-                .offset(-12.0),
-            self.brightness
-                .view
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.brightness
-                .view
-                .trailing
-                .constraint_equal_to(&self.inspector.trailing)
-                .offset(-18.0),
-            self.brightness
-                .view
-                .bottom
-                .constraint_equal_to(&self.inspector.bottom)
-                .offset(-18.0),
-            self.brightness
-                .view
-                .height
-                .constraint_equal_to_constant(28.0),
-            self.brightness_label
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.brightness_label
-                .bottom
-                .constraint_equal_to(&self.brightness.view.top)
-                .offset(-4.0),
-        ]);
+        self.layout_dock();
 
         self.image_view.objc.with_mut(|image_view| unsafe {
             let _: () = msg_send![image_view, setImageScaling: 1usize];
@@ -1164,6 +1195,7 @@ impl WindowDelegate for EditorWindow {
     }
 
     fn did_resize(&self) {
+        self.layout_dock();
         self.sync_size();
     }
 
@@ -1184,6 +1216,133 @@ impl WindowDelegate for EditorWindow {
 
 pub(crate) fn run() {
     App::new("com.umoho.charme", CharmeApp::default()).run();
+}
+
+fn default_dock_layout() -> (DockTree, BTreeMap<NodeId, DockDivider>) {
+    let mut builder = DockTreeBuilder::new();
+    let hierarchy = builder
+        .tabs(vec![PanelId::from("hierarchy")], PanelId::from("hierarchy"))
+        .expect("hierarchy tab is valid");
+    let viewport = builder
+        .tabs(vec![PanelId::from("viewport")], PanelId::from("viewport"))
+        .expect("viewport tab is valid");
+    let inspector = builder
+        .tabs(vec![PanelId::from("inspector")], PanelId::from("inspector"))
+        .expect("inspector tab is valid");
+    let center = builder
+        .split(Axis::Horizontal, 0.72, viewport, inspector)
+        .expect("center dock split is valid");
+    let root = builder
+        .split(Axis::Horizontal, 0.22, hierarchy, center)
+        .expect("root dock split is valid");
+    let tree = builder.build(root).expect("default dock tree is valid");
+    let dividers = BTreeMap::from([
+        (root, DockDivider::new(root, Axis::Horizontal)),
+        (center, DockDivider::new(center, Axis::Horizontal)),
+    ]);
+    (tree, dividers)
+}
+
+fn to_cacao_rect(rect: Rect) -> cacao::geometry::Rect {
+    cacao::geometry::Rect::new(rect.y, rect.x, rect.width, rect.height)
+}
+
+fn axis_coordinate(axis: Axis, point: CGPoint) -> f64 {
+    match axis {
+        Axis::Horizontal => point.x,
+        Axis::Vertical => point.y,
+    }
+}
+
+fn axis_extent(axis: Axis, rect: Rect) -> f64 {
+    match axis {
+        Axis::Horizontal => rect.width,
+        Axis::Vertical => rect.height,
+    }
+}
+
+fn dispatch_dock_divider_event(
+    view: &Object,
+    event: id,
+    handler: fn(&mut EditorWindow, NodeId, id),
+) {
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        let target_ptr = *view.get_ivar::<usize>(DOCK_DIVIDER_TARGET_IVAR);
+        let Some(target) = (target_ptr as *mut DockDividerTarget).as_mut() else {
+            return;
+        };
+        let Some(owner) = target.owner.as_mut() else {
+            return;
+        };
+        handler(owner, target.node, event);
+    }));
+}
+
+extern "C" fn dock_divider_mouse_down(view: &Object, _: Sel, event: id) {
+    dispatch_dock_divider_event(view, event, EditorWindow::begin_divider_drag);
+}
+
+extern "C" fn dock_divider_mouse_dragged(view: &Object, _: Sel, event: id) {
+    dispatch_dock_divider_event(view, event, EditorWindow::update_divider_drag);
+}
+
+extern "C" fn dock_divider_mouse_up(view: &Object, _: Sel, event: id) {
+    dispatch_dock_divider_event(view, event, EditorWindow::end_divider_drag);
+}
+
+extern "C" fn dock_divider_accepts_first_mouse(_: &Object, _: Sel, _: id) -> BOOL {
+    YES
+}
+
+extern "C" fn dock_divider_does_not_move_window(_: &Object, _: Sel) -> BOOL {
+    NO
+}
+
+extern "C" fn dock_divider_reset_cursor_rects(view: &Object, _: Sel) {
+    unsafe {
+        let bounds: CGRect = msg_send![view, bounds];
+        let axis = *view.get_ivar::<usize>(DOCK_DIVIDER_AXIS_IVAR);
+        let cursor: id = match axis {
+            0 => msg_send![class!(NSCursor), resizeLeftRightCursor],
+            _ => msg_send![class!(NSCursor), resizeUpDownCursor],
+        };
+        let _: () = msg_send![view, addCursorRect: bounds cursor: cursor];
+    }
+}
+
+fn dock_divider_input_class() -> &'static Class {
+    static CLASS: OnceLock<&'static Class> = OnceLock::new();
+    CLASS.get_or_init(|| unsafe {
+        let mut declaration = ClassDecl::new("CharmeDockDividerInput", class!(NSView))
+            .expect("dock divider input class is registered only once");
+        declaration.add_ivar::<usize>(DOCK_DIVIDER_TARGET_IVAR);
+        declaration.add_ivar::<usize>(DOCK_DIVIDER_AXIS_IVAR);
+        declaration.add_method(
+            sel!(mouseDown:),
+            dock_divider_mouse_down as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(mouseDragged:),
+            dock_divider_mouse_dragged as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(mouseUp:),
+            dock_divider_mouse_up as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(acceptsFirstMouse:),
+            dock_divider_accepts_first_mouse as extern "C" fn(&Object, Sel, id) -> BOOL,
+        );
+        declaration.add_method(
+            sel!(mouseDownCanMoveWindow),
+            dock_divider_does_not_move_window as extern "C" fn(&Object, Sel) -> BOOL,
+        );
+        declaration.add_method(
+            sel!(resetCursorRects),
+            dock_divider_reset_cursor_rects as extern "C" fn(&Object, Sel),
+        );
+        declaration.register()
+    })
 }
 
 fn panel(color: Color) -> View {
