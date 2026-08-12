@@ -516,8 +516,9 @@ impl WindowDelegate for StartupWindow {
     }
 }
 
-const DOCK_DIVIDER_THICKNESS: f64 = 1.0;
+const DOCK_DIVIDER_THICKNESS: f64 = 2.0;
 const EDITOR_CONTENT_TOP_INSET: f64 = 52.0;
+const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
@@ -628,6 +629,10 @@ struct EditorToolbar;
 impl ToolbarDelegate for EditorToolbar {
     const NAME: &'static str = "CharmeEditorToolbar";
 
+    fn did_load(&mut self, toolbar: Toolbar) {
+        toolbar.set_shows_baseline_separator(false);
+    }
+
     fn allowed_item_identifiers(&self) -> Vec<ItemIdentifier> {
         vec![ItemIdentifier::Space]
     }
@@ -643,6 +648,7 @@ impl ToolbarDelegate for EditorToolbar {
 
 struct EditorWindow {
     toolbar: Toolbar<EditorToolbar>,
+    toolbar_divider: View,
     content: View,
     tree: DockTree,
     dividers: BTreeMap<NodeId, DockDivider>,
@@ -672,6 +678,7 @@ struct EditorWindow {
 impl EditorWindow {
     fn new() -> Self {
         let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar);
+        let toolbar_divider = panel(Color::SystemBlack);
         let content = panel(Color::MacOSWindowBackgroundColor);
         let sidebar = panel(Color::MacOSUnderPageBackgroundColor);
         let viewport = panel(Color::SystemBlack);
@@ -738,6 +745,7 @@ impl EditorWindow {
 
         Self {
             toolbar,
+            toolbar_divider,
             content,
             tree,
             dividers,
@@ -1090,6 +1098,17 @@ impl EditorWindow {
     }
 
     fn layout_dock(&self) {
+        let bounds: CGRect = self
+            .content
+            .objc
+            .get(|view| unsafe { msg_send![view, bounds] });
+        self.toolbar_divider.set_frame(cacao::geometry::Rect::new(
+            EDITOR_CONTENT_TOP_INSET - EDITOR_TOOLBAR_SEPARATOR_THICKNESS,
+            0.0,
+            bounds.size.width,
+            EDITOR_TOOLBAR_SEPARATOR_THICKNESS,
+        ));
+
         let geometry = compute_geometry(
             &self.tree,
             self.content_bounds(),
@@ -1204,6 +1223,7 @@ impl WindowDelegate for EditorWindow {
             view.set_translates_autoresizing_mask_into_constraints(true);
             self.content.add_subview(view);
         }
+        self.content.add_subview(&self.toolbar_divider);
         for divider in self.dividers.values() {
             divider.install(&self.content);
         }
