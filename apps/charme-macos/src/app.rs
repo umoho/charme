@@ -1566,10 +1566,7 @@ fn dock_divider_input_class() -> &'static Class {
 }
 
 fn editor_panel_color() -> Color {
-    Color::dynamic(|style| match style.theme {
-        Theme::Light => Color::rgb(246, 246, 248),
-        Theme::Dark => Color::rgb(38, 38, 38),
-    })
+    Color::MacOSWindowBackgroundColor
 }
 
 fn editor_separator_color() -> Color {
