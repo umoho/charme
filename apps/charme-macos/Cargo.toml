@@ -22,5 +22,8 @@ core-graphics.workspace = true
 foreign-types.workspace = true
 url.workspace = true
 
+[build-dependencies]
+apple-plist = { version = "1.0.1", default-features = false, features = ["openstep", "serde"] }
+
 [lints]
 workspace = true

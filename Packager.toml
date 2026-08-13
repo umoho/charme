@@ -8,10 +8,7 @@ binariesDir = "target/release"
 beforePackagingCommand = { script = "MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release -p charme-macos", dir = "." }
 binaries = [{ path = "charme", main = true }]
 category = "GraphicsAndDesign"
-resources = [
-  { src = "apps/charme-macos/resources/en.lproj", target = "en.lproj" },
-  { src = "apps/charme-macos/resources/zh-Hans.lproj", target = "zh-Hans.lproj" },
-]
+resources = [{ src = "apps/charme-macos/resources", target = "" }]
 
 [macos]
 minimumSystemVersion = "11.0"

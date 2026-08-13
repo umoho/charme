@@ -26,9 +26,9 @@ cargo packager --config Packager.toml
 open target/release/bundle/Charme.app
 ```
 
-`Packager.toml` 会先以 `MACOSX_DEPLOYMENT_TARGET=11.0` 构建 release 二进制，再复制
-`en.lproj` 和 `zh-Hans.lproj` 本地化资源并合并应用的 Info.plist。Bundle ID 为
-`com.umoho.charme`，同时声明 `.charme` 项目文档类型。
+`Packager.toml` 会先以 `MACOSX_DEPLOYMENT_TARGET=11.0` 构建 release 二进制，再复制整个
+本地化资源目录并合并应用的 Info.plist。Bundle ID 为 `com.umoho.charme`，同时声明
+`.charme` 项目文档类型。
 
 ## 本地化与开发运行
 
@@ -36,9 +36,14 @@ open target/release/bundle/Charme.app
 `localizedStringForKey:value:table:` 读取 `Localizable.strings`。Info.plist 显式禁用 mixed
 localizations，因此 AppKit framework 与应用采用同一个有效本地化。
 
+构建脚本扫描 `resources/*.lproj/Localizable.strings`，为每种语言生成一个
+`LanguageCatalog` 实现和统一 registry，并检查所有语言与开发语言 `en` 的键集合一致。新增语言
+只需加入相应 `.lproj` 目录；Cargo 会重新生成实现，cargo-packager 会自动复制资源。
+
 `cargo run -p charme-macos` 仍可用于快速开发。命令行二进制没有 Bundle 本地化资源，此时
-Charme 会按 `NSLocale.preferredLanguages` 选择内置中英文 fallback。标准菜单自动补充项、
-Bundle 本地化、文档类型/文件关联和后续签名行为均应以通过 `open` 启动的 `.app` 为准。
+Charme 使用 NSBundle 的原生语言协商 API，从编译期生成的语言实现中选择 fallback。标准菜单
+自动补充项、Bundle 本地化、文档类型/文件关联和后续签名行为均应以通过 `open` 启动的 `.app`
+为准。
 
 ## 发行
 
