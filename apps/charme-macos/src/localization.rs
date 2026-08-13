@@ -49,7 +49,6 @@ localization_keys!(
     NewProject,
     StartupTitle,
     StartupSubtitle,
-    StartupFormats,
     RecentProjects,
     ProjectFallback,
     Scene,

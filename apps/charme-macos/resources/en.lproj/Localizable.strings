@@ -20,7 +20,6 @@
 "NewProject" = "New";
 "StartupTitle" = "Start Using Charme";
 "StartupSubtitle" = "Open or create a project to start editing character materials";
-"StartupFormats" = "Supports .charme project files";
 "RecentProjects" = "Recent Projects";
 "ProjectFallback" = "Charme Project";
 "Scene" = "Scene";

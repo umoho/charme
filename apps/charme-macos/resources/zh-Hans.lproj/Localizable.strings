@@ -20,7 +20,6 @@
 "NewProject" = "新建";
 "StartupTitle" = "开始使用Charme";
 "StartupSubtitle" = "打开或新建一个项目以开始编辑角色材质";
-"StartupFormats" = "支持.charme项目文件";
 "RecentProjects" = "最近打开的项目";
 "ProjectFallback" = "Charme项目";
 "Scene" = "场景";
