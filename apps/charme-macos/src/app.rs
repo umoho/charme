@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -19,7 +19,7 @@ use cacao::{
     button::{BezelStyle, Button},
     color::{Color, Theme},
     defaults::{UserDefaults, Value},
-    filesystem::FileSelectPanel,
+    filesystem::{FileSavePanel, FileSelectPanel},
     foundation::{BOOL, NO, NSString, YES, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
@@ -52,10 +52,21 @@ use crate::{
     slider::BrightnessSlider,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MenuContext {
+    Startup,
+    Editor,
+}
+
 pub(crate) enum Message {
     ChooseProject,
     OpenProject(PathBuf),
     NewProject,
+    SaveProject,
+    ChooseSaveProject,
+    SaveProjectAs(PathBuf),
+    MenuContextChanged(MenuContext),
+    RefreshMenus,
     Frame {
         frame: Frame,
         scale: f64,
@@ -86,6 +97,7 @@ pub(crate) enum Message {
 pub(crate) struct CharmeApp {
     startup: Window<StartupWindow>,
     editor: RefCell<Option<Window<EditorWindow>>>,
+    menu_context: Cell<MenuContext>,
     #[cfg(feature = "debug-ui")]
     debug_state: DebugState,
 }
@@ -103,6 +115,7 @@ impl CharmeApp {
         Self {
             startup: Window::with(config, StartupWindow::new()),
             editor: RefCell::new(None),
+            menu_context: Cell::new(MenuContext::Startup),
             #[cfg(feature = "debug-ui")]
             debug_state: DebugState::Startup,
         }
@@ -120,8 +133,11 @@ impl CharmeApp {
 impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         App::set_menu(menus());
+        install_edit_menu_after_main_menu();
+        install_file_submenus();
         localize_standard_menu_items();
         set_application_menu_name();
+        update_menu_state(MenuContext::Startup, false, false, false);
         #[cfg(feature = "debug-ui")]
         if !matches!(self.debug_state, DebugState::Startup) {
             self.ensure_editor();
@@ -145,6 +161,14 @@ impl Dispatcher for CharmeApp {
             Message::ChooseProject => self.choose_project(),
             Message::OpenProject(path) => self.open_project(path),
             Message::NewProject => self.new_project(),
+            Message::SaveProject => self.save_project(),
+            Message::ChooseSaveProject => self.choose_save_project(),
+            Message::SaveProjectAs(path) => self.save_project_as(path),
+            Message::MenuContextChanged(context) => {
+                self.menu_context.set(context);
+                self.refresh_menus();
+            }
+            Message::RefreshMenus => self.refresh_menus(),
             Message::ChoosePmx => self.choose_pmx(),
             other => {
                 let editor = self.editor.borrow();
@@ -173,6 +197,11 @@ impl Dispatcher for CharmeApp {
                     Message::ChooseProject
                     | Message::OpenProject(_)
                     | Message::NewProject
+                    | Message::SaveProject
+                    | Message::ChooseSaveProject
+                    | Message::SaveProjectAs(_)
+                    | Message::MenuContextChanged(_)
+                    | Message::RefreshMenus
                     | Message::ChoosePmx => unreachable!(),
                 }
             }
@@ -192,6 +221,77 @@ impl CharmeApp {
                 App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(url.pathbuf()));
             }
         });
+    }
+
+    fn save_project(&self) {
+        let editor_windows = self.editor.borrow();
+        let Some(editor) = editor_windows
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+        else {
+            return;
+        };
+        if editor.session.borrow().project_path().is_none() {
+            drop(editor_windows);
+            self.choose_save_project();
+            return;
+        }
+        if let Err(error) = editor.save_project() {
+            editor.show_error(&format!("无法保存项目：{error}"));
+        }
+        drop(editor_windows);
+        self.refresh_menus();
+    }
+
+    fn choose_save_project(&self) {
+        let suggested = {
+            let editor_windows = self.editor.borrow();
+            let Some(editor) = editor_windows
+                .as_ref()
+                .and_then(|window| window.delegate.as_ref())
+            else {
+                return;
+            };
+            format!("{}.charme", editor.session.borrow().document().name())
+        };
+        let mut panel = FileSavePanel::new();
+        panel.set_suggested_filename(&suggested);
+        panel.set_message(localization::text(Key::SaveProjectMessage));
+        panel.show(|path| {
+            if let Some(path) = path {
+                App::<CharmeApp, Message>::dispatch_main(Message::SaveProjectAs(PathBuf::from(
+                    ensure_charme_extension(path),
+                )));
+            }
+        });
+    }
+
+    fn save_project_as(&self, path: PathBuf) {
+        let editor_windows = self.editor.borrow();
+        let Some(editor) = editor_windows
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+        else {
+            return;
+        };
+        if let Err(error) = editor.save_project_as(path) {
+            editor.show_error(&format!("无法保存项目：{error}"));
+        }
+        drop(editor_windows);
+        self.refresh_menus();
+    }
+
+    fn refresh_menus(&self) {
+        let editor = self.editor.borrow();
+        let (dirty, can_undo, can_redo) = editor
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+            .map(|window| {
+                let session = window.session.borrow();
+                (session.is_dirty(), session.can_undo(), session.can_redo())
+            })
+            .unwrap_or((false, false, false));
+        update_menu_state(self.menu_context.get(), dirty, can_undo, can_redo);
     }
 
     fn choose_pmx(&self) {
@@ -235,6 +335,8 @@ impl CharmeApp {
             }
         });
         remember_project(&path);
+        refresh_recent_projects_menu();
+        self.refresh_menus();
     }
 
     fn new_project(&self) {
@@ -412,6 +514,10 @@ impl StartupWindow {
 
 impl WindowDelegate for StartupWindow {
     const NAME: &'static str = "CharmeStartupWindow";
+
+    fn did_become_key(&self) {
+        App::<CharmeApp, Message>::dispatch_main(Message::MenuContextChanged(MenuContext::Startup));
+    }
 
     fn did_load(&mut self, window: Window) {
         window.set_title("Charme");
@@ -789,6 +895,7 @@ impl EditorWindow {
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
+        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
     }
 
     fn reset_session(&self) {
@@ -803,6 +910,15 @@ impl EditorWindow {
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
+        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
+    }
+
+    fn save_project(&self) -> Result<(), charme_core::SessionPersistenceError> {
+        self.session.borrow_mut().save()
+    }
+
+    fn save_project_as(&self, path: PathBuf) -> Result<(), charme_core::SessionPersistenceError> {
+        self.session.borrow_mut().save_as(path)
     }
 
     fn start_renderer(&self) {
@@ -1003,6 +1119,7 @@ impl EditorWindow {
         } else {
             format!("{key} = {value:.3} · 等待预览绑定")
         });
+        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
     }
 
     fn handle_renderer_notification(&self, notification: RendererNotification) {
@@ -1210,6 +1327,10 @@ impl EditorWindow {
 
 impl WindowDelegate for EditorWindow {
     const NAME: &'static str = "CharmeEditorWindow";
+
+    fn did_become_key(&self) {
+        App::<CharmeApp, Message>::dispatch_main(Message::MenuContextChanged(MenuContext::Editor));
+    }
 
     fn did_load(&mut self, window: Window) {
         window.set_title("Charme");
@@ -1615,17 +1736,18 @@ fn menus() -> Vec<Menu> {
         Menu::new(
             localization::text(Key::FileMenu),
             vec![
-                MenuItem::new(localization::text(Key::NewProjectMenu)).action(|| {
-                    App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
-                }),
+                MenuItem::new(localization::text(Key::NewProjectMenu))
+                    .key("n")
+                    .action(|| {
+                        App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
+                    }),
                 MenuItem::new(localization::text(Key::OpenProjectMenu))
                     .key("o")
                     .action(|| {
                         App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
                     }),
+                MenuItem::new(localization::text(Key::RecentProjectsMenu)).action(|| {}),
                 MenuItem::new(localization::text(Key::ImportMenu)).action(|| {}),
-                // This item is moved below into the Import submenu after AppKit
-                // has installed the menu hierarchy.
                 MenuItem::new(localization::text(Key::ImportPmxMenu)).action(|| {
                     App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
                 }),
@@ -1633,20 +1755,18 @@ fn menus() -> Vec<Menu> {
                     App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);
                 }),
                 MenuItem::Separator,
+                MenuItem::new(localization::text(Key::SaveProjectMenu))
+                    .key("s")
+                    .action(|| {
+                        App::<CharmeApp, Message>::dispatch_main(Message::SaveProject);
+                    }),
+                MenuItem::new(localization::text(Key::SaveAsProjectMenu))
+                    .key("S")
+                    .action(|| {
+                        App::<CharmeApp, Message>::dispatch_main(Message::ChooseSaveProject);
+                    }),
+                MenuItem::Separator,
                 MenuItem::CloseWindow,
-            ],
-        ),
-        Menu::new(
-            localization::text(Key::EditMenu),
-            vec![
-                MenuItem::Undo,
-                MenuItem::Redo,
-                MenuItem::Separator,
-                MenuItem::Cut,
-                MenuItem::Copy,
-                MenuItem::Paste,
-                MenuItem::Separator,
-                MenuItem::SelectAll,
             ],
         ),
         Menu::new(
@@ -1660,6 +1780,113 @@ fn menus() -> Vec<Menu> {
     ]
 }
 
+fn install_edit_menu_after_main_menu() {
+    let edit_menu = Menu::new(
+        localization::text(Key::EditMenu),
+        vec![
+            MenuItem::Undo,
+            MenuItem::Redo,
+            MenuItem::Separator,
+            MenuItem::Cut,
+            MenuItem::Copy,
+            MenuItem::Paste,
+            MenuItem::Separator,
+            MenuItem::SelectAll,
+        ],
+    );
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        let item: id = msg_send![class!(NSMenuItem), new];
+        let _: () = msg_send![item, setSubmenu: &*edit_menu.0];
+        let _: () = msg_send![main_menu, insertItem: item atIndex: 2usize];
+    }
+}
+
+fn install_file_submenus() {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        let file_item: id = msg_send![main_menu, itemAtIndex: 1];
+        let file_menu: id = msg_send![file_item, submenu];
+        install_recent_submenu(file_menu);
+        install_import_submenu(file_menu);
+    }
+}
+
+fn refresh_recent_projects_menu() {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        let file_item: id = msg_send![main_menu, itemAtIndex: 1usize];
+        let file_menu: id = msg_send![file_item, submenu];
+        install_recent_submenu(file_menu);
+    }
+}
+
+fn install_recent_submenu(file_menu: id) {
+    if file_menu.is_null() {
+        return;
+    }
+    let projects = recent_projects();
+    let has_projects = !projects.is_empty();
+    let mut items = Vec::new();
+    for project in projects {
+        let name = project
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(localization::text(Key::ProjectFallback))
+            .to_owned();
+        let title = format!("{name} · {}", project.display());
+        items.push(MenuItem::new(title).action(move || {
+            App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(project.clone()));
+        }));
+    }
+    if items.is_empty() {
+        items.push(MenuItem::new(localization::text(Key::NoRecentProjects)).action(|| {}));
+    }
+    let recent_menu = Menu::new(localization::text(Key::RecentProjectsMenu), items);
+    unsafe {
+        let parent: id = msg_send![file_menu, itemAtIndex: 2];
+        if parent.is_null() {
+            return;
+        }
+        let _: () = msg_send![parent, setSubmenu: &*recent_menu.0];
+        let _: () = msg_send![parent, setEnabled: if has_projects { YES } else { NO }];
+        if !has_projects {
+            let child: id = msg_send![&*recent_menu.0, itemAtIndex: 0usize];
+            let _: () = msg_send![child, setEnabled: NO];
+        }
+    }
+}
+
+fn install_import_submenu(file_menu: id) {
+    if file_menu.is_null() {
+        return;
+    }
+    unsafe {
+        let parent: id = msg_send![file_menu, itemAtIndex: 3];
+        let child: id = msg_send![file_menu, itemAtIndex: 4];
+        if parent.is_null() || child.is_null() {
+            return;
+        }
+        let menu_class = class!(NSMenu);
+        let allocated: id = msg_send![menu_class, alloc];
+        let title = NSString::new(localization::text(Key::ImportMenu));
+        let submenu: id = msg_send![allocated, initWithTitle: &*title];
+        if submenu.is_null() {
+            return;
+        }
+        let _: () = msg_send![child, retain];
+        let _: () = msg_send![file_menu, removeItemAtIndex: 4usize];
+        let _: () = msg_send![submenu, addItem: child];
+        let _: () = msg_send![parent, setSubmenu: submenu];
+        let _: () = msg_send![parent, setEnabled: YES];
+        let _: () = msg_send![child, release];
+        let _: () = msg_send![submenu, release];
+    }
+}
+
 fn localize_standard_menu_items() {
     unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
@@ -1667,29 +1894,12 @@ fn localize_standard_menu_items() {
         if main_menu.is_null() {
             return;
         }
-
-        let app_menu_item: id = msg_send![main_menu, itemAtIndex: 0];
-        let app_menu: id = msg_send![app_menu_item, submenu];
-        localize_menu_items(app_menu);
-
-        let file_menu_item: id = msg_send![main_menu, itemAtIndex: 1];
-        let file_menu: id = msg_send![file_menu_item, submenu];
-        install_import_submenu(file_menu);
-        localize_menu_items(file_menu);
-
-        let edit_menu_item: id = msg_send![main_menu, itemAtIndex: 2];
-        let edit_menu: id = msg_send![edit_menu_item, submenu];
-        localize_menu_items(edit_menu);
-
-        let view_menu_item: id = msg_send![main_menu, itemAtIndex: 3];
-        let view_menu: id = msg_send![view_menu_item, submenu];
-        localize_menu_items(view_menu);
-
-        let window_menu_item: id = msg_send![main_menu, itemAtIndex: 4];
-        let window_menu: id = msg_send![window_menu_item, submenu];
-        localize_menu_items(window_menu);
-
-        install_menu_localization_delegates(main_menu);
+        let count: usize = msg_send![main_menu, numberOfItems];
+        for index in 0..count {
+            let item: id = msg_send![main_menu, itemAtIndex: index];
+            let submenu: id = msg_send![item, submenu];
+            localize_menu_items(submenu);
+        }
     }
 }
 
@@ -1699,28 +1909,19 @@ fn localize_menu_items(menu: id) {
     }
     unsafe {
         let count: usize = msg_send![menu, numberOfItems];
-        for index in (0..count).rev() {
+        for index in 0..count {
             let item: id = msg_send![menu, itemAtIndex: index];
             if item.is_null() {
                 continue;
             }
-            let item_title: id = msg_send![item, title];
-            if item_title.is_null() {
-                continue;
-            }
-            let title = NSString::retain(item_title).to_string();
-            if is_unwanted_text_menu_item(&title) {
-                let _: () = msg_send![menu, removeItemAtIndex: index];
-                continue;
-            }
-            if let Some(key) = localized_standard_title(&title) {
+            let title: id = msg_send![item, title];
+            if !title.is_null()
+                && let Some(key) = localized_standard_title(&NSString::retain(title).to_string())
+            {
                 let localized = NSString::new(localization::text(key));
                 let _: () = msg_send![item, setTitle: &*localized];
             }
-            let submenu: id = msg_send![item, submenu];
-            if !submenu.is_null() {
-                localize_menu_items(submenu);
-            }
+            localize_menu_items(msg_send![item, submenu]);
         }
     }
 }
@@ -1747,102 +1948,60 @@ fn localized_standard_title(title: &str) -> Option<Key> {
     }
 }
 
-fn is_unwanted_text_menu_item(title: &str) -> bool {
-    matches!(
-        title,
-        "AutoFill"
-            | "自动填充"
-            | "Start Dictation"
-            | "Start Dictation…"
-            | "开始听写"
-            | "开始听写…"
-            | "Emoji & Symbols"
-            | "表情符号与符号"
-    )
-}
-
-fn install_menu_localization_delegates(main_menu: id) {
-    if main_menu.is_null() {
-        return;
-    }
+fn update_menu_state(context: MenuContext, dirty: bool, can_undo: bool, can_redo: bool) {
     unsafe {
-        let count: usize = msg_send![main_menu, numberOfItems];
-        let delegate = menu_localization_delegate();
-        for index in 0..count {
-            let item: id = msg_send![main_menu, itemAtIndex: index];
-            let submenu: id = msg_send![item, submenu];
-            if !submenu.is_null() {
-                let _: () = msg_send![submenu, setDelegate: delegate];
-            }
-        }
-    }
-}
-
-fn menu_localization_delegate() -> id {
-    static DELEGATE: OnceLock<usize> = OnceLock::new();
-    *DELEGATE.get_or_init(|| unsafe {
-        let delegate: id = msg_send![menu_localization_delegate_class(), new];
-        // NSMenu's delegate is not retained. Keep this object alive for the
-        // lifetime of the process.
-        let _: id = msg_send![delegate, retain];
-        delegate as usize
-    }) as id
-}
-
-fn menu_localization_delegate_class() -> &'static Class {
-    static CLASS: OnceLock<&'static Class> = OnceLock::new();
-    CLASS.get_or_init(|| unsafe {
-        let mut declaration = ClassDecl::new("CharmeMenuLocalizationDelegate", class!(NSObject))
-            .expect("menu localization delegate class is registered only once");
-        declaration.add_method(
-            sel!(menuNeedsUpdate:),
-            menu_needs_update as extern "C" fn(&Object, Sel, id),
-        );
-        declaration.add_method(
-            sel!(menuWillOpen:),
-            menu_will_open as extern "C" fn(&Object, Sel, id),
-        );
-        declaration.register()
-    })
-}
-
-extern "C" fn menu_needs_update(_: &Object, _: Sel, menu: id) {
-    localize_menu_items(menu);
-}
-
-extern "C" fn menu_will_open(_: &Object, _: Sel, menu: id) {
-    localize_menu_items(menu);
-}
-
-fn install_import_submenu(file_menu: id) {
-    if file_menu.is_null() {
-        return;
-    }
-    unsafe {
-        // Cacao 0.3 does not expose submenu construction. The PMX item is
-        // created normally so its Rust callback remains owned by Cacao, then
-        // moved under the localized Import item at runtime.
-        let parent: id = msg_send![file_menu, itemAtIndex: 2];
-        let child: id = msg_send![file_menu, itemAtIndex: 3];
-        if parent.is_null() || child.is_null() {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        if main_menu.is_null() {
             return;
         }
+        let file_item: id = msg_send![main_menu, itemAtIndex: 1usize];
+        let file: id = msg_send![file_item, submenu];
+        let edit_item: id = msg_send![main_menu, itemAtIndex: 2usize];
+        let edit: id = msg_send![edit_item, submenu];
+        let editor = context == MenuContext::Editor;
+        set_menu_item_state(file, Key::ImportMenu, editor, editor);
+        set_menu_item_state(file, Key::InspectShaderMenu, editor, editor);
+        set_menu_item_state(file, Key::SaveProjectMenu, editor, editor && dirty);
+        set_menu_item_state(file, Key::SaveAsProjectMenu, editor, editor);
+        set_menu_item_state(edit, Key::Undo, true, can_undo);
+        set_menu_item_state(edit, Key::Redo, true, can_redo);
+    }
+}
 
-        let menu_class = class!(NSMenu);
-        let allocated: id = msg_send![menu_class, alloc];
-        let title = NSString::new(localization::text(Key::ImportMenu));
-        let submenu: id = msg_send![allocated, initWithTitle: &*title];
-        if submenu.is_null() {
+fn set_menu_item_state(menu: id, key: Key, visible: bool, enabled: bool) {
+    unsafe {
+        let Some(item) = find_menu_item(menu, localization::text(key)) else {
             return;
+        };
+        let _: () = msg_send![item, setHidden: if visible { NO } else { YES }];
+        let _: () = msg_send![item, setEnabled: if enabled { YES } else { NO }];
+    }
+}
+
+unsafe fn find_menu_item(menu: id, title: &str) -> Option<id> {
+    if menu.is_null() {
+        return None;
+    }
+    let count: usize = msg_send![menu, numberOfItems];
+    for index in 0..count {
+        let item: id = msg_send![menu, itemAtIndex: index];
+        if item.is_null() {
+            continue;
         }
-        // Keep the Cacao callback alive while moving the item between menus.
-        let _: () = msg_send![child, retain];
-        let _: () = msg_send![file_menu, removeItemAtIndex: 3usize];
-        let _: () = msg_send![submenu, addItem: child];
-        let _: () = msg_send![parent, setSubmenu: submenu];
-        let _: () = msg_send![parent, setEnabled: YES];
-        let _: () = msg_send![child, release];
-        let _: () = msg_send![submenu, release];
+        let item_title: id = msg_send![item, title];
+        if !item_title.is_null() && NSString::retain(item_title).to_str() == title {
+            return Some(item);
+        }
+    }
+    None
+}
+
+fn ensure_charme_extension(path: String) -> String {
+    if path.to_ascii_lowercase().ends_with(".charme") {
+        path
+    } else {
+        format!("{path}.charme")
     }
 }
 
