@@ -1752,23 +1752,24 @@ fn install_native_menus() {
         );
         add_submenu(
             main_menu,
-            localization::text(Key::ViewMenu),
-            build_view_menu(),
-        );
-        add_submenu(
-            main_menu,
             localization::text(Key::WindowMenu),
             build_window_menu(),
         );
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![app, setMainMenu: main_menu];
-        // Install Edit after AppKit has installed the main menu. This avoids
-        // automatic text-system items such as Dictation and Emoji.
+        // Install Edit and View after AppKit has installed the main menu. This
+        // avoids its automatic text-system and full-screen menu additions.
         insert_submenu(
             main_menu,
             2,
             localization::text(Key::EditMenu),
             build_edit_menu(),
+        );
+        insert_submenu(
+            main_menu,
+            3,
+            localization::text(Key::ViewMenu),
+            build_view_menu(),
         );
     }
 }
