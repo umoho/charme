@@ -2,24 +2,20 @@
 
 #[cfg(target_os = "macos")]
 mod app;
-#[cfg(target_os = "macos")]
-mod bridge;
 #[cfg(all(target_os = "macos", feature = "debug-ui"))]
 mod debug;
 #[cfg(target_os = "macos")]
-mod docking;
-#[cfg(target_os = "macos")]
-mod frame_image;
-#[cfg(target_os = "macos")]
-mod interaction;
+mod editor;
 #[cfg(target_os = "macos")]
 mod localization;
 #[cfg(target_os = "macos")]
-mod parameter_control;
+mod preview;
 #[cfg(target_os = "macos")]
 mod shader_inspection;
 #[cfg(target_os = "macos")]
-mod slider;
+mod startup;
+#[cfg(target_os = "macos")]
+mod ui;
 
 #[cfg(target_os = "macos")]
 fn main() {
