@@ -90,12 +90,18 @@ impl NativeHierarchyView {
             let _: () = msg_send![outline, addTableColumn: column];
             let _: () = msg_send![outline, setOutlineTableColumn: column];
             let _: () = msg_send![outline, setHeaderView: nil];
+            let clear: id = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![outline, setBackgroundColor: clear];
             let _: () = msg_send![outline, setDataSource: delegate];
             let _: () = msg_send![outline, setDelegate: delegate];
             let _: () = msg_send![outline, setRowHeight: 22.0f64];
             let _: () = msg_send![outline, setIndentationPerLevel: 14.0f64];
             let _: () = msg_send![outline, setAllowsMultipleSelection: NO];
             let _: () = msg_send![outline, setAllowsEmptySelection: YES];
+            // Do not let AppKit's automatic style switch between inset and
+            // full-width selection as the outline gains or loses child rows.
+            let _: () = msg_send![outline, setStyle: 1isize];
+            let _: () = msg_send![outline, setSelectionHighlightStyle: 0isize];
             let _: () = msg_send![outline, setColumnAutoresizingStyle: 1usize];
             let _: () = msg_send![outline, setAutoresizingMask: 2usize];
             let _: () = msg_send![column, release];
@@ -179,6 +185,23 @@ unsafe fn pin_to_edges(child: id, parent: id) {
     }
 }
 
+unsafe fn center_text_field(text_field: id, cell: id) {
+    let text_leading: id = unsafe { msg_send![text_field, leadingAnchor] };
+    let cell_leading: id = unsafe { msg_send![cell, leadingAnchor] };
+    let text_trailing: id = unsafe { msg_send![text_field, trailingAnchor] };
+    let cell_trailing: id = unsafe { msg_send![cell, trailingAnchor] };
+    let text_center_y: id = unsafe { msg_send![text_field, centerYAnchor] };
+    let cell_center_y: id = unsafe { msg_send![cell, centerYAnchor] };
+    let constraints = NSArray::new(&[
+        unsafe { msg_send![text_leading, constraintEqualToAnchor: cell_leading] },
+        unsafe { msg_send![text_trailing, constraintLessThanOrEqualToAnchor: cell_trailing] },
+        unsafe { msg_send![text_center_y, constraintEqualToAnchor: cell_center_y] },
+    ]);
+    unsafe {
+        let _: () = msg_send![class!(NSLayoutConstraint), activateConstraints: &*constraints];
+    }
+}
+
 fn with_state<R: Clone>(object: &Object, fallback: R, action: impl FnOnce(&NativeState) -> R) -> R {
     catch_unwind(AssertUnwindSafe(|| unsafe {
         let pointer = *object.get_ivar::<usize>(STATE_IVAR);
@@ -242,14 +265,22 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
         let identifier = NSString::new(CELL_IDENTIFIER);
         let mut cell: id = msg_send![outline, makeViewWithIdentifier: &*identifier owner: nil];
         if cell.is_null() {
-            cell = msg_send![class!(NSTextField), labelWithString: &*NSString::new("")];
+            cell = msg_send![class!(NSTableCellView), new];
             let _: () = msg_send![cell, setIdentifier: &*identifier];
+
+            let text_field: id =
+                msg_send![class!(NSTextField), labelWithString: &*NSString::new("")];
+            let _: () = msg_send![text_field, setTranslatesAutoresizingMaskIntoConstraints: NO];
             let font: id = msg_send![class!(NSFont), systemFontOfSize: 12.0f64];
-            let _: () = msg_send![cell, setFont: font];
-            let _: () = msg_send![cell, setLineBreakMode: 4usize];
+            let _: () = msg_send![text_field, setFont: font];
+            let _: () = msg_send![text_field, setLineBreakMode: 4usize];
+            let _: () = msg_send![cell, addSubview: text_field];
+            let _: () = msg_send![cell, setTextField: text_field];
+            center_text_field(text_field, cell);
         }
+        let text_field: id = msg_send![cell, textField];
         let title = NSString::new(&title);
-        let _: () = msg_send![cell, setStringValue: &*title];
+        let _: () = msg_send![text_field, setStringValue: &*title];
         cell
     }
 }
