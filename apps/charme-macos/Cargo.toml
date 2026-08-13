@@ -20,6 +20,7 @@ charme-shader = { path = "../../crates/charme-shader" }
 cacao.workspace = true
 core-graphics.workspace = true
 foreign-types.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

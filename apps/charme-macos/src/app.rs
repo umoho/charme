@@ -33,6 +33,7 @@ use charme_core::{
 };
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
 use core_graphics::geometry::{CGPoint, CGRect};
+use url::Url;
 
 #[cfg(feature = "debug-ui")]
 use crate::debug::DebugState;
@@ -144,6 +145,18 @@ impl AppDelegate for CharmeApp {
         }
         self.startup.show();
         activate_app();
+    }
+
+    fn open_urls(&self, urls: Vec<Url>) {
+        for path in urls.into_iter().filter_map(|url| url.to_file_path().ok()) {
+            if path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("charme"))
+            {
+                App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(path));
+            }
+        }
     }
 
     fn should_terminate_after_last_window_closed(&self) -> bool {
@@ -654,7 +667,6 @@ const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
-const CHARME_VIEW_FULLSCREEN_TAG: isize = 0x4348;
 
 struct DockDividerTarget {
     owner: *mut EditorWindow,
@@ -1748,33 +1760,26 @@ fn install_native_menus() {
         add_submenu(main_menu, "Charme", build_application_menu());
         add_submenu(
             main_menu,
+            localization::text(Key::FileMenu),
+            build_file_menu(),
+        );
+        add_submenu(
+            main_menu,
+            localization::text(Key::EditMenu),
+            build_edit_menu(),
+        );
+        add_submenu(
+            main_menu,
+            localization::text(Key::ViewMenu),
+            build_view_menu(),
+        );
+        add_submenu(
+            main_menu,
             localization::text(Key::WindowMenu),
             build_window_menu(),
         );
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![app, setMainMenu: main_menu];
-        // AppKit customizes recognized menus while setMainMenu: is running,
-        // inserting English items such as Close All, text-system commands and
-        // Enter Full Screen. Install the menus we fully own only afterwards.
-        insert_submenu(
-            main_menu,
-            1,
-            localization::text(Key::FileMenu),
-            build_file_menu(),
-        );
-        insert_submenu(
-            main_menu,
-            2,
-            localization::text(Key::EditMenu),
-            build_edit_menu(),
-        );
-        insert_submenu(
-            main_menu,
-            3,
-            localization::text(Key::ViewMenu),
-            build_view_menu(),
-        );
-        install_view_menu_guard(main_menu);
     }
 }
 
@@ -1913,12 +1918,12 @@ fn build_file_menu() -> id {
         add_separator(menu);
         add_item(
             menu,
-            menu_item_with_target(
+            menu_item(
                 localization::text(Key::CloseWindow),
-                sel!(charmeCloseWindow:),
+                sel!(performClose:),
                 "w",
                 COMMAND,
-                target,
+                nil,
             ),
         );
         menu
@@ -2007,99 +2012,20 @@ fn build_edit_menu() -> id {
 }
 
 fn build_view_menu() -> id {
-    {
-        let menu = new_menu(localization::text(Key::ViewMenu));
-        add_item(
-            menu,
-            menu_item_with_target(
-                localization::text(Key::EnterFullScreen),
-                sel!(charmeToggleFullScreen:),
-                "f",
-                COMMAND | CONTROL,
-                menu_target(),
-            ),
-        );
-        unsafe {
-            let item: id = msg_send![menu, itemAtIndex: 0usize];
-            let _: () = msg_send![item, setTag: CHARME_VIEW_FULLSCREEN_TAG];
-        }
-        menu
-    }
-}
-
-fn install_view_menu_guard(main_menu: id) {
-    unsafe {
-        let view_item: id = msg_send![main_menu, itemAtIndex: 3usize];
-        let view_menu: id = msg_send![view_item, submenu];
-        let delegate = menu_guard_delegate();
-        let _: () = msg_send![view_menu, setDelegate: delegate];
-        normalize_view_menu(view_menu);
-    }
-}
-
-fn normalize_view_menu(menu: id) {
-    unsafe {
-        // This menu is fully owned by Charme. AppKit recognizes standard
-        // selectors such as `toggleFullScreen:` and may infer another,
-        // English-titled item. Keep only our tagged item instead of matching
-        // a title that changes with the system language and full-screen state.
-        let count: usize = msg_send![menu, numberOfItems];
-        for index in (0..count).rev() {
-            let item: id = msg_send![menu, itemAtIndex: index];
-            let tag: isize = msg_send![item, tag];
-            if tag != CHARME_VIEW_FULLSCREEN_TAG {
-                let _: () = msg_send![menu, removeItemAtIndex: index];
-            }
-        }
-
-        let item: id = msg_send![menu, itemWithTag: CHARME_VIEW_FULLSCREEN_TAG];
-        if !item.is_null() {
-            let app: id = msg_send![class!(NSApplication), sharedApplication];
-            let window: id = msg_send![app, keyWindow];
-            let full_screen = if window.is_null() {
-                false
-            } else {
-                let style: usize = msg_send![window, styleMask];
-                style & NS_WINDOW_STYLE_FULL_SCREEN != 0
-            };
-            let title = NSString::new(localization::text(if full_screen {
-                Key::ExitFullScreen
-            } else {
-                Key::EnterFullScreen
-            }));
-            let _: () = msg_send![item, setTitle: &*title];
-        }
-    }
-}
-
-fn menu_guard_delegate() -> id {
-    static DELEGATE: OnceLock<usize> = OnceLock::new();
-    *DELEGATE.get_or_init(|| unsafe {
-        let delegate: id = msg_send![menu_guard_delegate_class(), new];
-        let _: id = msg_send![delegate, retain];
-        delegate as usize
-    }) as id
-}
-
-fn menu_guard_delegate_class() -> &'static Class {
-    static CLASS: OnceLock<&'static Class> = OnceLock::new();
-    CLASS.get_or_init(|| unsafe {
-        let mut declaration = ClassDecl::new("CharmeMenuGuardDelegate", class!(NSObject))
-            .expect("menu guard class is registered only once");
-        declaration.add_method(
-            sel!(menuNeedsUpdate:),
-            guard_menu_update as extern "C" fn(&Object, Sel, id),
-        );
-        declaration.add_method(
-            sel!(menuWillOpen:),
-            guard_menu_update as extern "C" fn(&Object, Sel, id),
-        );
-        declaration.register()
-    })
-}
-
-extern "C" fn guard_menu_update(_: &Object, _: Sel, menu: id) {
-    normalize_view_menu(menu);
+    let menu = new_menu(localization::text(Key::ViewMenu));
+    // The canonical title and selector let AppKit replace this item with its
+    // native, bundle-localized full-screen command and manage enter/exit state.
+    add_item(
+        menu,
+        menu_item(
+            "Enter Full Screen",
+            sel!(toggleFullScreen:),
+            "f",
+            COMMAND | CONTROL,
+            nil,
+        ),
+    );
+    menu
 }
 
 fn build_window_menu() -> id {
@@ -2155,13 +2081,6 @@ fn add_submenu(parent: id, title: &str, submenu: id) {
     }
 }
 
-fn insert_submenu(parent: id, index: usize, title: &str, submenu: id) {
-    unsafe {
-        let item = submenu_item(title, submenu);
-        let _: () = msg_send![parent, insertItem: item atIndex: index];
-    }
-}
-
 fn submenu_item(title: &str, submenu: id) -> id {
     unsafe {
         let title = NSString::new(title);
@@ -2190,7 +2109,6 @@ const COMMAND: usize = 1 << 20;
 const OPTION: usize = 1 << 19;
 const CONTROL: usize = 1 << 18;
 const SHIFT: usize = 1 << 17;
-const NS_WINDOW_STYLE_FULL_SCREEN: usize = 1 << 14;
 
 fn menu_item(title: &str, action: Sel, key: &str, modifiers: usize, target: id) -> id {
     menu_item_with_target(title, action, key, modifiers, target)
@@ -2256,14 +2174,6 @@ fn menu_target_class() -> &'static Class {
             menu_redo as extern "C" fn(&Object, Sel, id),
         );
         declaration.add_method(
-            sel!(charmeCloseWindow:),
-            menu_close_window as extern "C" fn(&Object, Sel, id),
-        );
-        declaration.add_method(
-            sel!(charmeToggleFullScreen:),
-            menu_toggle_full_screen as extern "C" fn(&Object, Sel, id),
-        );
-        declaration.add_method(
             sel!(menuOpenRecent:),
             menu_open_recent as extern "C" fn(&Object, Sel, id),
         );
@@ -2295,24 +2205,6 @@ extern "C" fn menu_undo(_: &Object, _: Sel, _: id) {
 }
 extern "C" fn menu_redo(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::Redo);
-}
-extern "C" fn menu_close_window(_: &Object, _: Sel, _: id) {
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let window: id = msg_send![app, keyWindow];
-        if !window.is_null() {
-            let _: () = msg_send![window, performClose: nil];
-        }
-    }
-}
-extern "C" fn menu_toggle_full_screen(_: &Object, _: Sel, _: id) {
-    unsafe {
-        let app: id = msg_send![class!(NSApplication), sharedApplication];
-        let window: id = msg_send![app, keyWindow];
-        if !window.is_null() {
-            let _: () = msg_send![window, toggleFullScreen: nil];
-        }
-    }
 }
 extern "C" fn menu_noop(_: &Object, _: Sel, _: id) {}
 extern "C" fn menu_open_recent(_: &Object, _: Sel, sender: id) {

@@ -1302,6 +1302,7 @@ dependencies = [
  "charme-shader",
  "core-graphics",
  "foreign-types",
+ "url",
 ]
 
 [[package]]

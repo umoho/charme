@@ -53,8 +53,18 @@ cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Run the current macOS UI with:
+Build and open the native macOS application bundle with:
 
 ```sh
-cargo run -p charme-macos
+cargo install cargo-packager --version 0.11.8 --locked # once
+scripts/build-macos-app.sh
+scripts/open-macos-app.sh
 ```
+
+The bundle is written to `target/release/bundle/Charme.app`. See
+[`docs/macos-packaging.md`](docs/macos-packaging.md) for localization, file
+association, signing, and release details.
+
+For a quick development launch, `cargo run -p charme-macos` remains available,
+but AppKit menu localization and other native Bundle behavior must be verified
+using `Charme.app` launched through `open`.
