@@ -654,6 +654,7 @@ const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
+const CHARME_VIEW_FULLSCREEN_TAG: isize = 0x4348;
 
 struct DockDividerTarget {
     owner: *mut EditorWindow,
@@ -1771,6 +1772,7 @@ fn install_native_menus() {
             localization::text(Key::ViewMenu),
             build_view_menu(),
         );
+        install_view_menu_guard(main_menu);
     }
 }
 
@@ -2015,8 +2017,68 @@ fn build_view_menu() -> id {
                 nil,
             ),
         );
+        unsafe {
+            let item: id = msg_send![menu, itemAtIndex: 0usize];
+            let _: () = msg_send![item, setTag: CHARME_VIEW_FULLSCREEN_TAG];
+        }
         menu
     }
+}
+
+fn install_view_menu_guard(main_menu: id) {
+    unsafe {
+        let view_item: id = msg_send![main_menu, itemAtIndex: 3usize];
+        let view_menu: id = msg_send![view_item, submenu];
+        let delegate = menu_guard_delegate();
+        let _: () = msg_send![view_menu, setDelegate: delegate];
+        remove_unwanted_view_items(view_menu);
+    }
+}
+
+fn remove_unwanted_view_items(menu: id) {
+    unsafe {
+        let count: usize = msg_send![menu, numberOfItems];
+        for index in (0..count).rev() {
+            let item: id = msg_send![menu, itemAtIndex: index];
+            let tag: isize = msg_send![item, tag];
+            if tag != CHARME_VIEW_FULLSCREEN_TAG {
+                let title: id = msg_send![item, title];
+                if !title.is_null() && NSString::retain(title).to_string() == "Enter Full Screen" {
+                    let _: () = msg_send![menu, removeItemAtIndex: index];
+                }
+            }
+        }
+    }
+}
+
+fn menu_guard_delegate() -> id {
+    static DELEGATE: OnceLock<usize> = OnceLock::new();
+    *DELEGATE.get_or_init(|| unsafe {
+        let delegate: id = msg_send![menu_guard_delegate_class(), new];
+        let _: id = msg_send![delegate, retain];
+        delegate as usize
+    }) as id
+}
+
+fn menu_guard_delegate_class() -> &'static Class {
+    static CLASS: OnceLock<&'static Class> = OnceLock::new();
+    CLASS.get_or_init(|| unsafe {
+        let mut declaration = ClassDecl::new("CharmeMenuGuardDelegate", class!(NSObject))
+            .expect("menu guard class is registered only once");
+        declaration.add_method(
+            sel!(menuNeedsUpdate:),
+            guard_menu_update as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(menuWillOpen:),
+            guard_menu_update as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.register()
+    })
+}
+
+extern "C" fn guard_menu_update(_: &Object, _: Sel, menu: id) {
+    remove_unwanted_view_items(menu);
 }
 
 fn build_window_menu() -> id {
