@@ -1748,18 +1748,20 @@ fn install_native_menus() {
         add_submenu(main_menu, "Charme", build_application_menu());
         add_submenu(
             main_menu,
-            localization::text(Key::FileMenu),
-            build_file_menu(),
-        );
-        add_submenu(
-            main_menu,
             localization::text(Key::WindowMenu),
             build_window_menu(),
         );
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![app, setMainMenu: main_menu];
-        // Install Edit and View after AppKit has installed the main menu. This
-        // avoids its automatic text-system and full-screen menu additions.
+        // AppKit customizes recognized menus while setMainMenu: is running,
+        // inserting English items such as Close All, text-system commands and
+        // Enter Full Screen. Install the menus we fully own only afterwards.
+        insert_submenu(
+            main_menu,
+            1,
+            localization::text(Key::FileMenu),
+            build_file_menu(),
+        );
         insert_submenu(
             main_menu,
             2,
@@ -1911,12 +1913,12 @@ fn build_file_menu() -> id {
         add_separator(menu);
         add_item(
             menu,
-            menu_item(
+            menu_item_with_target(
                 localization::text(Key::CloseWindow),
-                sel!(performClose:),
+                sel!(charmeCloseWindow:),
                 "w",
                 COMMAND,
-                nil,
+                target,
             ),
         );
         menu
@@ -2009,12 +2011,12 @@ fn build_view_menu() -> id {
         let menu = new_menu(localization::text(Key::ViewMenu));
         add_item(
             menu,
-            menu_item(
+            menu_item_with_target(
                 localization::text(Key::EnterFullScreen),
-                sel!(toggleFullScreen:),
+                sel!(charmeToggleFullScreen:),
                 "f",
                 COMMAND | CONTROL,
-                nil,
+                menu_target(),
             ),
         );
         unsafe {
@@ -2031,22 +2033,41 @@ fn install_view_menu_guard(main_menu: id) {
         let view_menu: id = msg_send![view_item, submenu];
         let delegate = menu_guard_delegate();
         let _: () = msg_send![view_menu, setDelegate: delegate];
-        remove_unwanted_view_items(view_menu);
+        normalize_view_menu(view_menu);
     }
 }
 
-fn remove_unwanted_view_items(menu: id) {
+fn normalize_view_menu(menu: id) {
     unsafe {
+        // This menu is fully owned by Charme. AppKit recognizes standard
+        // selectors such as `toggleFullScreen:` and may infer another,
+        // English-titled item. Keep only our tagged item instead of matching
+        // a title that changes with the system language and full-screen state.
         let count: usize = msg_send![menu, numberOfItems];
         for index in (0..count).rev() {
             let item: id = msg_send![menu, itemAtIndex: index];
             let tag: isize = msg_send![item, tag];
             if tag != CHARME_VIEW_FULLSCREEN_TAG {
-                let title: id = msg_send![item, title];
-                if !title.is_null() && NSString::retain(title).to_string() == "Enter Full Screen" {
-                    let _: () = msg_send![menu, removeItemAtIndex: index];
-                }
+                let _: () = msg_send![menu, removeItemAtIndex: index];
             }
+        }
+
+        let item: id = msg_send![menu, itemWithTag: CHARME_VIEW_FULLSCREEN_TAG];
+        if !item.is_null() {
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let window: id = msg_send![app, keyWindow];
+            let full_screen = if window.is_null() {
+                false
+            } else {
+                let style: usize = msg_send![window, styleMask];
+                style & NS_WINDOW_STYLE_FULL_SCREEN != 0
+            };
+            let title = NSString::new(localization::text(if full_screen {
+                Key::ExitFullScreen
+            } else {
+                Key::EnterFullScreen
+            }));
+            let _: () = msg_send![item, setTitle: &*title];
         }
     }
 }
@@ -2078,7 +2099,7 @@ fn menu_guard_delegate_class() -> &'static Class {
 }
 
 extern "C" fn guard_menu_update(_: &Object, _: Sel, menu: id) {
-    remove_unwanted_view_items(menu);
+    normalize_view_menu(menu);
 }
 
 fn build_window_menu() -> id {
@@ -2169,6 +2190,7 @@ const COMMAND: usize = 1 << 20;
 const OPTION: usize = 1 << 19;
 const CONTROL: usize = 1 << 18;
 const SHIFT: usize = 1 << 17;
+const NS_WINDOW_STYLE_FULL_SCREEN: usize = 1 << 14;
 
 fn menu_item(title: &str, action: Sel, key: &str, modifiers: usize, target: id) -> id {
     menu_item_with_target(title, action, key, modifiers, target)
@@ -2234,6 +2256,14 @@ fn menu_target_class() -> &'static Class {
             menu_redo as extern "C" fn(&Object, Sel, id),
         );
         declaration.add_method(
+            sel!(charmeCloseWindow:),
+            menu_close_window as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(charmeToggleFullScreen:),
+            menu_toggle_full_screen as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
             sel!(menuOpenRecent:),
             menu_open_recent as extern "C" fn(&Object, Sel, id),
         );
@@ -2265,6 +2295,24 @@ extern "C" fn menu_undo(_: &Object, _: Sel, _: id) {
 }
 extern "C" fn menu_redo(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::Redo);
+}
+extern "C" fn menu_close_window(_: &Object, _: Sel, _: id) {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let window: id = msg_send![app, keyWindow];
+        if !window.is_null() {
+            let _: () = msg_send![window, performClose: nil];
+        }
+    }
+}
+extern "C" fn menu_toggle_full_screen(_: &Object, _: Sel, _: id) {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let window: id = msg_send![app, keyWindow];
+        if !window.is_null() {
+            let _: () = msg_send![window, toggleFullScreen: nil];
+        }
+    }
 }
 extern "C" fn menu_noop(_: &Object, _: Sel, _: id) {}
 extern "C" fn menu_open_recent(_: &Object, _: Sel, sender: id) {
