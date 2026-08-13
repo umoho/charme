@@ -252,7 +252,8 @@ impl CharmeApp {
             return;
         }
         if let Err(error) = editor.save_project() {
-            editor.show_error(&format!("无法保存项目：{error}"));
+            eprintln!("Failed to save project: {error}");
+            editor.show_error(localization::text(Key::SaveProjectFailed));
         }
         drop(editor_windows);
         self.refresh_menus();
@@ -312,7 +313,8 @@ impl CharmeApp {
             return;
         };
         if let Err(error) = editor.save_project_as(path) {
-            editor.show_error(&format!("无法保存项目：{error}"));
+            eprintln!("Failed to save project: {error}");
+            editor.show_error(localization::text(Key::SaveProjectFailed));
         }
         drop(editor_windows);
         self.refresh_menus();
@@ -350,13 +352,17 @@ impl CharmeApp {
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("charme"))
         {
-            self.show_startup_error(&format!("请选择.charme项目文件\n\n{}", path.display()));
+            self.show_startup_error(&localization::format(
+                Key::InvalidProjectFile,
+                &[("path", &path.display())],
+            ));
             return;
         }
         let session = match EditorSession::open(&path) {
             Ok(session) => session,
             Err(error) => {
-                self.show_startup_error(&format!("无法打开项目\n\n{error}"));
+                eprintln!("Failed to open project {}: {error}", path.display());
+                self.show_startup_error(localization::text(Key::OpenProjectFailed));
                 return;
             }
         };
@@ -522,7 +528,11 @@ impl StartupWindow {
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .unwrap_or(localization::text(Key::ProjectFallback));
-            let mut button = Button::new(&format!("{name} · {}", project.display()));
+            let title = localization::format(
+                Key::RecentProjectTitle,
+                &[("name", &name), ("path", &project.display())],
+            );
+            let mut button = Button::new(&title);
             button.set_bezel_style(BezelStyle::TexturedRounded);
             button.set_action(move || {
                 App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(project.clone()));
@@ -557,7 +567,7 @@ impl WindowDelegate for StartupWindow {
     }
 
     fn did_load(&mut self, window: Window) {
-        window.set_title("Charme");
+        window.set_title(localization::text(Key::AppName));
         window.set_title_visibility(TitleVisibility::Hidden);
         window.set_titlebar_appears_transparent(true);
         window.set_titlebar_separator_style(0);
@@ -911,7 +921,9 @@ impl EditorWindow {
             inspector_body,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
-            session: RefCell::new(EditorSession::new("未命名角色")),
+            session: RefCell::new(EditorSession::new(localization::text(
+                Key::UntitledCharacter,
+            ))),
             active_material: RefCell::new(None),
             brightness_label,
             brightness,
@@ -936,7 +948,8 @@ impl EditorWindow {
     }
 
     fn reset_session(&self) {
-        self.session.replace(EditorSession::new("未命名项目"));
+        self.session
+            .replace(EditorSession::new(localization::text(Key::UntitledProject)));
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.scene_info
@@ -998,17 +1011,27 @@ impl EditorWindow {
             Ok(image) => {
                 self.image_view.set_image(&image);
                 *self.current_image.borrow_mut() = Some(image);
-                self.status.set_text(format!(
-                    "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 滚动缩放"
+                self.status.set_text(localization::format(
+                    Key::FrameStatus,
+                    &[
+                        ("sequence", &sequence),
+                        ("width", &width),
+                        ("height", &height),
+                    ],
                 ));
             }
-            Err(error) => self.show_error(&error),
+            Err(error) => {
+                eprintln!("Failed to create the rendered frame image: {error}");
+                self.show_error(&error);
+            }
         }
     }
 
     fn load_pmx(&self, path: PathBuf) {
-        self.scene_info
-            .set_text(format!("加载中…\n{}", path.display()));
+        self.scene_info.set_text(localization::format(
+            Key::LoadingPmx,
+            &[("path", &path.display())],
+        ));
         self.material_list
             .set_text(localization::text(Key::LoadingMaterials));
         self.status
@@ -1045,8 +1068,10 @@ impl EditorWindow {
             Err(error) => {
                 self.inspector_heading
                     .set_text(localization::text(Key::ShaderError));
-                self.inspector_body
-                    .set_text(format!("{}\n\n{error}", path.display()));
+                self.inspector_body.set_text(localization::format(
+                    Key::ShaderErrorDetails,
+                    &[("path", &path.display()), ("error", &error)],
+                ));
                 self.status
                     .set_text(localization::text(Key::ReflectionFailed));
                 return;
@@ -1061,15 +1086,19 @@ impl EditorWindow {
             .and_then(|name| name.to_str())
             .unwrap_or(localization::text(Key::WgslShader));
         self.install_document_material(&inspection.path, file_name);
-        self.inspector_body.set_text(format!(
-            "{file_name}\n{}个参数块 · {}个诊断{}",
-            inspection.parameter_block_count,
-            inspection.diagnostics.len(),
-            if inspection.non_scalar_field_count == 0 {
-                String::new()
-            } else {
-                format!(" · {}个非标量字段", inspection.non_scalar_field_count)
-            }
+        let summary_key = if inspection.non_scalar_field_count == 0 {
+            Key::ShaderSummary
+        } else {
+            Key::ShaderSummaryWithNonScalar
+        };
+        self.inspector_body.set_text(localization::format(
+            summary_key,
+            &[
+                ("file_name", &file_name),
+                ("parameter_blocks", &inspection.parameter_block_count),
+                ("diagnostics", &inspection.diagnostics.len()),
+                ("non_scalar_fields", &inspection.non_scalar_field_count),
+            ],
         ));
 
         let mut controls = self.parameter_controls.borrow_mut();
@@ -1095,8 +1124,10 @@ impl EditorWindow {
             ]);
             controls.push(control);
         }
-        self.status
-            .set_text(format!("已反射{file_name} · {}个标量控件", controls.len()));
+        self.status.set_text(localization::format(
+            Key::ShaderReflected,
+            &[("file_name", &file_name), ("controls", &controls.len())],
+        ));
     }
 
     fn install_document_material(&self, path: &std::path::Path, name: &str) {
@@ -1151,11 +1182,15 @@ impl EditorWindow {
         {
             bridge.set_material_parameter(key.to_owned(), parameter);
         }
-        self.status.set_text(if updated.is_some() {
-            format!("{key} = {value:.3} · 文档已修改 · 预览已更新")
-        } else {
-            format!("{key} = {value:.3} · 等待预览绑定")
-        });
+        let formatted_value = format!("{value:.3}");
+        self.status.set_text(localization::format(
+            if updated.is_some() {
+                Key::ParameterUpdated
+            } else {
+                Key::ParameterWaiting
+            },
+            &[("key", &key), ("value", &formatted_value)],
+        ));
         App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
     }
 
@@ -1163,29 +1198,44 @@ impl EditorWindow {
         match notification {
             RendererNotification::PmxLoaded(info) => self.show_scene_info(&info),
             RendererNotification::PmxLoadFailed { path, message } => {
-                self.scene_info
-                    .set_text(format!("无法加载\n{}", path.display()));
-                self.show_error(&message);
+                eprintln!("Failed to load PMX {}: {message}", path.display());
+                self.scene_info.set_text(localization::format(
+                    Key::PmxLoadFailed,
+                    &[("path", &path.display())],
+                ));
+                self.show_error(localization::text(Key::RendererFailed));
             }
             RendererNotification::MaterialParameterRejected { path, message } => {
-                self.show_error(&format!("参数{path}被拒绝：{message}"));
+                eprintln!("Renderer rejected parameter {path}: {message}");
+                self.show_error(&localization::format(
+                    Key::ParameterRejected,
+                    &[("path", &path)],
+                ));
             }
             _ => {}
         }
     }
 
     fn show_scene_info(&self, info: &PmxSceneInfo) {
-        self.scene_info.set_text(format!(
-            "{}\n\n{}个顶点 · {}个索引",
-            info.name(),
-            info.vertex_count(),
-            info.index_count()
+        self.scene_info.set_text(localization::format(
+            Key::SceneSummary,
+            &[
+                ("name", &info.name()),
+                ("vertices", &info.vertex_count()),
+                ("indices", &info.index_count()),
+            ],
         ));
         let slots = info
             .material_slots()
             .iter()
             .take(24)
-            .map(|slot| format!("{:02}  {}", slot.index(), slot.name()))
+            .map(|slot| {
+                let index = format!("{:02}", slot.index());
+                localization::format(
+                    Key::MaterialSlotListItem,
+                    &[("index", &index), ("name", &slot.name())],
+                )
+            })
             .collect::<Vec<_>>();
         let remaining = info.material_slots().len().saturating_sub(slots.len());
         let mut text = if slots.is_empty() {
@@ -1194,29 +1244,38 @@ impl EditorWindow {
             slots.join("\n")
         };
         if remaining > 0 {
-            text.push_str(&format!("\n…以及{remaining}个"));
+            text.push_str(&localization::format(
+                Key::MoreMaterials,
+                &[("count", &remaining)],
+            ));
         }
         self.material_list.set_text(text);
 
         if let Some(slot) = info.material_slots().first() {
-            self.inspector_body.set_text(format!(
-                "{}\n\n源材质槽{}\n漫反射：{}\nSphere：{}\nToon：{}\n\nCharme材质控件即将支持。",
-                slot.name(),
-                slot.index(),
-                slot.diffuse_texture().unwrap_or("—"),
-                slot.sphere_texture().unwrap_or("—"),
-                slot.toon_texture().unwrap_or("—"),
+            let missing = localization::text(Key::MissingValue);
+            self.inspector_body.set_text(localization::format(
+                Key::MaterialDetails,
+                &[
+                    ("name", &slot.name()),
+                    ("index", &slot.index()),
+                    ("diffuse", &slot.diffuse_texture().unwrap_or(missing)),
+                    ("sphere", &slot.sphere_texture().unwrap_or(missing)),
+                    ("toon", &slot.toon_texture().unwrap_or(missing)),
+                ],
             ));
         }
-        self.status.set_text(if info.warnings().is_empty() {
-            format!(
-                "已加载{} · {}个材质槽",
-                info.name(),
-                info.material_slots().len()
-            )
-        } else {
-            format!("已加载{} · {}个警告", info.name(), info.warnings().len())
-        });
+        self.status.set_text(localization::format(
+            if info.warnings().is_empty() {
+                Key::SceneLoaded
+            } else {
+                Key::SceneLoadedWithWarnings
+            },
+            &[
+                ("name", &info.name()),
+                ("slots", &info.material_slots().len()),
+                ("warnings", &info.warnings().len()),
+            ],
+        ));
     }
 
     fn set_brightness(&self, value: f32) {
@@ -1370,7 +1429,7 @@ impl WindowDelegate for EditorWindow {
     }
 
     fn did_load(&mut self, window: Window) {
-        window.set_title("Charme");
+        window.set_title(localization::text(Key::AppName));
         window.set_title_visibility(TitleVisibility::Hidden);
         window.set_titlebar_appears_transparent(true);
         window.set_titlebar_separator_style(0);
@@ -1757,7 +1816,11 @@ fn label(text: &str, size: f64, bold: bool, color: Color) -> Label {
 fn install_native_menus() {
     unsafe {
         let main_menu: id = msg_send![class!(NSMenu), new];
-        add_submenu(main_menu, "Charme", build_application_menu());
+        add_submenu(
+            main_menu,
+            localization::text(Key::AppName),
+            build_application_menu(),
+        );
         add_submenu(
             main_menu,
             localization::text(Key::FileMenu),
@@ -1785,7 +1848,7 @@ fn install_native_menus() {
 
 fn build_application_menu() -> id {
     unsafe {
-        let menu = new_menu("Charme");
+        let menu = new_menu(localization::text(Key::AppName));
         add_item(
             menu,
             menu_item(
@@ -2018,7 +2081,7 @@ fn build_view_menu() -> id {
     add_item(
         menu,
         menu_item(
-            "Enter Full Screen",
+            localization::text(Key::EnterFullScreen),
             sel!(toggleFullScreen:),
             "f",
             COMMAND | CONTROL,
@@ -2252,7 +2315,10 @@ fn build_recent_menu() -> id {
                     .file_stem()
                     .and_then(|name| name.to_str())
                     .unwrap_or(localization::text(Key::ProjectFallback));
-                let title = format!("{name} · {}", project.display());
+                let title = localization::format(
+                    Key::RecentProjectTitle,
+                    &[("name", &name), ("path", &project.display())],
+                );
                 let item =
                     menu_item_with_target(&title, sel!(menuOpenRecent:), "", 0, menu_target());
                 let path = NSString::new(&project.to_string_lossy());
@@ -2312,7 +2378,7 @@ fn set_application_menu_name() {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let main_menu: id = msg_send![app, mainMenu];
         let app_menu_item: id = msg_send![main_menu, itemAtIndex: 0];
-        let title = NSString::new("Charme");
+        let title = NSString::new(localization::text(Key::AppName));
         let _: () = msg_send![app_menu_item, setTitle: &*title];
     }
 }

@@ -9,7 +9,10 @@ use cacao::appkit::App;
 use charme_core::ParameterValue;
 use charme_renderer::{BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig};
 
-use crate::app::{CharmeApp, Message};
+use crate::{
+    app::{CharmeApp, Message},
+    localization::{self, Key},
+};
 
 enum Command {
     Resize { size: OutputSize, scale: f64 },
@@ -186,5 +189,12 @@ impl Drop for RenderBridge {
 }
 
 fn dispatch(message: Message) {
+    let message = match message {
+        Message::Failed(error) => {
+            eprintln!("Renderer failure: {error}");
+            Message::Failed(localization::text(Key::RendererFailed).to_owned())
+        }
+        message => message,
+    };
     App::<CharmeApp, Message>::dispatch_main(message);
 }

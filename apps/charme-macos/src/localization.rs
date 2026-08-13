@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{fmt::Display, sync::OnceLock};
 
 #[cfg(test)]
 use std::collections::BTreeSet;
@@ -29,6 +29,7 @@ macro_rules! localization_keys {
 }
 
 localization_keys!(
+    AppName,
     About,
     Services,
     HideApp,
@@ -88,6 +89,36 @@ localization_keys!(
     ViewMenu,
     WindowMenu,
     BringAllToFront,
+    EnterFullScreen,
+    SaveProjectFailed,
+    InvalidProjectFile,
+    OpenProjectFailed,
+    UntitledCharacter,
+    UntitledProject,
+    RecentProjectTitle,
+    FrameStatus,
+    LoadingPmx,
+    ShaderErrorDetails,
+    ShaderSummary,
+    ShaderSummaryWithNonScalar,
+    ShaderReflected,
+    ParameterUpdated,
+    ParameterWaiting,
+    PmxLoadFailed,
+    ParameterRejected,
+    SceneSummary,
+    MaterialSlotListItem,
+    MoreMaterials,
+    MaterialDetails,
+    MissingValue,
+    SceneLoaded,
+    SceneLoadedWithWarnings,
+    FramePixelFormatUnsupported,
+    ColorSpaceUnavailable,
+    FrameImageCreationFailed,
+    ShaderReadFailed,
+    ShaderCompositionFailed,
+    RendererFailed,
 );
 
 /// A compile-time localization catalog generated from one `.lproj` directory.
@@ -107,6 +138,32 @@ static LOCALIZATION: OnceLock<Localization> = OnceLock::new();
 
 pub(crate) fn text(key: Key) -> &'static str {
     &localization().strings[key as usize]
+}
+
+/// Expands named placeholders such as `{path}` without imposing an argument
+/// order on translations.
+pub(crate) fn format(key: Key, arguments: &[(&str, &dyn Display)]) -> String {
+    let template = text(key);
+    let mut output = String::with_capacity(template.len());
+    let mut remainder = template;
+
+    while let Some(open) = remainder.find('{') {
+        let after_open = &remainder[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            break;
+        };
+        output.push_str(&remainder[..open]);
+        let name = &after_open[..close];
+        if let Some((_, value)) = arguments.iter().find(|(candidate, _)| *candidate == name) {
+            use std::fmt::Write as _;
+            let _ = write!(output, "{value}");
+        } else {
+            output.push_str(&remainder[open..open + close + 2]);
+        }
+        remainder = &after_open[close + 1..];
+    }
+    output.push_str(remainder);
+    output
 }
 
 fn localization() -> &'static Localization {

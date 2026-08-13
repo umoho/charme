@@ -1,2 +1,4 @@
 "CFBundleDisplayName" = "Charme";
 "CFBundleName" = "Charme";
+"CFBundleTypeName" = "Charme项目";
+"UTTypeDescription" = "Charme项目";

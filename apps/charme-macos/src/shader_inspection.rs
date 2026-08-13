@@ -5,7 +5,10 @@ use charme_shader::{
     MetadataValue, ParameterType, ScalarType, ShaderComposer, ShaderInterface, ShaderSource,
 };
 
-use crate::app::{CharmeApp, Message};
+use crate::{
+    app::{CharmeApp, Message},
+    localization::{self, Key},
+};
 
 #[cfg(test)]
 const BUILT_IN_SHADER: &str = include_str!("../../../assets/shaders/preview_material.wgsl");
@@ -41,7 +44,10 @@ pub(crate) fn inspect_shader(path: PathBuf) {
         .name("charme-shader-inspection".to_owned())
         .spawn(move || {
             let result = fs::read_to_string(&path)
-                .map_err(|error| format!("failed to read {}: {error}", path.display()))
+                .map_err(|error| {
+                    eprintln!("Failed to read Shader {}: {error}", path.display());
+                    localization::format(Key::ShaderReadFailed, &[("path", &path.display())])
+                })
                 .and_then(|source| reflect_source(path.clone(), source));
             App::<CharmeApp, Message>::dispatch_main(Message::ShaderInspected { path, result });
         })
@@ -51,8 +57,11 @@ pub(crate) fn inspect_shader(path: PathBuf) {
 fn reflect_source(path: PathBuf, source: String) -> Result<ShaderInspection, String> {
     ShaderComposer::new()
         .reflect(&ShaderSource::new(source, path.to_string_lossy()))
-        .map(|interface| build_inspection(path, &interface))
-        .map_err(|error| error.to_string())
+        .map(|interface| build_inspection(path.clone(), &interface))
+        .map_err(|error| {
+            eprintln!("Failed to inspect WGSL Shader {}: {error}", path.display());
+            localization::text(Key::ShaderCompositionFailed).to_owned()
+        })
 }
 
 fn build_inspection(path: PathBuf, interface: &ShaderInterface) -> ShaderInspection {

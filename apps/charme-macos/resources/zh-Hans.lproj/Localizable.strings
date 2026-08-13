@@ -1,5 +1,6 @@
 /* Charme application strings. UTF-8. */
 
+"AppName" = "Charme";
 "About" = "关于Charme";
 "Services" = "服务";
 "HideApp" = "隐藏Charme";
@@ -59,3 +60,33 @@
 "ViewMenu" = "视图";
 "WindowMenu" = "窗口";
 "BringAllToFront" = "将所有窗口置于最前";
+"EnterFullScreen" = "进入全屏幕";
+"SaveProjectFailed" = "无法保存项目。";
+"InvalidProjectFile" = "请选择.charme项目文件。\n\n{path}";
+"OpenProjectFailed" = "无法打开项目。";
+"UntitledCharacter" = "未命名角色";
+"UntitledProject" = "未命名项目";
+"RecentProjectTitle" = "{name} · {path}";
+"FrameStatus" = "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 滚动缩放";
+"LoadingPmx" = "加载中…\n{path}";
+"ShaderErrorDetails" = "{path}\n\n{error}";
+"ShaderSummary" = "{file_name}\n{parameter_blocks}个参数块 · {diagnostics}个诊断";
+"ShaderSummaryWithNonScalar" = "{file_name}\n{parameter_blocks}个参数块 · {diagnostics}个诊断 · {non_scalar_fields}个非标量字段";
+"ShaderReflected" = "已反射{file_name} · {controls}个标量控件";
+"ParameterUpdated" = "{key} = {value} · 文档已修改 · 预览已更新";
+"ParameterWaiting" = "{key} = {value} · 等待预览绑定";
+"PmxLoadFailed" = "无法加载\n{path}";
+"ParameterRejected" = "参数{path}被拒绝。";
+"SceneSummary" = "{name}\n\n{vertices}个顶点 · {indices}个索引";
+"MaterialSlotListItem" = "{index}  {name}";
+"MoreMaterials" = "\n…以及{count}个";
+"MaterialDetails" = "{name}\n\n源材质槽{index}\n漫反射：{diffuse}\nSphere：{sphere}\nToon：{toon}\n\nCharme材质控件即将支持。";
+"MissingValue" = "—";
+"SceneLoaded" = "已加载{name} · {slots}个材质槽";
+"SceneLoadedWithWarnings" = "已加载{name} · {warnings}个警告";
+"FramePixelFormatUnsupported" = "渲染帧使用了不支持的像素格式。";
+"ColorSpaceUnavailable" = "sRGB色彩空间不可用。";
+"FrameImageCreationFailed" = "无法显示渲染帧。";
+"ShaderReadFailed" = "无法读取{path}。";
+"ShaderCompositionFailed" = "无法检查WGSL Shader。";
+"RendererFailed" = "渲染器遇到错误。";

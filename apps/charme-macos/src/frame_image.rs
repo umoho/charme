@@ -6,6 +6,8 @@ use cacao::{
     objc::{class, msg_send, sel, sel_impl},
 };
 use charme_renderer::{Frame, PixelFormat};
+
+use crate::localization::{self, Key};
 use core_graphics::{
     color_space::{CGColorSpace, kCGColorSpaceSRGB},
     data_provider::CGDataProvider,
@@ -16,7 +18,8 @@ use foreign_types::ForeignType;
 
 pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
     if frame.pixel_format() != PixelFormat::Bgra8Srgb {
-        return Err("the cacao adapter currently requires BGRA8 sRGB frames".to_owned());
+        eprintln!("The cacao adapter requires BGRA8 sRGB frames");
+        return Err(localization::text(Key::FramePixelFormatUnsupported).to_owned());
     }
 
     let width = frame.width() as usize;
@@ -24,8 +27,11 @@ pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
     let bytes_per_row = frame.bytes_per_row();
     let pixels = frame.into_pixels();
     let provider = CGDataProvider::from_buffer(Arc::new(pixels));
-    let color_space = unsafe { CGColorSpace::create_with_name(kCGColorSpaceSRGB) }
-        .ok_or_else(|| "the sRGB color space is unavailable".to_owned())?;
+    let color_space =
+        unsafe { CGColorSpace::create_with_name(kCGColorSpaceSRGB) }.ok_or_else(|| {
+            eprintln!("The sRGB color space is unavailable");
+            localization::text(Key::ColorSpaceUnavailable).to_owned()
+        })?;
     let bitmap_info = CGImageAlphaInfo::CGImageAlphaPremultipliedFirst as u32
         | CGImageByteOrderInfo::CGImageByteOrder32Little as u32;
     let cg_image = CGImage::new(
@@ -58,7 +64,8 @@ pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
             size: logical_size
         ];
         if image.is_null() {
-            return Err("AppKit could not create an image from the rendered frame".to_owned());
+            eprintln!("AppKit could not create an image from the rendered frame");
+            return Err(localization::text(Key::FrameImageCreationFailed).to_owned());
         }
         Image::with(image)
     };

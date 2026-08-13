@@ -1,5 +1,6 @@
 /* Charme application strings. UTF-8. */
 
+"AppName" = "Charme";
 "About" = "About Charme";
 "Services" = "Services";
 "HideApp" = "Hide Charme";
@@ -59,3 +60,33 @@
 "ViewMenu" = "View";
 "WindowMenu" = "Window";
 "BringAllToFront" = "Bring All to Front";
+"EnterFullScreen" = "Enter Full Screen";
+"SaveProjectFailed" = "Could not save the project.";
+"InvalidProjectFile" = "Please choose a .charme project file.\n\n{path}";
+"OpenProjectFailed" = "Could not open the project.";
+"UntitledCharacter" = "Untitled Character";
+"UntitledProject" = "Untitled Project";
+"RecentProjectTitle" = "{name} · {path}";
+"FrameStatus" = "Frame {sequence} · {width}×{height}px · Drag to rotate · Scroll to zoom";
+"LoadingPmx" = "Loading…\n{path}";
+"ShaderErrorDetails" = "{path}\n\n{error}";
+"ShaderSummary" = "{file_name}\n{parameter_blocks} parameter blocks · {diagnostics} diagnostics";
+"ShaderSummaryWithNonScalar" = "{file_name}\n{parameter_blocks} parameter blocks · {diagnostics} diagnostics · {non_scalar_fields} non-scalar fields";
+"ShaderReflected" = "Reflected {file_name} · {controls} scalar controls";
+"ParameterUpdated" = "{key} = {value} · Document modified · Preview updated";
+"ParameterWaiting" = "{key} = {value} · Waiting for preview binding";
+"PmxLoadFailed" = "Could not load\n{path}";
+"ParameterRejected" = "Parameter {path} was rejected.";
+"SceneSummary" = "{name}\n\n{vertices} vertices · {indices} indices";
+"MaterialSlotListItem" = "{index}  {name}";
+"MoreMaterials" = "\n…and {count} more";
+"MaterialDetails" = "{name}\n\nSource material slot {index}\nDiffuse: {diffuse}\nSphere: {sphere}\nToon: {toon}\n\nCharme material controls are coming soon.";
+"MissingValue" = "—";
+"SceneLoaded" = "Loaded {name} · {slots} material slots";
+"SceneLoadedWithWarnings" = "Loaded {name} · {warnings} warnings";
+"FramePixelFormatUnsupported" = "The rendered frame uses an unsupported pixel format.";
+"ColorSpaceUnavailable" = "The sRGB color space is unavailable.";
+"FrameImageCreationFailed" = "The rendered frame could not be displayed.";
+"ShaderReadFailed" = "Could not read {path}.";
+"ShaderCompositionFailed" = "The WGSL Shader could not be inspected.";
+"RendererFailed" = "The renderer encountered an error.";
