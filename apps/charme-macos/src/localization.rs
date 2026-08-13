@@ -1,10 +1,34 @@
+use std::sync::OnceLock;
+
+use cacao::{
+    foundation::{NSString, id},
+    objc::{class, msg_send, sel, sel_impl},
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Locale {
     ZhCn,
+    EnUs,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Key {
+    About,
+    Services,
+    HideApp,
+    HideOthers,
+    ShowAll,
+    Quit,
+    CloseWindow,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    EnterFullScreen,
+    Minimize,
+    Zoom,
     OpenProject,
     NewProject,
     StartupTitle,
@@ -37,6 +61,7 @@ pub(crate) enum Key {
     FileMenu,
     OpenProjectMenu,
     NewProjectMenu,
+    ImportMenu,
     ImportPmxMenu,
     InspectShaderMenu,
     EditMenu,
@@ -44,12 +69,45 @@ pub(crate) enum Key {
     WindowMenu,
 }
 
+/// Resolves the first preferred macOS language once per application launch.
 pub(crate) fn current() -> Locale {
-    Locale::ZhCn
+    static CURRENT: OnceLock<Locale> = OnceLock::new();
+    *CURRENT.get_or_init(detect)
+}
+
+fn detect() -> Locale {
+    let languages: id = unsafe { msg_send![class!(NSLocale), preferredLanguages] };
+    let first: id = unsafe { msg_send![languages, firstObject] };
+    if first.is_null() {
+        return Locale::EnUs;
+    }
+
+    let language = NSString::retain(first).to_string();
+    if language.starts_with("zh") {
+        Locale::ZhCn
+    } else {
+        Locale::EnUs
+    }
 }
 
 pub(crate) fn text(key: Key) -> &'static str {
     match (current(), key) {
+        (Locale::ZhCn, Key::About) => "关于Charme",
+        (Locale::ZhCn, Key::Services) => "服务",
+        (Locale::ZhCn, Key::HideApp) => "隐藏Charme",
+        (Locale::ZhCn, Key::HideOthers) => "隐藏其他",
+        (Locale::ZhCn, Key::ShowAll) => "显示全部",
+        (Locale::ZhCn, Key::Quit) => "退出Charme",
+        (Locale::ZhCn, Key::CloseWindow) => "关闭窗口",
+        (Locale::ZhCn, Key::Undo) => "撤销",
+        (Locale::ZhCn, Key::Redo) => "重做",
+        (Locale::ZhCn, Key::Cut) => "剪切",
+        (Locale::ZhCn, Key::Copy) => "复制",
+        (Locale::ZhCn, Key::Paste) => "粘贴",
+        (Locale::ZhCn, Key::SelectAll) => "全选",
+        (Locale::ZhCn, Key::EnterFullScreen) => "进入全屏",
+        (Locale::ZhCn, Key::Minimize) => "最小化",
+        (Locale::ZhCn, Key::Zoom) => "缩放",
         (Locale::ZhCn, Key::OpenProject) => "打开项目",
         (Locale::ZhCn, Key::NewProject) => "新建项目",
         (Locale::ZhCn, Key::StartupTitle) => "开始使用Charme",
@@ -82,10 +140,72 @@ pub(crate) fn text(key: Key) -> &'static str {
         (Locale::ZhCn, Key::FileMenu) => "文件",
         (Locale::ZhCn, Key::OpenProjectMenu) => "打开项目…",
         (Locale::ZhCn, Key::NewProjectMenu) => "新建项目",
-        (Locale::ZhCn, Key::ImportPmxMenu) => "导入PMX…",
+        (Locale::ZhCn, Key::ImportMenu) => "导入…",
+        (Locale::ZhCn, Key::ImportPmxMenu) => "PMX…",
         (Locale::ZhCn, Key::InspectShaderMenu) => "检查WGSLShader…",
         (Locale::ZhCn, Key::EditMenu) => "编辑",
         (Locale::ZhCn, Key::ViewMenu) => "视图",
         (Locale::ZhCn, Key::WindowMenu) => "窗口",
+
+        (Locale::EnUs, Key::About) => "About Charme",
+        (Locale::EnUs, Key::Services) => "Services",
+        (Locale::EnUs, Key::HideApp) => "Hide Charme",
+        (Locale::EnUs, Key::HideOthers) => "Hide Others",
+        (Locale::EnUs, Key::ShowAll) => "Show All",
+        (Locale::EnUs, Key::Quit) => "Quit Charme",
+        (Locale::EnUs, Key::CloseWindow) => "Close Window",
+        (Locale::EnUs, Key::Undo) => "Undo",
+        (Locale::EnUs, Key::Redo) => "Redo",
+        (Locale::EnUs, Key::Cut) => "Cut",
+        (Locale::EnUs, Key::Copy) => "Copy",
+        (Locale::EnUs, Key::Paste) => "Paste",
+        (Locale::EnUs, Key::SelectAll) => "Select All",
+        (Locale::EnUs, Key::EnterFullScreen) => "Enter Full Screen",
+        (Locale::EnUs, Key::Minimize) => "Minimize",
+        (Locale::EnUs, Key::Zoom) => "Zoom",
+        (Locale::EnUs, Key::OpenProject) => "Open Project",
+        (Locale::EnUs, Key::NewProject) => "New Project",
+        (Locale::EnUs, Key::StartupTitle) => "Start Using Charme",
+        (Locale::EnUs, Key::StartupSubtitle) => {
+            "Open or create a project to start editing character materials"
+        }
+        (Locale::EnUs, Key::StartupFormats) => "Supports .charme project files",
+        (Locale::EnUs, Key::RecentProjects) => "Recent Projects",
+        (Locale::EnUs, Key::ProjectFallback) => "Charme Project",
+        (Locale::EnUs, Key::Scene) => "Scene",
+        (Locale::EnUs, Key::EmptyScene) => "No character imported\n\nChoose “Import PMX” to begin.",
+        (Locale::EnUs, Key::Materials) => "Material Slots",
+        (Locale::EnUs, Key::EmptyMaterials) => "No material slots",
+        (Locale::EnUs, Key::Inspector) => "Inspector",
+        (Locale::EnUs, Key::InspectorBody) => {
+            "Materials and Shader parameters will appear here after opening a file."
+        }
+        (Locale::EnUs, Key::Brightness) => "Viewport Brightness",
+        (Locale::EnUs, Key::RendererStarting) => "Starting renderer…",
+        (Locale::EnUs, Key::ProjectOpened) => "Project opened",
+        (Locale::EnUs, Key::WaitingCharacter) => "Waiting for character model…",
+        (Locale::EnUs, Key::LoadingMaterials) => "Loading material slots…",
+        (Locale::EnUs, Key::LoadingPmxTextures) => "Loading PMX and textures…",
+        (Locale::EnUs, Key::InspectingShader) => "Inspecting Shader…",
+        (Locale::EnUs, Key::ShaderError) => "Shader Error",
+        (Locale::EnUs, Key::ReflectionFailed) => "WGSL reflection failed",
+        (Locale::EnUs, Key::MaterialInspector) => "Material Inspector",
+        (Locale::EnUs, Key::WgslShader) => "WGSL Shader",
+        (Locale::EnUs, Key::NoMaterials) => "No material slots",
+        (Locale::EnUs, Key::ErrorPrefix) => "Error: ",
+        (Locale::EnUs, Key::ChooseProjectMessage) => "Choose a .charme project file.",
+        (Locale::EnUs, Key::ChoosePmxMessage) => {
+            "Choose a PMX character model to import into the current project."
+        }
+        (Locale::EnUs, Key::ChooseShaderMessage) => "Choose a WGSL material Shader to inspect.",
+        (Locale::EnUs, Key::FileMenu) => "File",
+        (Locale::EnUs, Key::OpenProjectMenu) => "Open Project…",
+        (Locale::EnUs, Key::NewProjectMenu) => "New Project",
+        (Locale::EnUs, Key::ImportMenu) => "Import…",
+        (Locale::EnUs, Key::ImportPmxMenu) => "PMX…",
+        (Locale::EnUs, Key::InspectShaderMenu) => "Inspect WGSL Shader…",
+        (Locale::EnUs, Key::EditMenu) => "Edit",
+        (Locale::EnUs, Key::ViewMenu) => "View",
+        (Locale::EnUs, Key::WindowMenu) => "Window",
     }
 }

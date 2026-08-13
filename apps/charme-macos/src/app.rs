@@ -20,7 +20,7 @@ use cacao::{
     color::{Color, Theme},
     defaults::{UserDefaults, Value},
     filesystem::FileSelectPanel,
-    foundation::{BOOL, NO, YES, NSString, id, nil},
+    foundation::{BOOL, NO, NSString, YES, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     notification_center::Dispatcher,
@@ -120,6 +120,7 @@ impl CharmeApp {
 impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         App::set_menu(menus());
+        localize_standard_menu_items();
         set_application_menu_name();
         #[cfg(feature = "debug-ui")]
         if !matches!(self.debug_state, DebugState::Startup) {
@@ -1622,6 +1623,9 @@ fn menus() -> Vec<Menu> {
                     .action(|| {
                         App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
                     }),
+                MenuItem::new(localization::text(Key::ImportMenu)),
+                // This item is moved below into the Import submenu after AppKit
+                // has installed the menu hierarchy.
                 MenuItem::new(localization::text(Key::ImportPmxMenu)).action(|| {
                     App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
                 }),
@@ -1638,7 +1642,11 @@ fn menus() -> Vec<Menu> {
                 MenuItem::Undo,
                 MenuItem::Redo,
                 MenuItem::Separator,
+                MenuItem::Cut,
                 MenuItem::Copy,
+                MenuItem::Paste,
+                MenuItem::Separator,
+                MenuItem::SelectAll,
             ],
         ),
         Menu::new(
@@ -1650,6 +1658,93 @@ fn menus() -> Vec<Menu> {
             vec![MenuItem::Minimize, MenuItem::Zoom],
         ),
     ]
+}
+
+fn localize_standard_menu_items() {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        if main_menu.is_null() {
+            return;
+        }
+
+        let app_menu_item: id = msg_send![main_menu, itemAtIndex: 0];
+        let app_menu: id = msg_send![app_menu_item, submenu];
+        set_menu_item_title(app_menu, 0, Key::About);
+        set_menu_item_title(app_menu, 2, Key::Services);
+        set_menu_item_title(app_menu, 4, Key::HideApp);
+        set_menu_item_title(app_menu, 5, Key::HideOthers);
+        set_menu_item_title(app_menu, 6, Key::ShowAll);
+        set_menu_item_title(app_menu, 8, Key::Quit);
+
+        let file_menu_item: id = msg_send![main_menu, itemAtIndex: 1];
+        let file_menu: id = msg_send![file_menu_item, submenu];
+        install_import_submenu(file_menu);
+        set_menu_item_title(file_menu, 5, Key::CloseWindow);
+
+        let edit_menu_item: id = msg_send![main_menu, itemAtIndex: 2];
+        let edit_menu: id = msg_send![edit_menu_item, submenu];
+        set_menu_item_title(edit_menu, 0, Key::Undo);
+        set_menu_item_title(edit_menu, 1, Key::Redo);
+        set_menu_item_title(edit_menu, 3, Key::Cut);
+        set_menu_item_title(edit_menu, 4, Key::Copy);
+        set_menu_item_title(edit_menu, 5, Key::Paste);
+        set_menu_item_title(edit_menu, 7, Key::SelectAll);
+
+        let view_menu_item: id = msg_send![main_menu, itemAtIndex: 3];
+        let view_menu: id = msg_send![view_menu_item, submenu];
+        set_menu_item_title(view_menu, 0, Key::EnterFullScreen);
+
+        let window_menu_item: id = msg_send![main_menu, itemAtIndex: 4];
+        let window_menu: id = msg_send![window_menu_item, submenu];
+        set_menu_item_title(window_menu, 0, Key::Minimize);
+        set_menu_item_title(window_menu, 1, Key::Zoom);
+    }
+}
+
+fn set_menu_item_title(menu: id, index: usize, key: Key) {
+    if menu.is_null() {
+        return;
+    }
+    unsafe {
+        let item: id = msg_send![menu, itemAtIndex: index];
+        if item.is_null() {
+            return;
+        }
+        let title = NSString::new(localization::text(key));
+        let _: () = msg_send![item, setTitle: &*title];
+    }
+}
+
+fn install_import_submenu(file_menu: id) {
+    if file_menu.is_null() {
+        return;
+    }
+    unsafe {
+        // Cacao 0.3 does not expose submenu construction. The PMX item is
+        // created normally so its Rust callback remains owned by Cacao, then
+        // moved under the localized Import item at runtime.
+        let parent: id = msg_send![file_menu, itemAtIndex: 2];
+        let child: id = msg_send![file_menu, itemAtIndex: 3];
+        if parent.is_null() || child.is_null() {
+            return;
+        }
+
+        let menu_class = class!(NSMenu);
+        let allocated: id = msg_send![menu_class, alloc];
+        let title = NSString::new(localization::text(Key::ImportMenu));
+        let submenu: id = msg_send![allocated, initWithTitle: &*title];
+        if submenu.is_null() {
+            return;
+        }
+        // Keep the Cacao callback alive while moving the item between menus.
+        let _: () = msg_send![child, retain];
+        let _: () = msg_send![file_menu, removeItemAtIndex: 3usize];
+        let _: () = msg_send![submenu, addItem: child];
+        let _: () = msg_send![parent, setSubmenu: submenu];
+        let _: () = msg_send![child, release];
+        let _: () = msg_send![submenu, release];
+    }
 }
 
 fn set_application_menu_name() {
