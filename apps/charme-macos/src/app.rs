@@ -7,7 +7,7 @@ use std::{
 
 use cacao::{
     appkit::{
-        App, AppDelegate,
+        Alert, App, AppDelegate,
         window::{Window, WindowConfig, WindowToolbarStyle},
     },
     defaults::{UserDefaults, Value},
@@ -404,9 +404,7 @@ impl CharmeApp {
     }
 
     fn show_startup_error(&self, error: &str) {
-        if let Some(startup) = self.startup.delegate.as_ref() {
-            startup.show_error(error);
-        }
+        Alert::new(localization::text(Key::AppName), error).show();
     }
 }
 

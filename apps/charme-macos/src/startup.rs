@@ -34,7 +34,6 @@ pub(crate) struct StartupWindow {
     recent_names: Vec<Label>,
     recent_paths: Vec<Label>,
     recent_icons: Vec<ImageView>,
-    status: Label,
 }
 
 impl StartupWindow {
@@ -68,8 +67,6 @@ impl StartupWindow {
             Color::LabelSecondary,
         );
         empty_recent.set_text_alignment(TextAlign::Center);
-        let status = label("", 11.0, false, Color::SystemRed);
-
         let mut open_button = Button::new(localization::text(Key::OpenProject));
         open_button.set_bezel_style(BezelStyle::Rounded);
         open_button.set_key_equivalent("o");
@@ -149,12 +146,7 @@ impl StartupWindow {
             recent_names,
             recent_paths,
             recent_icons,
-            status,
         }
-    }
-
-    pub(crate) fn show_error(&self, error: &str) {
-        self.status.set_text(error);
     }
 }
 
@@ -173,12 +165,7 @@ impl WindowDelegate for StartupWindow {
         window.set_minimum_content_size(560.0, 560.0);
         window.set_content_view(&self.content);
 
-        for label in [
-            &self.title,
-            &self.subtitle,
-            &self.recent_heading,
-            &self.status,
-        ] {
+        for label in [&self.title, &self.subtitle, &self.recent_heading] {
             self.content.add_subview(label);
         }
         self.content.add_subview(&self.recent_scroll);
@@ -266,18 +253,6 @@ impl WindowDelegate for StartupWindow {
                 .offset(20.0),
             self.open_button.width.constraint_equal_to_constant(140.0),
             self.open_button.height.constraint_equal_to_constant(42.0),
-            self.status
-                .leading
-                .constraint_equal_to(&self.content.leading)
-                .offset(72.0),
-            self.status
-                .trailing
-                .constraint_equal_to(&self.content.trailing)
-                .offset(-72.0),
-            self.status
-                .bottom
-                .constraint_equal_to(&self.content.bottom)
-                .offset(-12.0),
         ];
         for (index, (((button, name), path), icon)) in self
             .recent_buttons
