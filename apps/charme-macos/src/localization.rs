@@ -80,6 +80,8 @@ localization_keys!(
     NewProjectMenu,
     RecentProjectsMenu,
     NoRecentProjects,
+    NoRecentProjectsHint,
+    RecentProjectRow,
     ImportMenu,
     ImportPmxMenu,
     SaveProjectMenu,

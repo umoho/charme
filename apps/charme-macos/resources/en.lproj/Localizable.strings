@@ -51,6 +51,8 @@
 "NewProjectMenu" = "New Project";
 "RecentProjectsMenu" = "Open Recent";
 "NoRecentProjects" = "No Recent Projects";
+"NoRecentProjectsHint" = "No recent projects\nOpen a .charme project and it will appear here.";
+"RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "Import…";
 "ImportPmxMenu" = "PMX…";
 "SaveProjectMenu" = "Save";

@@ -51,6 +51,8 @@
 "NewProjectMenu" = "新建项目";
 "RecentProjectsMenu" = "打开最近项目";
 "NoRecentProjects" = "暂无最近项目";
+"NoRecentProjectsHint" = "暂无最近项目\n打开一个 .charme 项目后会显示在这里。";
+"RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "导入…";
 "ImportPmxMenu" = "PMX…";
 "SaveProjectMenu" = "保存";
