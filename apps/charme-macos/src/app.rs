@@ -20,7 +20,7 @@ use cacao::{
     color::{Color, Theme},
     defaults::{UserDefaults, Value},
     filesystem::FileSelectPanel,
-    foundation::{BOOL, NO, YES, id, nil},
+    foundation::{BOOL, NO, YES, NSString, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     notification_center::Dispatcher,
@@ -120,6 +120,7 @@ impl CharmeApp {
 impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         App::set_menu(menus());
+        set_application_menu_name();
         #[cfg(feature = "debug-ui")]
         if !matches!(self.debug_state, DebugState::Startup) {
             self.ensure_editor();
@@ -1597,7 +1598,7 @@ fn label(text: &str, size: f64, bold: bool, color: Color) -> Label {
 fn menus() -> Vec<Menu> {
     vec![
         Menu::new(
-            "",
+            "Charme",
             vec![
                 MenuItem::About("Charme".to_owned()),
                 MenuItem::Separator,
@@ -1649,6 +1650,16 @@ fn menus() -> Vec<Menu> {
             vec![MenuItem::Minimize, MenuItem::Zoom],
         ),
     ]
+}
+
+fn set_application_menu_name() {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        let app_menu_item: id = msg_send![main_menu, itemAtIndex: 0];
+        let title = NSString::new("Charme");
+        let _: () = msg_send![app_menu_item, setTitle: &*title];
+    }
 }
 
 fn activate_app() {
