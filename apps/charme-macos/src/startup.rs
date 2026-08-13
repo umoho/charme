@@ -5,11 +5,9 @@ use cacao::{
     },
     button::{BezelStyle, Button},
     color::Color,
-    foundation::id,
     image::{Image, MacSystemIcon},
     layout::{Layout, LayoutConstraint},
-    objc::{msg_send, sel, sel_impl},
-    text::{Font, Label, TextAlign},
+    text::{Label, TextAlign},
     view::View,
 };
 
@@ -18,20 +16,6 @@ use crate::{
     localization::{self, Key},
     ui::{label, panel},
 };
-
-fn style_action_button(button: &Button) {
-    button.set_bezel_style(BezelStyle::ShadowlessSquare);
-    button.set_background_color(Color::SystemFillSecondary);
-    button.set_font(Font::system(13.0));
-    button.set_text_color(Color::Label);
-    button.objc.with_mut(|object| unsafe {
-        let tint: id = Color::SystemBlue.into();
-        let _: () = msg_send![object, setContentTintColor: tint];
-        // NSImageAbove keeps the icon and title visually close to the IntelliJ-style
-        // action tiles while retaining a native NSButton for keyboard access.
-        let _: () = msg_send![object, setImagePosition: 5usize];
-    });
-}
 
 pub(crate) struct StartupWindow {
     content: View,
@@ -88,15 +72,14 @@ impl StartupWindow {
         let status = label("", 11.0, false, Color::SystemRed);
 
         let mut open_button = Button::new(localization::text(Key::OpenProject));
-        open_button.set_image(Image::system_icon(MacSystemIcon::Folder));
-        style_action_button(&open_button);
+        open_button.set_bezel_style(BezelStyle::Rounded);
         open_button.set_key_equivalent("o");
         open_button.set_action(|| {
             App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
         });
         let mut new_button = Button::new(localization::text(Key::NewProject));
-        new_button.set_image(Image::system_icon(MacSystemIcon::Add));
-        style_action_button(&new_button);
+        new_button.set_bordered(false);
+        new_button.set_text_color(Color::SystemBlue);
         new_button.set_action(|| {
             App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
         });
@@ -248,8 +231,8 @@ impl WindowDelegate for StartupWindow {
                 .top
                 .constraint_equal_to(&self.divider.bottom)
                 .offset(16.0),
-            self.new_button.width.constraint_equal_to_constant(112.0),
-            self.new_button.height.constraint_equal_to_constant(88.0),
+            self.new_button.width.constraint_equal_to_constant(88.0),
+            self.new_button.height.constraint_equal_to_constant(34.0),
             self.open_button
                 .center_x
                 .constraint_equal_to(&self.content.center_x)
@@ -258,8 +241,8 @@ impl WindowDelegate for StartupWindow {
                 .top
                 .constraint_equal_to(&self.divider.bottom)
                 .offset(16.0),
-            self.open_button.width.constraint_equal_to_constant(112.0),
-            self.open_button.height.constraint_equal_to_constant(88.0),
+            self.open_button.width.constraint_equal_to_constant(100.0),
+            self.open_button.height.constraint_equal_to_constant(34.0),
             self.status
                 .leading
                 .constraint_equal_to(&self.content.leading)

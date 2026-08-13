@@ -16,8 +16,8 @@
 "SelectAll" = "Select All";
 "Minimize" = "Minimize";
 "Zoom" = "Zoom";
-"OpenProject" = "Open Project";
-"NewProject" = "New Project";
+"OpenProject" = "Open";
+"NewProject" = "New";
 "StartupTitle" = "Start Using Charme";
 "StartupSubtitle" = "Open or create a project to start editing character materials";
 "StartupFormats" = "Supports .charme project files";

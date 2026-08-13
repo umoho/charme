@@ -16,8 +16,8 @@
 "SelectAll" = "全选";
 "Minimize" = "最小化";
 "Zoom" = "缩放";
-"OpenProject" = "打开项目";
-"NewProject" = "新建项目";
+"OpenProject" = "打开";
+"NewProject" = "新建";
 "StartupTitle" = "开始使用Charme";
 "StartupSubtitle" = "打开或新建一个项目以开始编辑角色材质";
 "StartupFormats" = "支持.charme项目文件";
