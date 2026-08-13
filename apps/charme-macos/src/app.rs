@@ -1623,7 +1623,7 @@ fn menus() -> Vec<Menu> {
                     .action(|| {
                         App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
                     }),
-                MenuItem::new(localization::text(Key::ImportMenu)),
+                MenuItem::new(localization::text(Key::ImportMenu)).action(|| {}),
                 // This item is moved below into the Import submenu after AppKit
                 // has installed the menu hierarchy.
                 MenuItem::new(localization::text(Key::ImportPmxMenu)).action(|| {
@@ -1670,50 +1670,148 @@ fn localize_standard_menu_items() {
 
         let app_menu_item: id = msg_send![main_menu, itemAtIndex: 0];
         let app_menu: id = msg_send![app_menu_item, submenu];
-        set_menu_item_title(app_menu, 0, Key::About);
-        set_menu_item_title(app_menu, 2, Key::Services);
-        set_menu_item_title(app_menu, 4, Key::HideApp);
-        set_menu_item_title(app_menu, 5, Key::HideOthers);
-        set_menu_item_title(app_menu, 6, Key::ShowAll);
-        set_menu_item_title(app_menu, 8, Key::Quit);
+        localize_menu_items(app_menu);
 
         let file_menu_item: id = msg_send![main_menu, itemAtIndex: 1];
         let file_menu: id = msg_send![file_menu_item, submenu];
         install_import_submenu(file_menu);
-        set_menu_item_title(file_menu, 5, Key::CloseWindow);
+        localize_menu_items(file_menu);
 
         let edit_menu_item: id = msg_send![main_menu, itemAtIndex: 2];
         let edit_menu: id = msg_send![edit_menu_item, submenu];
-        set_menu_item_title(edit_menu, 0, Key::Undo);
-        set_menu_item_title(edit_menu, 1, Key::Redo);
-        set_menu_item_title(edit_menu, 3, Key::Cut);
-        set_menu_item_title(edit_menu, 4, Key::Copy);
-        set_menu_item_title(edit_menu, 5, Key::Paste);
-        set_menu_item_title(edit_menu, 7, Key::SelectAll);
+        localize_menu_items(edit_menu);
 
         let view_menu_item: id = msg_send![main_menu, itemAtIndex: 3];
         let view_menu: id = msg_send![view_menu_item, submenu];
-        set_menu_item_title(view_menu, 0, Key::EnterFullScreen);
+        localize_menu_items(view_menu);
 
         let window_menu_item: id = msg_send![main_menu, itemAtIndex: 4];
         let window_menu: id = msg_send![window_menu_item, submenu];
-        set_menu_item_title(window_menu, 0, Key::Minimize);
-        set_menu_item_title(window_menu, 1, Key::Zoom);
+        localize_menu_items(window_menu);
+
+        install_menu_localization_delegates(main_menu);
     }
 }
 
-fn set_menu_item_title(menu: id, index: usize, key: Key) {
+fn localize_menu_items(menu: id) {
     if menu.is_null() {
         return;
     }
     unsafe {
-        let item: id = msg_send![menu, itemAtIndex: index];
-        if item.is_null() {
-            return;
+        let count: usize = msg_send![menu, numberOfItems];
+        for index in (0..count).rev() {
+            let item: id = msg_send![menu, itemAtIndex: index];
+            if item.is_null() {
+                continue;
+            }
+            let item_title: id = msg_send![item, title];
+            if item_title.is_null() {
+                continue;
+            }
+            let title = NSString::retain(item_title).to_string();
+            if is_unwanted_text_menu_item(&title) {
+                let _: () = msg_send![menu, removeItemAtIndex: index];
+                continue;
+            }
+            if let Some(key) = localized_standard_title(&title) {
+                let localized = NSString::new(localization::text(key));
+                let _: () = msg_send![item, setTitle: &*localized];
+            }
+            let submenu: id = msg_send![item, submenu];
+            if !submenu.is_null() {
+                localize_menu_items(submenu);
+            }
         }
-        let title = NSString::new(localization::text(key));
-        let _: () = msg_send![item, setTitle: &*title];
     }
+}
+
+fn localized_standard_title(title: &str) -> Option<Key> {
+    match title {
+        "About Charme" | "关于Charme" => Some(Key::About),
+        "Services" | "服务" => Some(Key::Services),
+        "Hide Charme" | "隐藏Charme" => Some(Key::HideApp),
+        "Hide Others" | "隐藏其他" => Some(Key::HideOthers),
+        "Show All" | "显示全部" => Some(Key::ShowAll),
+        "Quit Charme" | "退出Charme" => Some(Key::Quit),
+        "Close Window" | "关闭窗口" => Some(Key::CloseWindow),
+        "Undo" | "撤销" => Some(Key::Undo),
+        "Redo" | "重做" => Some(Key::Redo),
+        "Cut" | "剪切" => Some(Key::Cut),
+        "Copy" | "复制" => Some(Key::Copy),
+        "Paste" | "粘贴" => Some(Key::Paste),
+        "Select All" | "全选" => Some(Key::SelectAll),
+        "Enter Full Screen" | "进入全屏" => Some(Key::EnterFullScreen),
+        "Minimize" | "最小化" => Some(Key::Minimize),
+        "Zoom" | "缩放" => Some(Key::Zoom),
+        _ => None,
+    }
+}
+
+fn is_unwanted_text_menu_item(title: &str) -> bool {
+    matches!(
+        title,
+        "AutoFill"
+            | "自动填充"
+            | "Start Dictation"
+            | "Start Dictation…"
+            | "开始听写"
+            | "开始听写…"
+            | "Emoji & Symbols"
+            | "表情符号与符号"
+    )
+}
+
+fn install_menu_localization_delegates(main_menu: id) {
+    if main_menu.is_null() {
+        return;
+    }
+    unsafe {
+        let count: usize = msg_send![main_menu, numberOfItems];
+        let delegate = menu_localization_delegate();
+        for index in 0..count {
+            let item: id = msg_send![main_menu, itemAtIndex: index];
+            let submenu: id = msg_send![item, submenu];
+            if !submenu.is_null() {
+                let _: () = msg_send![submenu, setDelegate: delegate];
+            }
+        }
+    }
+}
+
+fn menu_localization_delegate() -> id {
+    static DELEGATE: OnceLock<usize> = OnceLock::new();
+    *DELEGATE.get_or_init(|| unsafe {
+        let delegate: id = msg_send![menu_localization_delegate_class(), new];
+        // NSMenu's delegate is not retained. Keep this object alive for the
+        // lifetime of the process.
+        let _: id = msg_send![delegate, retain];
+        delegate as usize
+    }) as id
+}
+
+fn menu_localization_delegate_class() -> &'static Class {
+    static CLASS: OnceLock<&'static Class> = OnceLock::new();
+    CLASS.get_or_init(|| unsafe {
+        let mut declaration = ClassDecl::new("CharmeMenuLocalizationDelegate", class!(NSObject))
+            .expect("menu localization delegate class is registered only once");
+        declaration.add_method(
+            sel!(menuNeedsUpdate:),
+            menu_needs_update as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(menuWillOpen:),
+            menu_will_open as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.register()
+    })
+}
+
+extern "C" fn menu_needs_update(_: &Object, _: Sel, menu: id) {
+    localize_menu_items(menu);
+}
+
+extern "C" fn menu_will_open(_: &Object, _: Sel, menu: id) {
+    localize_menu_items(menu);
 }
 
 fn install_import_submenu(file_menu: id) {
@@ -1742,6 +1840,7 @@ fn install_import_submenu(file_menu: id) {
         let _: () = msg_send![file_menu, removeItemAtIndex: 3usize];
         let _: () = msg_send![submenu, addItem: child];
         let _: () = msg_send![parent, setSubmenu: submenu];
+        let _: () = msg_send![parent, setEnabled: YES];
         let _: () = msg_send![child, release];
         let _: () = msg_send![submenu, release];
     }
