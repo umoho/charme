@@ -133,7 +133,9 @@ impl CharmeApp {
 impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         App::set_menu(menus());
+        install_file_menu_after_main_menu();
         install_edit_menu_after_main_menu();
+        install_view_menu_after_main_menu();
         install_file_submenus();
         localize_standard_menu_items();
         set_application_menu_name();
@@ -1734,50 +1736,50 @@ fn menus() -> Vec<Menu> {
             ],
         ),
         Menu::new(
-            localization::text(Key::FileMenu),
-            vec![
-                MenuItem::new(localization::text(Key::NewProjectMenu))
-                    .key("n")
-                    .action(|| {
-                        App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
-                    }),
-                MenuItem::new(localization::text(Key::OpenProjectMenu))
-                    .key("o")
-                    .action(|| {
-                        App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
-                    }),
-                MenuItem::new(localization::text(Key::RecentProjectsMenu)).action(|| {}),
-                MenuItem::new(localization::text(Key::ImportMenu)).action(|| {}),
-                MenuItem::new(localization::text(Key::ImportPmxMenu)).action(|| {
-                    App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
-                }),
-                MenuItem::new(localization::text(Key::InspectShaderMenu)).action(|| {
-                    App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);
-                }),
-                MenuItem::Separator,
-                MenuItem::new(localization::text(Key::SaveProjectMenu))
-                    .key("s")
-                    .action(|| {
-                        App::<CharmeApp, Message>::dispatch_main(Message::SaveProject);
-                    }),
-                MenuItem::new(localization::text(Key::SaveAsProjectMenu))
-                    .key("S")
-                    .action(|| {
-                        App::<CharmeApp, Message>::dispatch_main(Message::ChooseSaveProject);
-                    }),
-                MenuItem::Separator,
-                MenuItem::CloseWindow,
-            ],
-        ),
-        Menu::new(
-            localization::text(Key::ViewMenu),
-            vec![MenuItem::EnterFullScreen],
-        ),
-        Menu::new(
             localization::text(Key::WindowMenu),
             vec![MenuItem::Minimize, MenuItem::Zoom],
         ),
     ]
+}
+
+fn install_file_menu_after_main_menu() {
+    let file_menu = Menu::new(
+        localization::text(Key::FileMenu),
+        vec![
+            MenuItem::new(localization::text(Key::NewProjectMenu))
+                .key("n")
+                .action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::NewProject);
+                }),
+            MenuItem::new(localization::text(Key::OpenProjectMenu))
+                .key("o")
+                .action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::ChooseProject);
+                }),
+            MenuItem::new(localization::text(Key::RecentProjectsMenu)).action(|| {}),
+            MenuItem::new(localization::text(Key::ImportMenu)).action(|| {}),
+            MenuItem::new(localization::text(Key::ImportPmxMenu)).action(|| {
+                App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
+            }),
+            MenuItem::new(localization::text(Key::InspectShaderMenu)).action(|| {
+                App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);
+            }),
+            MenuItem::Separator,
+            MenuItem::new(localization::text(Key::SaveProjectMenu))
+                .key("s")
+                .action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::SaveProject);
+                }),
+            MenuItem::new(localization::text(Key::SaveAsProjectMenu))
+                .key("S")
+                .action(|| {
+                    App::<CharmeApp, Message>::dispatch_main(Message::ChooseSaveProject);
+                }),
+            MenuItem::Separator,
+            MenuItem::CloseWindow,
+        ],
+    );
+    insert_menu_after_main_menu(file_menu, 1);
 }
 
 fn install_edit_menu_after_main_menu() {
@@ -1800,6 +1802,24 @@ fn install_edit_menu_after_main_menu() {
         let item: id = msg_send![class!(NSMenuItem), new];
         let _: () = msg_send![item, setSubmenu: &*edit_menu.0];
         let _: () = msg_send![main_menu, insertItem: item atIndex: 2usize];
+    }
+}
+
+fn install_view_menu_after_main_menu() {
+    let view_menu = Menu::new(
+        localization::text(Key::ViewMenu),
+        vec![MenuItem::EnterFullScreen],
+    );
+    insert_menu_after_main_menu(view_menu, 3);
+}
+
+fn insert_menu_after_main_menu(menu: Menu, index: usize) {
+    unsafe {
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let main_menu: id = msg_send![app, mainMenu];
+        let item: id = msg_send![class!(NSMenuItem), new];
+        let _: () = msg_send![item, setSubmenu: &*menu.0];
+        let _: () = msg_send![main_menu, insertItem: item atIndex: index];
     }
 }
 
@@ -1894,71 +1914,49 @@ fn localize_standard_menu_items() {
         if main_menu.is_null() {
             return;
         }
-        let count: usize = msg_send![main_menu, numberOfItems];
-        for index in 0..count {
-            let item: id = msg_send![main_menu, itemAtIndex: index];
-            let submenu: id = msg_send![item, submenu];
-            localize_menu_items(submenu);
-        }
 
-        // These are Cacao's fixed-position standard items. Set them
-        // explicitly as well as scanning titles, because `Hide` does not
-        // include the application name in Cacao 0.3's title.
+        // All standard menus are inserted after setMainMenu. Their structure
+        // is therefore ours, not AppKit's inferred/default structure. Use
+        // stable positions rather than recognizing whatever text the system
+        // happens to use for a particular language.
         let app_item: id = msg_send![main_menu, itemAtIndex: 0usize];
         let app_menu: id = msg_send![app_item, submenu];
-        set_menu_item_title(app_menu, 4, Key::HideApp);
+        for (index, key) in [
+            (0, Key::About),
+            (2, Key::Services),
+            (4, Key::HideApp),
+            (5, Key::HideOthers),
+            (6, Key::ShowAll),
+            (8, Key::Quit),
+        ] {
+            set_menu_item_title(app_menu, index, key);
+        }
+
+        let file_item: id = msg_send![main_menu, itemAtIndex: 1usize];
+        let file_menu: id = msg_send![file_item, submenu];
+        set_menu_item_title(file_menu, 9, Key::CloseWindow);
+
         let edit_item: id = msg_send![main_menu, itemAtIndex: 2usize];
         let edit_menu: id = msg_send![edit_item, submenu];
-        set_menu_item_title(edit_menu, 0, Key::Undo);
-        set_menu_item_title(edit_menu, 1, Key::Redo);
+        for (index, key) in [
+            (0, Key::Undo),
+            (1, Key::Redo),
+            (3, Key::Cut),
+            (4, Key::Copy),
+            (5, Key::Paste),
+            (7, Key::SelectAll),
+        ] {
+            set_menu_item_title(edit_menu, index, key);
+        }
+
         let view_item: id = msg_send![main_menu, itemAtIndex: 3usize];
         let view_menu: id = msg_send![view_item, submenu];
         set_menu_item_title(view_menu, 0, Key::EnterFullScreen);
-    }
-}
 
-fn localize_menu_items(menu: id) {
-    if menu.is_null() {
-        return;
-    }
-    unsafe {
-        let count: usize = msg_send![menu, numberOfItems];
-        for index in 0..count {
-            let item: id = msg_send![menu, itemAtIndex: index];
-            if item.is_null() {
-                continue;
-            }
-            let title: id = msg_send![item, title];
-            if !title.is_null()
-                && let Some(key) = localized_standard_title(&NSString::retain(title).to_string())
-            {
-                let localized = NSString::new(localization::text(key));
-                let _: () = msg_send![item, setTitle: &*localized];
-            }
-            localize_menu_items(msg_send![item, submenu]);
-        }
-    }
-}
-
-fn localized_standard_title(title: &str) -> Option<Key> {
-    match title {
-        "About Charme" | "关于Charme" => Some(Key::About),
-        "Services" | "服务" => Some(Key::Services),
-        "Hide" | "Hide Charme" | "隐藏Charme" => Some(Key::HideApp),
-        "Hide Others" | "隐藏其他" => Some(Key::HideOthers),
-        "Show All" | "显示全部" => Some(Key::ShowAll),
-        "Quit Charme" | "退出Charme" => Some(Key::Quit),
-        "Close Window" | "关闭窗口" => Some(Key::CloseWindow),
-        "Undo" | "撤销" => Some(Key::Undo),
-        "Redo" | "重做" => Some(Key::Redo),
-        "Cut" | "剪切" => Some(Key::Cut),
-        "Copy" | "复制" => Some(Key::Copy),
-        "Paste" | "粘贴" => Some(Key::Paste),
-        "Select All" | "全选" => Some(Key::SelectAll),
-        "Enter Full Screen" | "进入全屏" => Some(Key::EnterFullScreen),
-        "Minimize" | "最小化" => Some(Key::Minimize),
-        "Zoom" | "缩放" => Some(Key::Zoom),
-        _ => None,
+        let window_item: id = msg_send![main_menu, itemAtIndex: 4usize];
+        let window_menu: id = msg_send![window_item, submenu];
+        set_menu_item_title(window_menu, 0, Key::Minimize);
+        set_menu_item_title(window_menu, 1, Key::Zoom);
     }
 }
 
@@ -1988,41 +1986,27 @@ fn update_menu_state(context: MenuContext, dirty: bool, can_undo: bool, can_redo
         let edit_item: id = msg_send![main_menu, itemAtIndex: 2usize];
         let edit: id = msg_send![edit_item, submenu];
         let editor = context == MenuContext::Editor;
-        set_menu_item_state(file, Key::ImportMenu, editor, editor);
-        set_menu_item_state(file, Key::InspectShaderMenu, editor, editor);
-        set_menu_item_state(file, Key::SaveProjectMenu, editor, editor && dirty);
-        set_menu_item_state(file, Key::SaveAsProjectMenu, editor, editor);
-        set_menu_item_state(edit, Key::Undo, true, can_undo);
-        set_menu_item_state(edit, Key::Redo, true, can_redo);
+        set_menu_item_state(file, 3, editor, editor);
+        set_menu_item_state(file, 4, editor, editor);
+        set_menu_item_state(file, 6, editor, editor && dirty);
+        set_menu_item_state(file, 7, editor, editor);
+        set_menu_item_state(edit, 0, true, can_undo);
+        set_menu_item_state(edit, 1, true, can_redo);
     }
 }
 
-fn set_menu_item_state(menu: id, key: Key, visible: bool, enabled: bool) {
+fn set_menu_item_state(menu: id, index: usize, visible: bool, enabled: bool) {
     unsafe {
-        let Some(item) = find_menu_item(menu, localization::text(key)) else {
+        if menu.is_null() {
             return;
-        };
+        }
+        let item: id = msg_send![menu, itemAtIndex: index];
+        if item.is_null() {
+            return;
+        }
         let _: () = msg_send![item, setHidden: if visible { NO } else { YES }];
         let _: () = msg_send![item, setEnabled: if enabled { YES } else { NO }];
     }
-}
-
-unsafe fn find_menu_item(menu: id, title: &str) -> Option<id> {
-    if menu.is_null() {
-        return None;
-    }
-    let count: usize = msg_send![menu, numberOfItems];
-    for index in 0..count {
-        let item: id = msg_send![menu, itemAtIndex: index];
-        if item.is_null() {
-            continue;
-        }
-        let item_title: id = msg_send![item, title];
-        if !item_title.is_null() && NSString::retain(item_title).to_str() == title {
-            return Some(item);
-        }
-    }
-    None
 }
 
 fn ensure_charme_extension(path: String) -> String {
