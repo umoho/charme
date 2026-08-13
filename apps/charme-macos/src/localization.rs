@@ -72,6 +72,7 @@ pub(crate) enum Key {
     EditMenu,
     ViewMenu,
     WindowMenu,
+    BringAllToFront,
 }
 
 /// Resolves the first preferred macOS language once per application launch.
@@ -156,6 +157,7 @@ pub(crate) fn text(key: Key) -> &'static str {
         (Locale::ZhCn, Key::EditMenu) => "编辑",
         (Locale::ZhCn, Key::ViewMenu) => "视图",
         (Locale::ZhCn, Key::WindowMenu) => "窗口",
+        (Locale::ZhCn, Key::BringAllToFront) => "将所有窗口置于最前",
 
         (Locale::EnUs, Key::About) => "About Charme",
         (Locale::EnUs, Key::Services) => "Services",
@@ -222,5 +224,6 @@ pub(crate) fn text(key: Key) -> &'static str {
         (Locale::EnUs, Key::EditMenu) => "Edit",
         (Locale::EnUs, Key::ViewMenu) => "View",
         (Locale::EnUs, Key::WindowMenu) => "Window",
+        (Locale::EnUs, Key::BringAllToFront) => "Bring All to Front",
     }
 }
