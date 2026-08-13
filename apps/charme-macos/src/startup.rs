@@ -5,9 +5,9 @@ use cacao::{
     },
     button::{BezelStyle, Button},
     color::Color,
-    image::{Image, MacSystemIcon},
+    image::{Image, ImageView, MacSystemIcon},
     layout::{Layout, LayoutConstraint},
-    text::{Label, TextAlign},
+    text::{Label, LineBreakMode, TextAlign},
     view::View,
 };
 
@@ -28,6 +28,9 @@ pub(crate) struct StartupWindow {
     recent_panel: View,
     empty_recent: Label,
     recent_buttons: Vec<Button>,
+    recent_names: Vec<Label>,
+    recent_paths: Vec<Label>,
+    recent_icons: Vec<ImageView>,
     divider: View,
     status: Label,
 }
@@ -86,24 +89,43 @@ impl StartupWindow {
 
         let projects = recent_projects();
         let mut recent_buttons = Vec::new();
+        let mut recent_names = Vec::new();
+        let mut recent_paths = Vec::new();
+        let mut recent_icons = Vec::new();
         for project in projects {
             let name = project
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .unwrap_or(localization::text(Key::ProjectFallback));
-            let title = localization::format(
-                Key::RecentProjectRow,
-                &[("name", &name), ("path", &project.display())],
+            let name_label = label(name, 13.0, true, Color::Label);
+            let path = label(
+                &project.display().to_string(),
+                11.0,
+                false,
+                Color::LabelSecondary,
             );
-            let mut button = Button::new(&title);
-            button.set_image(Image::system_icon(MacSystemIcon::Folder));
+            path.set_line_break_mode(LineBreakMode::TruncateMiddle);
+            path.set_max_number_of_lines(1);
+
+            let icon = ImageView::new();
+            icon.set_image(&Image::system_icon(MacSystemIcon::Folder));
+
+            // Keep the hit target separate from the visible content. NSButton's
+            // image/title layout is platform-controlled and can overlap multiline text.
+            let mut button = Button::new("");
             button.set_bezel_style(BezelStyle::Inline);
             button.set_bordered(false);
-            button.set_text_color(Color::Label);
+            let project_path = project.clone();
             button.set_action(move || {
-                App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(project.clone()));
+                App::<CharmeApp, Message>::dispatch_main(Message::OpenProject(
+                    project_path.clone(),
+                ));
             });
+
             recent_buttons.push(button);
+            recent_names.push(name_label);
+            recent_paths.push(path);
+            recent_icons.push(icon);
         }
         empty_recent.set_hidden(!recent_buttons.is_empty());
 
@@ -118,6 +140,9 @@ impl StartupWindow {
             recent_panel,
             empty_recent,
             recent_buttons,
+            recent_names,
+            recent_paths,
+            recent_icons,
             divider,
             status,
         }
@@ -154,6 +179,15 @@ impl WindowDelegate for StartupWindow {
         }
         self.content.add_subview(&self.recent_panel);
         self.recent_panel.add_subview(&self.empty_recent);
+        for name in &self.recent_names {
+            self.recent_panel.add_subview(name);
+        }
+        for path in &self.recent_paths {
+            self.recent_panel.add_subview(path);
+        }
+        for icon in &self.recent_icons {
+            self.recent_panel.add_subview(icon);
+        }
         for button in &self.recent_buttons {
             self.recent_panel.add_subview(button);
         }
@@ -202,7 +236,7 @@ impl WindowDelegate for StartupWindow {
                 .top
                 .constraint_equal_to(&self.recent_heading.bottom)
                 .offset(10.0),
-            self.recent_panel.height.constraint_equal_to_constant(190.0),
+            self.recent_panel.height.constraint_equal_to_constant(230.0),
             self.empty_recent
                 .center_x
                 .constraint_equal_to(&self.recent_panel.center_x),
@@ -256,21 +290,53 @@ impl WindowDelegate for StartupWindow {
                 .constraint_equal_to(&self.content.bottom)
                 .offset(-12.0),
         ];
-        for (index, button) in self.recent_buttons.iter().enumerate() {
+        for (index, (((button, name), path), icon)) in self
+            .recent_buttons
+            .iter()
+            .zip(&self.recent_names)
+            .zip(&self.recent_paths)
+            .zip(&self.recent_icons)
+            .enumerate()
+        {
+            let row_top = 8.0 + index as f64 * 42.0;
             constraints.extend([
                 button
                     .leading
                     .constraint_equal_to(&self.recent_panel.leading)
-                    .offset(12.0),
+                    .offset(8.0),
                 button
                     .trailing
                     .constraint_equal_to(&self.recent_panel.trailing)
-                    .offset(-12.0),
+                    .offset(-8.0),
                 button
                     .top
                     .constraint_equal_to(&self.recent_panel.top)
-                    .offset(5.0 + index as f64 * 36.0),
-                button.height.constraint_equal_to_constant(34.0),
+                    .offset(row_top),
+                button.height.constraint_equal_to_constant(38.0),
+                icon.leading
+                    .constraint_equal_to(&self.recent_panel.leading)
+                    .offset(16.0),
+                icon.center_y.constraint_equal_to(&name.center_y),
+                icon.width.constraint_equal_to_constant(20.0),
+                icon.height.constraint_equal_to_constant(20.0),
+                name.leading
+                    .constraint_equal_to(&self.recent_panel.leading)
+                    .offset(46.0),
+                name.trailing
+                    .constraint_equal_to(&self.recent_panel.trailing)
+                    .offset(-18.0),
+                name.top
+                    .constraint_equal_to(&self.recent_panel.top)
+                    .offset(row_top + 2.0),
+                name.height.constraint_equal_to_constant(18.0),
+                path.leading
+                    .constraint_equal_to(&self.recent_panel.leading)
+                    .offset(46.0),
+                path.trailing
+                    .constraint_equal_to(&self.recent_panel.trailing)
+                    .offset(-18.0),
+                path.top.constraint_equal_to(&name.bottom),
+                path.height.constraint_equal_to_constant(16.0),
             ]);
         }
         LayoutConstraint::activate(&constraints);
