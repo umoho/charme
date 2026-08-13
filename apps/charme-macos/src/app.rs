@@ -1900,6 +1900,20 @@ fn localize_standard_menu_items() {
             let submenu: id = msg_send![item, submenu];
             localize_menu_items(submenu);
         }
+
+        // These are Cacao's fixed-position standard items. Set them
+        // explicitly as well as scanning titles, because `Hide` does not
+        // include the application name in Cacao 0.3's title.
+        let app_item: id = msg_send![main_menu, itemAtIndex: 0usize];
+        let app_menu: id = msg_send![app_item, submenu];
+        set_menu_item_title(app_menu, 4, Key::HideApp);
+        let edit_item: id = msg_send![main_menu, itemAtIndex: 2usize];
+        let edit_menu: id = msg_send![edit_item, submenu];
+        set_menu_item_title(edit_menu, 0, Key::Undo);
+        set_menu_item_title(edit_menu, 1, Key::Redo);
+        let view_item: id = msg_send![main_menu, itemAtIndex: 3usize];
+        let view_menu: id = msg_send![view_item, submenu];
+        set_menu_item_title(view_menu, 0, Key::EnterFullScreen);
     }
 }
 
@@ -1930,7 +1944,7 @@ fn localized_standard_title(title: &str) -> Option<Key> {
     match title {
         "About Charme" | "关于Charme" => Some(Key::About),
         "Services" | "服务" => Some(Key::Services),
-        "Hide Charme" | "隐藏Charme" => Some(Key::HideApp),
+        "Hide" | "Hide Charme" | "隐藏Charme" => Some(Key::HideApp),
         "Hide Others" | "隐藏其他" => Some(Key::HideOthers),
         "Show All" | "显示全部" => Some(Key::ShowAll),
         "Quit Charme" | "退出Charme" => Some(Key::Quit),
@@ -1945,6 +1959,20 @@ fn localized_standard_title(title: &str) -> Option<Key> {
         "Minimize" | "最小化" => Some(Key::Minimize),
         "Zoom" | "缩放" => Some(Key::Zoom),
         _ => None,
+    }
+}
+
+fn set_menu_item_title(menu: id, index: usize, key: Key) {
+    unsafe {
+        if menu.is_null() {
+            return;
+        }
+        let item: id = msg_send![menu, itemAtIndex: index];
+        if item.is_null() {
+            return;
+        }
+        let title = NSString::new(localization::text(key));
+        let _: () = msg_send![item, setTitle: &*title];
     }
 }
 
