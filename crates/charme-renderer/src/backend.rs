@@ -57,10 +57,7 @@ pub(crate) enum WorkerEvent {
 
 enum Completion {
     Frame,
-    MaterialThumbnail {
-        target: bevy::prelude::Handle<Image>,
-        slot_index: usize,
-    },
+    MaterialThumbnail { slot_index: usize },
 }
 
 pub(crate) fn spawn(
@@ -117,8 +114,8 @@ fn run(
         while let Ok(completion) = completion_rx.try_recv() {
             match completion {
                 Completion::Frame => in_flight = false,
-                Completion::MaterialThumbnail { target, slot_index } => {
-                    backend.finish_material_thumbnail(slot_index, target);
+                Completion::MaterialThumbnail { slot_index } => {
+                    backend.finish_material_thumbnail(slot_index);
                 }
             }
         }
@@ -244,18 +241,23 @@ struct Backend {
     events: Sender<WorkerEvent>,
     completion: Sender<Completion>,
     pending_thumbnails: usize,
-    thumbnail_mesh: bevy::prelude::Handle<Mesh>,
+    shared_material_preview: SharedMaterialPreview,
     material_previews: Vec<MaterialPreview>,
     thumbnail_queue: VecDeque<usize>,
-    retired_thumbnail_targets: Vec<bevy::prelude::Handle<Image>>,
+}
+
+struct SharedMaterialPreview {
+    target: bevy::prelude::Handle<Image>,
+    object: Entity,
+    camera: Entity,
+    _lights: [Entity; 2],
+    _fallback_material: bevy::prelude::Handle<CharmeMaterial>,
 }
 
 struct MaterialPreview {
     slot_index: usize,
-    target: bevy::prelude::Handle<Image>,
     scene_path: PathBuf,
-    camera: Entity,
-    entities: Vec<Entity>,
+    material: bevy::prelude::Handle<CharmeMaterial>,
 }
 
 const MATERIAL_PREVIEW_SIZE: u32 = 64;
@@ -304,6 +306,8 @@ impl Backend {
             orbit,
         );
 
+        let shared_material_preview = spawn_shared_material_preview(&mut app, thumbnail_mesh);
+
         // Make the image and camera visible to the render world before reporting
         // successful initialization.
         app.update();
@@ -323,10 +327,9 @@ impl Backend {
             events,
             completion,
             pending_thumbnails: 0,
-            thumbnail_mesh,
+            shared_material_preview,
             material_previews: Vec::new(),
             thumbnail_queue: VecDeque::new(),
-            retired_thumbnail_targets: Vec::new(),
         })
     }
 
@@ -430,29 +433,12 @@ impl Backend {
 
     fn clear_material_previews(&mut self) {
         self.thumbnail_queue.clear();
-        for preview in self.material_previews.drain(..) {
-            for entity in preview.entities {
-                let _ = self.app.world_mut().despawn(entity);
-            }
-            // A readback may still reference this target. Keep the asset alive
-            // until its completion callback has been observed.
-            self.retired_thumbnail_targets.push(preview.target);
+        self.material_previews.clear();
+        if self.pending_thumbnails == 0 {
+            self.set_shared_preview_material(
+                self.shared_material_preview._fallback_material.clone(),
+            );
         }
-    }
-
-    fn retire_thumbnail_target(&mut self, target: bevy::prelude::Handle<Image>) {
-        let Some(index) = self
-            .retired_thumbnail_targets
-            .iter()
-            .position(|candidate| candidate.id() == target.id())
-        else {
-            return;
-        };
-        let target = self.retired_thumbnail_targets.swap_remove(index);
-        self.app
-            .world_mut()
-            .resource_mut::<Assets<Image>>()
-            .remove(target.id());
     }
 
     fn spawn_material_previews(
@@ -460,99 +446,23 @@ impl Backend {
         scene_path: &std::path::Path,
         materials: &[bevy::prelude::Handle<CharmeMaterial>],
     ) {
-        let render_layers = RenderLayers::layer(MATERIAL_PREVIEW_LAYER);
         for (slot_index, material) in materials.iter().enumerate() {
-            let target = add_thumbnail_target(&mut self.app);
-            // Keep studios spatially separated so every preview camera can use
-            // the shared preview layer without seeing the other slot spheres.
-            let studio_offset = Vec3::new(slot_index as f32 * 10.0, 0.0, 0.0);
-            let camera_transform = material_preview_camera_transform(studio_offset);
-            let total_distance = (camera_transform.translation - studio_offset).length();
-            let mut entities = Vec::with_capacity(4);
-            let world = self.app.world_mut();
-            let object = world
-                .spawn((
-                    Mesh3d(self.thumbnail_mesh.clone()),
-                    MeshMaterial3d(material.clone()),
-                    Transform::from_translation(studio_offset),
-                    render_layers.clone(),
-                ))
-                .id();
-            entities.push(object);
-            let camera = world
-                .spawn((
-                    Camera3d::default(),
-                    Tonemapping::None,
-                    Camera {
-                        clear_color: ClearColorConfig::Custom(Color::NONE),
-                        // Only one thumbnail camera is active at a time. This
-                        // prevents dozens of simultaneous GPU readbacks from
-                        // overwhelming the device on large PMX models.
-                        is_active: false,
-                        ..Default::default()
-                    },
-                    Projection::Perspective(bevy::prelude::PerspectiveProjection {
-                        far: total_distance + 2.0,
-                        near: (total_distance - 2.0).max(0.1),
-                        aspect_ratio: 1.0,
-                        ..Default::default()
-                    }),
-                    RenderTarget::Image(target.clone().into()),
-                    camera_transform,
-                    render_layers.clone(),
-                ))
-                .id();
-            entities.push(camera);
-            let key_light = world
-                .spawn((
-                    bevy::prelude::PointLight {
-                        intensity: 1_200_000.0,
-                        shadow_maps_enabled: true,
-                        ..Default::default()
-                    },
-                    Transform::from_translation(studio_offset + Vec3::new(4.0, 4.0, 2.0)),
-                    render_layers.clone(),
-                ))
-                .id();
-            entities.push(key_light);
-            let fill_light = world
-                .spawn((
-                    bevy::prelude::PointLight {
-                        intensity: 400_000.0,
-                        ..Default::default()
-                    },
-                    Transform::from_translation(studio_offset + Vec3::new(-4.0, 2.0, -2.0)),
-                    render_layers.clone(),
-                ))
-                .id();
-            entities.push(fill_light);
-
             self.material_previews.push(MaterialPreview {
                 slot_index,
-                target,
                 scene_path: scene_path.to_path_buf(),
-                camera,
-                entities,
+                material: material.clone(),
             });
             self.thumbnail_queue.push_back(slot_index);
         }
         self.start_next_thumbnail_readback();
     }
 
-    fn finish_material_thumbnail(
-        &mut self,
-        slot_index: usize,
-        target: bevy::prelude::Handle<Image>,
-    ) {
+    fn finish_material_thumbnail(&mut self, _slot_index: usize) {
         self.pending_thumbnails = self.pending_thumbnails.saturating_sub(1);
-        self.retire_thumbnail_target(target);
-        let camera_entity = self
-            .material_previews
-            .iter()
-            .find(|preview| preview.slot_index == slot_index)
-            .map(|preview| preview.camera);
-        if let Some(camera_entity) = camera_entity
-            && let Some(mut camera) = self.app.world_mut().get_mut::<Camera>(camera_entity)
+        if let Some(mut camera) = self
+            .app
+            .world_mut()
+            .get_mut::<Camera>(self.shared_material_preview.camera)
         {
             camera.is_active = false;
         }
@@ -565,41 +475,46 @@ impl Backend {
         let Some(slot_index) = self.thumbnail_queue.pop_front() else {
             return;
         };
-        let Some((scene_path, target, camera)) = self
+        let Some((scene_path, material)) = self
             .material_previews
             .iter()
             .find(|preview| preview.slot_index == slot_index)
-            .map(|preview| {
-                (
-                    preview.scene_path.clone(),
-                    preview.target.clone(),
-                    preview.camera,
-                )
-            })
+            .map(|preview| (preview.scene_path.clone(), preview.material.clone()))
         else {
             self.start_next_thumbnail_readback();
             return;
         };
-        if let Some(mut camera) = self.app.world_mut().get_mut::<Camera>(camera) {
+        self.set_shared_preview_material(material);
+        if let Some(mut camera) = self
+            .app
+            .world_mut()
+            .get_mut::<Camera>(self.shared_material_preview.camera)
+        {
             camera.is_active = true;
         }
-        self.request_thumbnail_readback(&scene_path, slot_index, target);
+        self.request_thumbnail_readback(&scene_path, slot_index);
     }
 
-    fn request_thumbnail_readback(
-        &mut self,
-        scene_path: &std::path::Path,
-        slot_index: usize,
-        target: bevy::prelude::Handle<Image>,
-    ) {
+    fn set_shared_preview_material(&mut self, material: bevy::prelude::Handle<CharmeMaterial>) {
+        if let Some(mut current) = self
+            .app
+            .world_mut()
+            .get_mut::<MeshMaterial3d<CharmeMaterial>>(self.shared_material_preview.object)
+        {
+            current.0 = material;
+        }
+    }
+
+    fn request_thumbnail_readback(&mut self, scene_path: &std::path::Path, slot_index: usize) {
         let events = self.events.clone();
         let completion = self.completion.clone();
-        let completion_target = target.clone();
         let scene_path = scene_path.to_path_buf();
         self.pending_thumbnails += 1;
         self.app
             .world_mut()
-            .spawn(Readback::texture(target))
+            .spawn(Readback::texture(
+                self.shared_material_preview.target.clone(),
+            ))
             .observe(move |event: On<ReadbackComplete>, mut commands: Commands| {
                 let frame = Frame::new(
                     slot_index as u64,
@@ -615,10 +530,7 @@ impl Backend {
                         frame,
                     },
                 ));
-                let _ = completion.send(Completion::MaterialThumbnail {
-                    target: completion_target.clone(),
-                    slot_index,
-                });
+                let _ = completion.send(Completion::MaterialThumbnail { slot_index });
                 commands.entity(event.entity).despawn();
             });
     }
@@ -762,6 +674,78 @@ fn add_thumbnail_target(app: &mut App) -> bevy::prelude::Handle<Image> {
 
 fn material_preview_camera_transform(offset: Vec3) -> Transform {
     Transform::from_translation(offset + Vec3::new(0.0, 1.5, 2.5)).looking_at(offset, Vec3::Y)
+}
+
+fn spawn_shared_material_preview(
+    app: &mut App,
+    mesh: bevy::prelude::Handle<Mesh>,
+) -> SharedMaterialPreview {
+    let target = add_thumbnail_target(app);
+    let fallback_material = app
+        .world_mut()
+        .resource_mut::<Assets<CharmeMaterial>>()
+        .add(CharmeMaterial::default());
+    let render_layers = RenderLayers::layer(MATERIAL_PREVIEW_LAYER);
+    let camera_transform = material_preview_camera_transform(Vec3::ZERO);
+    let total_distance = camera_transform.translation.length();
+    let world = app.world_mut();
+    let object = world
+        .spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(fallback_material.clone()),
+            Transform::default(),
+            render_layers.clone(),
+        ))
+        .id();
+    let camera = world
+        .spawn((
+            Camera3d::default(),
+            Tonemapping::None,
+            Camera {
+                clear_color: ClearColorConfig::Custom(Color::NONE),
+                is_active: false,
+                ..Default::default()
+            },
+            Projection::Perspective(bevy::prelude::PerspectiveProjection {
+                far: total_distance + 2.0,
+                near: (total_distance - 2.0).max(0.1),
+                aspect_ratio: 1.0,
+                ..Default::default()
+            }),
+            RenderTarget::Image(target.clone().into()),
+            camera_transform,
+            render_layers.clone(),
+        ))
+        .id();
+    let key_light = world
+        .spawn((
+            bevy::prelude::PointLight {
+                intensity: 1_200_000.0,
+                shadow_maps_enabled: true,
+                ..Default::default()
+            },
+            Transform::from_xyz(4.0, 4.0, 2.0),
+            render_layers.clone(),
+        ))
+        .id();
+    let fill_light = world
+        .spawn((
+            bevy::prelude::PointLight {
+                intensity: 400_000.0,
+                ..Default::default()
+            },
+            Transform::from_xyz(-4.0, 2.0, -2.0),
+            render_layers,
+        ))
+        .id();
+
+    SharedMaterialPreview {
+        target,
+        object,
+        camera,
+        _lights: [key_light, fill_light],
+        _fallback_material: fallback_material,
+    }
 }
 
 #[derive(Clone, Copy)]
