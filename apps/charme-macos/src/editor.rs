@@ -963,7 +963,6 @@ impl WindowDelegate for EditorWindow {
         self.sidebar.add_subview(&self.hierarchy_label);
         self.sidebar.add_subview(self.hierarchy.view());
         self.inspector.add_subview(&self.inspector_label);
-        self.inspector.add_subview(&self.inspector_heading);
         self.inspector.add_subview(&self.inspector_preview);
         self.inspector.add_subview(&self.inspector_body);
         self.inspector.add_subview(&self.parameter_panel);
@@ -1038,17 +1037,9 @@ impl WindowDelegate for EditorWindow {
                 .leading
                 .constraint_equal_to(&self.inspector.leading)
                 .offset(18.0),
-            self.inspector_heading
-                .top
-                .constraint_equal_to(&self.inspector_label.bottom)
-                .offset(8.0),
-            self.inspector_heading
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
             self.inspector_preview
                 .top
-                .constraint_equal_to(&self.inspector_heading.bottom)
+                .constraint_equal_to(&self.inspector_label.bottom)
                 .offset(10.0),
             self.inspector_preview
                 .leading
@@ -1062,7 +1053,7 @@ impl WindowDelegate for EditorWindow {
                 .constraint_equal_to_constant(128.0),
             self.inspector_body
                 .top
-                .constraint_equal_to(&self.inspector_heading.bottom)
+                .constraint_equal_to(&self.inspector_label.bottom)
                 .offset(14.0),
             self.inspector_body
                 .leading
