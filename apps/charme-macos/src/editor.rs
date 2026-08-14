@@ -206,7 +206,7 @@ pub(crate) struct EditorWindow {
     inspector_body: Label,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
-    pub(crate) session: RefCell<EditorController>,
+    pub(crate) controller: RefCell<EditorController>,
     active_material: RefCell<Option<MaterialId>>,
     brightness_label: Label,
     brightness: BrightnessSlider,
@@ -276,7 +276,7 @@ impl EditorWindow {
             inspector_body,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
-            session: RefCell::new(EditorController::new(localization::text(
+            controller: RefCell::new(EditorController::new(localization::text(
                 Key::UntitledCharacter,
             ))),
             active_material: RefCell::new(None),
@@ -287,8 +287,8 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn install_session(&self, session: EditorController) {
-        self.session.replace(session);
+    pub(crate) fn install_controller(&self, controller: EditorController) {
+        self.controller.replace(controller);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.loaded_scene.replace(None);
@@ -297,11 +297,11 @@ impl EditorWindow {
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
-        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
+        self.publish_view_model();
     }
 
-    pub(crate) fn reset_session(&self) {
-        self.session
+    pub(crate) fn reset_controller(&self) {
+        self.controller
             .replace(EditorController::new(localization::text(
                 Key::UntitledProject,
             )));
@@ -313,18 +313,47 @@ impl EditorWindow {
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
-        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
+        self.publish_view_model();
     }
 
     pub(crate) fn save_project(&self) -> Result<(), charme_application::EditorControllerError> {
-        self.session.borrow_mut().save()
+        let result = self.controller.borrow_mut().save();
+        if result.is_ok() {
+            self.publish_view_model();
+        }
+        result
     }
 
     pub(crate) fn save_project_as(
         &self,
         path: PathBuf,
     ) -> Result<(), charme_application::EditorControllerError> {
-        self.session.borrow_mut().save_as(path)
+        let result = self.controller.borrow_mut().save_as(path);
+        if result.is_ok() {
+            self.publish_view_model();
+        }
+        result
+    }
+
+    fn publish_view_model(&self) {
+        let update = charme_application::EditorUpdate {
+            view_model: self.controller.borrow().view_model(),
+            event: None,
+        };
+        App::<CharmeApp, Message>::dispatch_main(Message::Application(
+            charme_application::ApplicationEvent::EditorUpdated(update),
+        ));
+    }
+
+    pub(crate) fn dispatch_action(
+        &self,
+        action: EditorAction,
+    ) -> Result<charme_application::EditorUpdate, charme_application::EditorControllerError> {
+        let update = self.controller.borrow_mut().dispatch(action)?;
+        App::<CharmeApp, Message>::dispatch_main(Message::Application(
+            charme_application::ApplicationEvent::EditorUpdated(update.clone()),
+        ));
+        Ok(update)
     }
 
     pub(crate) fn start_renderer(&self) {
@@ -385,8 +414,8 @@ impl EditorWindow {
 
     pub(crate) fn import_pmx(&self, path: PathBuf) {
         let resource = {
-            let session = self.session.borrow();
-            pmx_resource_path(session.project_path(), &path)
+            let controller = self.controller.borrow();
+            pmx_resource_path(controller.project_path(), &path)
         };
         let resource = match resource {
             Ok(resource) => resource,
@@ -399,13 +428,9 @@ impl EditorWindow {
                 return;
             }
         };
-        if let Err(error) =
-            self.session
-                .borrow_mut()
-                .dispatch(EditorAction::Command(EditorCommand::SetCharacter(Some(
-                    CharacterSource::pmx(resource),
-                ))))
-        {
+        if let Err(error) = self.dispatch_action(EditorAction::Command(
+            EditorCommand::SetCharacter(Some(CharacterSource::pmx(resource))),
+        )) {
             eprintln!("Failed to update the project character: {error}");
             self.show_error(&localization::format(
                 Key::PmxLoadFailed,
@@ -413,7 +438,6 @@ impl EditorWindow {
             ));
             return;
         }
-        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
         self.load_pmx(path);
     }
 
@@ -532,11 +556,10 @@ impl EditorWindow {
         let shader = DocumentShaderSource::new(name, resource);
         let material = MaterialInstance::new(name, shader.id());
         let material_id = material.id();
-        let mut session = self.session.borrow_mut();
-        if session
-            .dispatch(EditorAction::Command(EditorCommand::UpsertShader(shader)))
+        if self
+            .dispatch_action(EditorAction::Command(EditorCommand::UpsertShader(shader)))
             .and_then(|_| {
-                session.dispatch(EditorAction::Command(EditorCommand::UpsertMaterial(
+                self.dispatch_action(EditorAction::Command(EditorCommand::UpsertMaterial(
                     material,
                 )))
             })
@@ -562,14 +585,12 @@ impl EditorWindow {
         };
         let active_material = *self.active_material.borrow();
         let updated = active_material.and_then(|material| {
-            self.session
-                .borrow_mut()
-                .dispatch(EditorAction::Command(EditorCommand::SetMaterialParameter {
-                    material,
-                    path: key.to_owned(),
-                    value: Some(parameter.clone()),
-                }))
-                .ok()
+            self.dispatch_action(EditorAction::Command(EditorCommand::SetMaterialParameter {
+                material,
+                path: key.to_owned(),
+                value: Some(parameter.clone()),
+            }))
+            .ok()
         });
         if updated.is_some()
             && let Some(bridge) = self.bridge.borrow().as_ref()
@@ -585,7 +606,6 @@ impl EditorWindow {
             },
             &[("key", &key), ("value", &formatted_value)],
         ));
-        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
     }
 
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {

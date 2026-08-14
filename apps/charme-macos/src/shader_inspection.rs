@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf, thread};
 
 use cacao::appkit::App;
-use charme_application::inspect_shader_source;
+use charme_application::{ApplicationEvent, inspect_shader_source};
 
 use crate::{
     app::{CharmeApp, Message},
@@ -21,7 +21,9 @@ pub(crate) fn inspect_shader(path: PathBuf) {
                     localization::format(Key::ShaderReadFailed, &[("path", &path.display())])
                 })
                 .and_then(|source| reflect_source(path.clone(), &source));
-            App::<CharmeApp, Message>::dispatch_main(Message::ShaderInspected { path, result });
+            App::<CharmeApp, Message>::dispatch_main(Message::Application(
+                ApplicationEvent::ShaderInspected { path, result },
+            ));
         })
         .expect("failed to start shader inspection worker");
 }

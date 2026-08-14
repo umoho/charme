@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 charme-core = { path = "../charme-core" }
+charme-renderer = { path = "../charme-renderer" }
 charme-shader = { path = "../charme-shader" }
 thiserror.workspace = true
 

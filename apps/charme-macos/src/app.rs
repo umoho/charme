@@ -16,8 +16,7 @@ use cacao::{
     notification_center::Dispatcher,
     objc::{msg_send, sel, sel_impl},
 };
-use charme_application::{EditorAction, EditorController};
-use charme_renderer::{Frame, RendererNotification};
+use charme_application::{ApplicationEvent, EditorAction, EditorController};
 use url::Url;
 
 #[cfg(feature = "debug-ui")]
@@ -26,7 +25,7 @@ use crate::debug::DebugState;
 use crate::{
     editor::{EditorWindow, HierarchyItemId},
     localization::{self, Key},
-    shader_inspection::{ParameterControlKind, ShaderInspection},
+    shader_inspection::ParameterControlKind,
     startup::StartupWindow,
 };
 
@@ -51,11 +50,6 @@ pub(crate) enum Message {
     Undo,
     Redo,
     MenuContextChanged(MenuContext),
-    RefreshMenus,
-    Frame {
-        frame: Frame,
-        scale: f64,
-    },
     Brightness(f32),
     Orbit {
         delta_x: f32,
@@ -66,18 +60,13 @@ pub(crate) enum Message {
     LoadPmx(PathBuf),
     ChooseShader,
     InspectShader(PathBuf),
-    ShaderInspected {
-        path: PathBuf,
-        result: Result<ShaderInspection, String>,
-    },
     ParameterChanged {
         key: String,
         value: f64,
         kind: ParameterControlKind,
     },
     HierarchySelectionChanged(HierarchyItemId),
-    RendererNotification(RendererNotification),
-    Failed(String),
+    Application(ApplicationEvent),
 }
 
 pub(crate) struct CharmeApp {
@@ -165,8 +154,15 @@ impl Dispatcher for CharmeApp {
                 self.menu_context.set(context);
                 self.refresh_menus();
             }
-            Message::RefreshMenus => self.refresh_menus(),
             Message::ChoosePmx => self.choose_pmx(),
+            Message::Application(ApplicationEvent::EditorUpdated(update)) => {
+                update_menu_state(
+                    self.menu_context.get(),
+                    update.view_model.dirty,
+                    update.view_model.can_undo,
+                    update.view_model.can_redo,
+                );
+            }
             other => {
                 let editor = self.editor.borrow();
                 let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref())
@@ -174,26 +170,31 @@ impl Dispatcher for CharmeApp {
                     return;
                 };
                 match other {
-                    Message::Frame { frame, scale } => window.display(frame, scale),
+                    Message::Application(event) => match event {
+                        ApplicationEvent::FrameReady { frame, scale } => {
+                            window.display(frame, scale)
+                        }
+                        ApplicationEvent::ShaderInspected { path, result } => {
+                            window.show_shader_result(path, result);
+                        }
+                        ApplicationEvent::Renderer(notification) => {
+                            window.handle_renderer_notification(notification);
+                        }
+                        ApplicationEvent::Failed(error) => window.show_error(&error),
+                        _ => {}
+                    },
                     Message::Brightness(value) => window.set_brightness(value),
                     Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
                     Message::Zoom(delta) => window.zoom(delta),
                     Message::LoadPmx(path) => window.import_pmx(path),
                     Message::ChooseShader => window.choose_shader(),
                     Message::InspectShader(path) => window.inspect_shader(path),
-                    Message::ShaderInspected { path, result } => {
-                        window.show_shader_result(path, result);
-                    }
                     Message::ParameterChanged { key, value, kind } => {
                         window.set_parameter_value(&key, value, kind);
                     }
                     Message::HierarchySelectionChanged(item) => {
                         window.select_hierarchy_item(item);
                     }
-                    Message::RendererNotification(notification) => {
-                        window.handle_renderer_notification(notification);
-                    }
-                    Message::Failed(error) => window.show_error(&error),
                     Message::ChooseProject
                     | Message::OpenProject(_)
                     | Message::NewProject
@@ -203,7 +204,6 @@ impl Dispatcher for CharmeApp {
                     | Message::Undo
                     | Message::Redo
                     | Message::MenuContextChanged(_)
-                    | Message::RefreshMenus
                     | Message::ChoosePmx => unreachable!(),
                 }
             }
@@ -233,7 +233,7 @@ impl CharmeApp {
         else {
             return;
         };
-        if editor.session.borrow().project_path().is_none() {
+        if editor.controller.borrow().project_path().is_none() {
             drop(editor_windows);
             self.choose_save_project();
             return;
@@ -255,7 +255,10 @@ impl CharmeApp {
             else {
                 return;
             };
-            format!("{}.charme", editor.session.borrow().document().name())
+            format!(
+                "{}.charme",
+                editor.controller.borrow().view_model().document_name
+            )
         };
         let mut panel = FileSavePanel::new();
         panel.set_suggested_filename(&suggested);
@@ -275,7 +278,7 @@ impl CharmeApp {
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
         {
-            let _ = editor.session.borrow_mut().dispatch(EditorAction::Undo);
+            let _ = editor.dispatch_action(EditorAction::Undo);
             self.refresh_menus();
         }
     }
@@ -286,7 +289,7 @@ impl CharmeApp {
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
         {
-            let _ = editor.session.borrow_mut().dispatch(EditorAction::Redo);
+            let _ = editor.dispatch_action(EditorAction::Redo);
             self.refresh_menus();
         }
     }
@@ -313,7 +316,7 @@ impl CharmeApp {
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
             .map(|window| {
-                let view_model = window.session.borrow().view_model();
+                let view_model = window.controller.borrow().view_model();
                 (view_model.dirty, view_model.can_undo, view_model.can_redo)
             })
             .unwrap_or((false, false, false));
@@ -345,8 +348,8 @@ impl CharmeApp {
             ));
             return;
         }
-        let session = match EditorController::open(&path) {
-            Ok(session) => session,
+        let controller = match EditorController::open(&path) {
+            Ok(controller) => controller,
             Err(error) => {
                 eprintln!("Failed to open project {}: {error}", path.display());
                 self.show_startup_error(localization::text(Key::OpenProjectFailed));
@@ -354,12 +357,12 @@ impl CharmeApp {
             }
         };
         let project_directory = path.parent().unwrap_or_else(|| Path::new("."));
-        let character = session
+        let character = controller
             .document()
             .character()
             .map(|character| character.path.resolve(project_directory));
         self.with_editor(|editor| {
-            editor.install_session(session);
+            editor.install_controller(controller);
             if let Some(character) = character {
                 editor.load_pmx(character);
             }
@@ -370,7 +373,7 @@ impl CharmeApp {
     }
 
     fn new_project(&self) {
-        self.with_editor(|editor| editor.reset_session());
+        self.with_editor(|editor| editor.reset_controller());
     }
 
     fn ensure_editor(&self) {

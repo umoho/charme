@@ -10,7 +10,7 @@ and reloaded by the application.
 ## Workspace
 
 - `crates/charme-core`: UI- and renderer-independent editor domain model.
-- `crates/charme-application`: shared editor actions, controller, view model, and shader inspection projections.
+- `crates/charme-application`: shared editor actions, controller, view models, shader inspection, and renderer events.
 - `crates/charme-shader`: WGSL composition, reflection, metadata, and packing.
 - `crates/charme-bevy`: reusable Bevy 0.19 material runtime.
 - `crates/charme-renderer`: editor preview renderer and PMX scene integration.

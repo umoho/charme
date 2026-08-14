@@ -1296,6 +1296,7 @@ name = "charme-application"
 version = "0.1.0"
 dependencies = [
  "charme-core",
+ "charme-renderer",
  "charme-shader",
  "thiserror 2.0.20",
 ]

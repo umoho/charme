@@ -16,8 +16,9 @@
 ```text
 charme-core ──────┬── charme-application ──────┐
                   ├── charme-bevy ─────────────┤
-charme-shader ────┘                            ├── charme-macos
-charme-renderer ─── charme-bevy + bevy_pmx ────┘
+charme-shader ────┤                            ├── charme-macos
+charme-renderer ──┘                            │
+      └── charme-bevy + bevy_pmx ──────────────┘
 ```
 
 ### `charme-core`
@@ -34,9 +35,10 @@ layout, and runtime value packing. It may use Naga but does not depend on Bevy.
 
 Owns the platform-independent application layer shared by native frontends.
 `EditorController` coordinates actions against `EditorSession`, while
-`EditorViewModel` and shader inspection projections expose presentation-ready
-state without native widget types. It depends on core and shader tooling, but
-not on cacao, AppKit, or another platform UI framework.
+`EditorViewModel`, shader inspection projections, and application events expose
+presentation-ready state without native widget types. It depends on core,
+shader tooling, and the renderer's public event types, but not on cacao, AppKit,
+or another platform UI framework.
 
 ### `charme-bevy`
 

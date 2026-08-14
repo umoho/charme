@@ -15,8 +15,10 @@ use charme_core::{
 };
 use thiserror::Error;
 
+mod event;
 mod shader;
 
+pub use event::ApplicationEvent;
 pub use shader::{
     ParameterControlKind, ParameterControlSpec, ShaderInspection, inspect_shader_source,
 };

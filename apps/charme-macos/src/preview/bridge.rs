@@ -6,6 +6,7 @@ use std::{
 };
 
 use cacao::appkit::App;
+use charme_application::ApplicationEvent;
 use charme_core::ParameterValue;
 use charme_renderer::{BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig};
 
@@ -42,14 +43,14 @@ impl RenderBridge {
                 let mut renderer = match Renderer::new(config) {
                     Ok(renderer) => renderer,
                     Err(error) => {
-                        dispatch(Message::Failed(error.to_string()));
+                        dispatch_event(ApplicationEvent::Failed(error.to_string()));
                         return;
                     }
                 };
                 let mut display_scale = scale;
 
                 if let Err(error) = renderer.request_redraw() {
-                    dispatch(Message::Failed(error.to_string()));
+                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                     return;
                 }
 
@@ -59,43 +60,43 @@ impl RenderBridge {
                             Ok(Command::Resize { size, scale }) => {
                                 display_scale = scale;
                                 if let Err(error) = renderer.resize(size) {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
                             Ok(Command::SetBackground(background)) => {
                                 if let Err(error) = renderer.set_background(background) {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
                             Ok(Command::Orbit { delta_x, delta_y }) => {
                                 if let Err(error) = renderer.orbit(delta_x, delta_y) {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
                             Ok(Command::Zoom(delta)) => {
                                 if let Err(error) = renderer.zoom(delta) {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
                             Ok(Command::LoadPmx(path)) => {
                                 if let Err(error) = renderer.load_pmx(path) {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
                             Ok(Command::SetMaterialParameter { path, value }) => {
                                 if let Err(error) = renderer.set_material_parameter(path, value) {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
                             Ok(Command::Redraw) => {
                                 if let Err(error) = renderer.request_redraw() {
-                                    dispatch(Message::Failed(error.to_string()));
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
@@ -106,24 +107,24 @@ impl RenderBridge {
                     }
 
                     match renderer.try_recv_frame() {
-                        Ok(Some(frame)) => dispatch(Message::Frame {
+                        Ok(Some(frame)) => dispatch_event(ApplicationEvent::FrameReady {
                             frame,
                             scale: display_scale,
                         }),
                         Ok(None) => {}
                         Err(error) => {
-                            dispatch(Message::Failed(error.to_string()));
+                            dispatch_event(ApplicationEvent::Failed(error.to_string()));
                             break;
                         }
                     }
                     loop {
                         match renderer.try_recv_notification() {
                             Ok(Some(notification)) => {
-                                dispatch(Message::RendererNotification(notification));
+                                dispatch_event(ApplicationEvent::Renderer(notification));
                             }
                             Ok(None) => break,
                             Err(error) => {
-                                dispatch(Message::Failed(error.to_string()));
+                                dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                 break 'running;
                             }
                         }
@@ -131,11 +132,11 @@ impl RenderBridge {
                     loop {
                         match renderer.try_recv_material_thumbnail() {
                             Ok(Some(notification)) => {
-                                dispatch(Message::RendererNotification(notification));
+                                dispatch_event(ApplicationEvent::Renderer(notification));
                             }
                             Ok(None) => break,
                             Err(error) => {
-                                dispatch(Message::Failed(error.to_string()));
+                                dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                 break 'running;
                             }
                         }
@@ -200,16 +201,16 @@ impl Drop for RenderBridge {
     }
 }
 
-fn dispatch(message: Message) {
-    let message = match message {
-        Message::Failed(error) => {
+fn dispatch_event(event: ApplicationEvent) {
+    let event = match event {
+        ApplicationEvent::Failed(error) => {
             eprintln!("Renderer failure: {error}");
-            Message::Failed(format!(
+            ApplicationEvent::Failed(format!(
                 "{}: {error}",
                 localization::text(Key::RendererFailed)
             ))
         }
-        message => message,
+        event => event,
     };
-    App::<CharmeApp, Message>::dispatch_main(message);
+    App::<CharmeApp, Message>::dispatch_main(Message::Application(event));
 }
