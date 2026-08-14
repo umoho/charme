@@ -201,7 +201,23 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
         Transform::from_translation(Vec3::new(-center.x, -prepared.bounds_min.y, -center.z));
     let mut entities = Vec::new();
     let mut mesh_handles = Vec::new();
-    let mut material_handles = Vec::new();
+    // Keep one material asset per PMX slot. Apart from avoiding duplicate
+    // assets for slots used by multiple primitives, this gives the renderer a
+    // stable slot-to-material mapping for material-ball previews.
+    let mut material_handles = prepared
+        .model
+        .material_records()
+        .iter()
+        .map(|record| {
+            app.world_mut()
+                .resource_mut::<Assets<CharmeMaterial>>()
+                .add(material_for_record(
+                    record,
+                    &texture_handles,
+                    &texture_has_alpha,
+                ))
+        })
+        .collect::<Vec<_>>();
 
     for (primitive_index, primitive) in prepared.model.primitives().iter().enumerate() {
         let Some(record) = prepared
@@ -211,20 +227,14 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
         else {
             continue;
         };
+        let Some(material) = material_handles.get(primitive.material_index).cloned() else {
+            continue;
+        };
         let mesh = app
             .world_mut()
             .resource_mut::<Assets<Mesh>>()
             .add(prepared.model.geometry().to_mesh_for_primitive(*primitive));
-        let material = app
-            .world_mut()
-            .resource_mut::<Assets<CharmeMaterial>>()
-            .add(material_for_record(
-                record,
-                &texture_handles,
-                &texture_has_alpha,
-            ));
         mesh_handles.push(mesh.clone());
-        material_handles.push(material.clone());
         let entity = app
             .world_mut()
             .spawn((

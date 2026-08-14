@@ -95,7 +95,7 @@
 - [x] 将 StandardMaterial 预览替换为 `charme-bevy` 材质（首版固定参数 ABI）。
 - [ ] 支持选择和高亮 material slot。
 - [x] 支持从 UI 更新固定材质参数并立即重绘；纹理仍待接入。
-- [ ] 增加材质球与材质缩略图 render session。
+- [x] 增加材质球与材质缩略图 render session（首版加载后异步生成全部槽位）。
 - [ ] 增加灯光、背景和环境 preset。
 - [ ] 增加网格、法线、UV、材质 ID 等调试视图。
 - [ ] 增加加载进度、取消和连续请求的处理策略。

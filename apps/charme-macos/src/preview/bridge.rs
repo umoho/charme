@@ -128,6 +128,18 @@ impl RenderBridge {
                             }
                         }
                     }
+                    loop {
+                        match renderer.try_recv_material_thumbnail() {
+                            Ok(Some(notification)) => {
+                                dispatch(Message::RendererNotification(notification));
+                            }
+                            Ok(None) => break,
+                            Err(error) => {
+                                dispatch(Message::Failed(error.to_string()));
+                                break 'running;
+                            }
+                        }
+                    }
 
                     thread::sleep(Duration::from_millis(4));
                 }

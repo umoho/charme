@@ -5,8 +5,8 @@ use crate::{OutputSize, PixelFormat};
 /// An immutable CPU image produced by the renderer.
 ///
 /// Pixels start at the top-left corner and rows proceed from top to bottom. The
-/// alpha channel is opaque in this release. `bytes_per_row` may include padding
-/// and must be used instead of assuming tightly packed rows.
+/// alpha channel is preserved from the render target. `bytes_per_row` may include
+/// padding and must be used instead of assuming tightly packed rows.
 #[derive(Debug, Clone)]
 pub struct Frame {
     sequence: u64,

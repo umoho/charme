@@ -110,6 +110,19 @@ fn renders_resizes_and_loads_pmx() {
     assert!(info.warnings().is_empty());
     let pmx_frame = wait_for_frame(&mut renderer);
     assert!(pmx_frame.sequence() > reset.sequence());
+    let thumbnail = wait_for_material_thumbnail(&mut renderer);
+    let RendererNotification::MaterialThumbnailReady {
+        path,
+        slot_index,
+        frame,
+    } = thumbnail
+    else {
+        panic!("expected a material thumbnail notification");
+    };
+    assert_eq!(path, pmx_path);
+    assert_eq!(slot_index, 0);
+    assert_eq!(frame.size(), OutputSize::new(64, 64));
+    assert_eq!(frame.pixel_format(), PixelFormat::Bgra8Srgb);
 
     let missing = pmx_path.with_file_name("missing-model.pmx");
     renderer
@@ -134,6 +147,22 @@ fn wait_for_frame(renderer: &mut Renderer) -> charme_renderer::Frame {
             Err(error) => panic!("renderer failed: {error}"),
         }
         assert!(Instant::now() < deadline, "renderer timed out");
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn wait_for_material_thumbnail(renderer: &mut Renderer) -> RendererNotification {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match renderer.try_recv_material_thumbnail() {
+            Ok(Some(notification)) => return notification,
+            Ok(None) => {}
+            Err(error) => panic!("renderer failed: {error}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "material thumbnail notification timed out"
+        );
         thread::sleep(Duration::from_millis(2));
     }
 }

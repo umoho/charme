@@ -10,12 +10,14 @@ use bevy::{
     DefaultPlugins,
     app::{App, PluginGroup, PluginsState},
     asset::{Assets, RenderAssetUsages},
-    camera::{Camera, Camera3d, ClearColorConfig, RenderTarget},
+    camera::{
+        Camera, Camera3d, ClearColorConfig, Projection, RenderTarget, visibility::RenderLayers,
+    },
     core_pipeline::tonemapping::Tonemapping,
     image::Image,
     prelude::{
         Color, Commands, Cuboid, DirectionalLight, Entity, Mesh, Mesh3d, MeshMaterial3d, Meshable,
-        On, Plane3d, Quat, StandardMaterial, Transform, Vec3,
+        On, Plane3d, Quat, Sphere, StandardMaterial, Transform, Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
@@ -50,6 +52,13 @@ pub(crate) enum WorkerEvent {
     Frame(Frame),
     Notification(RendererNotification),
     Error(RendererError),
+}
+
+enum Completion {
+    Frame,
+    MaterialThumbnail {
+        target: bevy::prelude::Handle<Image>,
+    },
 }
 
 pub(crate) fn spawn(
@@ -103,11 +112,17 @@ fn run(
     let mut in_flight = false;
 
     loop {
-        while completion_rx.try_recv().is_ok() {
-            in_flight = false;
+        while let Ok(completion) = completion_rx.try_recv() {
+            match completion {
+                Completion::Frame => in_flight = false,
+                Completion::MaterialThumbnail { target } => {
+                    backend.pending_thumbnails = backend.pending_thumbnails.saturating_sub(1);
+                    backend.retire_thumbnail_target(target);
+                }
+            }
         }
 
-        let command = if in_flight || dirty {
+        let command = if in_flight || dirty || backend.pending_thumbnails != 0 {
             match commands.recv_timeout(Duration::from_millis(1)) {
                 Ok(command) => Some(command),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -196,7 +211,7 @@ fn run(
             in_flight = true;
         }
 
-        if in_flight {
+        if in_flight || backend.pending_thumbnails != 0 {
             backend.app.update();
         }
     }
@@ -215,14 +230,28 @@ struct Backend {
     initial_orbit: OrbitState,
     next_sequence: u64,
     events: Sender<WorkerEvent>,
-    completion: Sender<()>,
+    completion: Sender<Completion>,
+    pending_thumbnails: usize,
+    thumbnail_mesh: bevy::prelude::Handle<Mesh>,
+    material_previews: Vec<MaterialPreview>,
+    retired_thumbnail_targets: Vec<bevy::prelude::Handle<Image>>,
 }
+
+struct MaterialPreview {
+    slot_index: usize,
+    target: bevy::prelude::Handle<Image>,
+    scene_path: PathBuf,
+    entities: Vec<Entity>,
+}
+
+const MATERIAL_PREVIEW_SIZE: u32 = 64;
+const MATERIAL_PREVIEW_LAYER: usize = 30;
 
 impl Backend {
     fn new(
         config: &RendererConfig,
         events: Sender<WorkerEvent>,
-        completion: Sender<()>,
+        completion: Sender<Completion>,
     ) -> Result<Self, RendererError> {
         let mut app = App::new();
         app.add_plugins(
@@ -248,6 +277,10 @@ impl Backend {
 
         let texture_size = usable_texture_size(config.output_size);
         let target = add_target_image(&mut app, texture_size, config.pixel_format);
+        let thumbnail_mesh = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Sphere::new(1.0).mesh().ico(3).unwrap());
         let orbit = OrbitState::default();
         let (camera, placeholder_entities, placeholder_materials) = spawn_scene(
             &mut app,
@@ -275,6 +308,10 @@ impl Backend {
             next_sequence: 1,
             events,
             completion,
+            pending_thumbnails: 0,
+            thumbnail_mesh,
+            material_previews: Vec::new(),
+            retired_thumbnail_targets: Vec::new(),
         })
     }
 
@@ -346,6 +383,7 @@ impl Backend {
             }
         };
 
+        self.clear_material_previews();
         for entity in self.placeholder_entities.drain(..) {
             let _ = self.app.world_mut().despawn(entity);
         }
@@ -358,17 +396,162 @@ impl Backend {
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }
+        let scene_path = prepared.info.path().to_path_buf();
         self.pmx_scene = Some(spawn_pmx_scene(&mut self.app, &prepared));
         let (bounds_min, bounds_max) = prepared.normalized_bounds();
         self.orbit = OrbitState::framing(bounds_min, bounds_max);
         self.initial_orbit = self.orbit;
         self.update_camera_transform()?;
+        if let Some(materials) = self.pmx_scene.as_ref().map(|scene| scene.materials.clone()) {
+            self.spawn_material_previews(&scene_path, &materials);
+        }
         let _ = self
             .events
             .send(WorkerEvent::Notification(RendererNotification::PmxLoaded(
                 prepared.info,
             )));
         Ok(true)
+    }
+
+    fn clear_material_previews(&mut self) {
+        for preview in self.material_previews.drain(..) {
+            for entity in preview.entities {
+                let _ = self.app.world_mut().despawn(entity);
+            }
+            // A readback may still reference this target. Keep the asset alive
+            // until its completion callback has been observed.
+            self.retired_thumbnail_targets.push(preview.target);
+        }
+    }
+
+    fn retire_thumbnail_target(&mut self, target: bevy::prelude::Handle<Image>) {
+        let Some(index) = self
+            .retired_thumbnail_targets
+            .iter()
+            .position(|candidate| candidate.id() == target.id())
+        else {
+            return;
+        };
+        let target = self.retired_thumbnail_targets.swap_remove(index);
+        self.app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .remove(target.id());
+    }
+
+    fn spawn_material_previews(
+        &mut self,
+        scene_path: &std::path::Path,
+        materials: &[bevy::prelude::Handle<CharmeMaterial>],
+    ) {
+        let render_layers = RenderLayers::layer(MATERIAL_PREVIEW_LAYER);
+        for (slot_index, material) in materials.iter().enumerate() {
+            let target = add_thumbnail_target(&mut self.app);
+            // Keep studios spatially separated so every preview camera can use
+            // the shared preview layer without seeing the other slot spheres.
+            let studio_offset = Vec3::new(slot_index as f32 * 10.0, 0.0, 0.0);
+            let camera_transform = material_preview_camera_transform(studio_offset);
+            let total_distance = (camera_transform.translation - studio_offset).length();
+            let mut entities = Vec::with_capacity(4);
+            let world = self.app.world_mut();
+            let object = world
+                .spawn((
+                    Mesh3d(self.thumbnail_mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_translation(studio_offset),
+                    render_layers.clone(),
+                ))
+                .id();
+            entities.push(object);
+            let camera = world
+                .spawn((
+                    Camera3d::default(),
+                    Tonemapping::None,
+                    Camera {
+                        clear_color: ClearColorConfig::Custom(Color::NONE),
+                        is_active: true,
+                        ..Default::default()
+                    },
+                    Projection::Perspective(bevy::prelude::PerspectiveProjection {
+                        far: total_distance + 2.0,
+                        near: (total_distance - 2.0).max(0.1),
+                        aspect_ratio: 1.0,
+                        ..Default::default()
+                    }),
+                    RenderTarget::Image(target.clone().into()),
+                    camera_transform,
+                    render_layers.clone(),
+                ))
+                .id();
+            entities.push(camera);
+            let key_light = world
+                .spawn((
+                    bevy::prelude::PointLight {
+                        intensity: 1_200_000.0,
+                        shadow_maps_enabled: true,
+                        ..Default::default()
+                    },
+                    Transform::from_translation(studio_offset + Vec3::new(4.0, 4.0, 2.0)),
+                    render_layers.clone(),
+                ))
+                .id();
+            entities.push(key_light);
+            let fill_light = world
+                .spawn((
+                    bevy::prelude::PointLight {
+                        intensity: 400_000.0,
+                        ..Default::default()
+                    },
+                    Transform::from_translation(studio_offset + Vec3::new(-4.0, 2.0, -2.0)),
+                    render_layers.clone(),
+                ))
+                .id();
+            entities.push(fill_light);
+
+            self.material_previews.push(MaterialPreview {
+                slot_index,
+                target: target.clone(),
+                scene_path: scene_path.to_path_buf(),
+                entities,
+            });
+            self.request_thumbnail_readback(scene_path, slot_index, target);
+        }
+    }
+
+    fn request_thumbnail_readback(
+        &mut self,
+        scene_path: &std::path::Path,
+        slot_index: usize,
+        target: bevy::prelude::Handle<Image>,
+    ) {
+        let events = self.events.clone();
+        let completion = self.completion.clone();
+        let completion_target = target.clone();
+        let scene_path = scene_path.to_path_buf();
+        self.pending_thumbnails += 1;
+        self.app
+            .world_mut()
+            .spawn(Readback::texture(target))
+            .observe(move |event: On<ReadbackComplete>, mut commands: Commands| {
+                let frame = Frame::new(
+                    slot_index as u64,
+                    OutputSize::new(MATERIAL_PREVIEW_SIZE, MATERIAL_PREVIEW_SIZE),
+                    PixelFormat::Bgra8Srgb,
+                    aligned_bytes_per_row(MATERIAL_PREVIEW_SIZE),
+                    event.data.clone(),
+                );
+                let _ = events.send(WorkerEvent::Notification(
+                    RendererNotification::MaterialThumbnailReady {
+                        path: scene_path.clone(),
+                        slot_index,
+                        frame,
+                    },
+                ));
+                let _ = completion.send(Completion::MaterialThumbnail {
+                    target: completion_target.clone(),
+                });
+                commands.entity(event.entity).despawn();
+            });
     }
 
     fn set_material_parameter(&mut self, path: String, value: ParameterValue) -> bool {
@@ -401,7 +584,27 @@ impl Backend {
                 }
             }
         }
+        if changed {
+            self.refresh_material_previews();
+        }
         changed
+    }
+
+    fn refresh_material_previews(&mut self) {
+        let requests = self
+            .material_previews
+            .iter()
+            .map(|preview| {
+                (
+                    preview.scene_path.clone(),
+                    preview.slot_index,
+                    preview.target.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (scene_path, slot_index, target) in requests {
+            self.request_thumbnail_readback(&scene_path, slot_index, target);
+        }
     }
 
     fn update_camera_transform(&mut self) -> Result<(), RendererError> {
@@ -454,7 +657,7 @@ impl Backend {
                     event.data.clone(),
                 );
                 let _ = events.send(WorkerEvent::Frame(frame));
-                let _ = completion.send(());
+                let _ = completion.send(Completion::Frame);
                 commands.entity(event.entity).despawn();
             });
     }
@@ -478,6 +681,25 @@ fn add_target_image(
     image.texture_descriptor.usage =
         TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC;
     app.world_mut().resource_mut::<Assets<Image>>().add(image)
+}
+
+fn add_thumbnail_target(app: &mut App) -> bevy::prelude::Handle<Image> {
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: MATERIAL_PREVIEW_SIZE,
+            height: MATERIAL_PREVIEW_SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC;
+    app.world_mut().resource_mut::<Assets<Image>>().add(image)
+}
+
+fn material_preview_camera_transform(offset: Vec3) -> Transform {
+    Transform::from_translation(offset + Vec3::new(0.0, 1.5, 2.5)).looking_at(offset, Vec3::Y)
 }
 
 #[derive(Clone, Copy)]

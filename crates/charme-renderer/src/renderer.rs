@@ -14,7 +14,7 @@ use crate::{
 
 /// A non-frame event produced by the renderer worker.
 #[non_exhaustive]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum RendererNotification {
     /// A PMX model was loaded and installed in the preview scene.
     PmxLoaded(PmxSceneInfo),
@@ -24,6 +24,15 @@ pub enum RendererNotification {
         path: PathBuf,
         /// A human-readable import error.
         message: String,
+    },
+    /// A rendered material-slot thumbnail is ready for the native UI.
+    MaterialThumbnailReady {
+        /// The PMX scene that owns the thumbnail.
+        path: PathBuf,
+        /// The zero-based PMX material-slot index.
+        slot_index: usize,
+        /// The thumbnail pixels, in the renderer's BGRA sRGB format.
+        frame: Frame,
     },
     /// A material parameter was rejected without disturbing the current scene.
     MaterialParameterRejected {
@@ -58,6 +67,7 @@ struct RendererInner {
     output_size: Mutex<OutputSize>,
     pending_frame: Option<Frame>,
     notifications: VecDeque<RendererNotification>,
+    material_thumbnails: VecDeque<RendererNotification>,
     pending_error: Option<RendererError>,
     disconnected: bool,
     worker: Option<JoinHandle<()>>,
@@ -82,6 +92,7 @@ impl Renderer {
                     output_size: Mutex::new(size),
                     pending_frame: None,
                     notifications: VecDeque::new(),
+                    material_thumbnails: VecDeque::new(),
                     pending_error: None,
                     disconnected: false,
                     worker: Some(worker),
@@ -156,8 +167,9 @@ impl Renderer {
     /// Loads a PMX model from an arbitrary file-system path.
     ///
     /// Loading happens on the renderer worker. Completion or failure is
-    /// reported through [`Renderer::try_recv_notification`]. A failed load does
-    /// not replace the currently displayed scene.
+    /// reported through [`Renderer::try_recv_notification`]. Material thumbnails
+    /// are read through [`Renderer::try_recv_material_thumbnail`]. A failed load
+    /// does not replace the currently displayed scene.
     pub fn load_pmx(&self, path: impl AsRef<Path>) -> Result<(), RendererError> {
         self.send(Command::LoadPmx(path.as_ref().to_path_buf()))
     }
@@ -208,6 +220,9 @@ impl Renderer {
     }
 
     /// Returns the oldest pending renderer notification without blocking.
+    ///
+    /// Material thumbnail results are kept in a separate queue and can be read
+    /// with [`Renderer::try_recv_material_thumbnail`].
     pub fn try_recv_notification(&mut self) -> Result<Option<RendererNotification>, RendererError> {
         self.poll_worker_events();
         if let Some(error) = self.inner.pending_error.take() {
@@ -215,6 +230,23 @@ impl Renderer {
         }
         if let Some(notification) = self.inner.notifications.pop_front() {
             return Ok(Some(notification));
+        }
+        if self.inner.disconnected {
+            return Err(RendererError::WorkerStopped);
+        }
+        Ok(None)
+    }
+
+    /// Returns the oldest completed material thumbnail without blocking.
+    pub fn try_recv_material_thumbnail(
+        &mut self,
+    ) -> Result<Option<RendererNotification>, RendererError> {
+        self.poll_worker_events();
+        if let Some(error) = self.inner.pending_error.take() {
+            return Err(error);
+        }
+        if let Some(thumbnail) = self.inner.material_thumbnails.pop_front() {
+            return Ok(Some(thumbnail));
         }
         if self.inner.disconnected {
             return Err(RendererError::WorkerStopped);
@@ -239,7 +271,14 @@ impl Renderer {
             match self.inner.events.try_recv() {
                 Ok(WorkerEvent::Frame(frame)) => self.inner.pending_frame = Some(frame),
                 Ok(WorkerEvent::Notification(notification)) => {
-                    self.inner.notifications.push_back(notification);
+                    if matches!(
+                        &notification,
+                        RendererNotification::MaterialThumbnailReady { .. }
+                    ) {
+                        self.inner.material_thumbnails.push_back(notification);
+                    } else {
+                        self.inner.notifications.push_back(notification);
+                    }
                 }
                 Ok(WorkerEvent::Error(error)) => self.inner.pending_error = Some(error),
                 Err(mpsc::TryRecvError::Empty) => break,

@@ -591,6 +591,24 @@ impl EditorWindow {
                     &[("path", &path.display())],
                 ));
             }
+            RendererNotification::MaterialThumbnailReady {
+                path,
+                slot_index,
+                frame,
+            } => {
+                let scene_matches = self
+                    .loaded_scene
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|scene| scene.path() == path);
+                if !scene_matches {
+                    return;
+                }
+                match make_image(frame, 1.0) {
+                    Ok(image) => self.hierarchy.set_material_thumbnail(slot_index, &image),
+                    Err(error) => eprintln!("Failed to create material thumbnail: {error}"),
+                }
+            }
             RendererNotification::MaterialParameterRejected { path, message } => {
                 eprintln!("Renderer rejected parameter {path}: {message}");
                 self.show_error(&localization::format(

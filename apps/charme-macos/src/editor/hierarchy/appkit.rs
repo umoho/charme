@@ -8,6 +8,7 @@ use cacao::objc::declare::ClassDecl;
 use cacao::objc::runtime::{Class, Object, Sel};
 use cacao::{
     foundation::{BOOL, NO, NSArray, NSInteger, NSString, YES, id, nil},
+    image::Image,
     objc::{class, msg_send, sel, sel_impl},
     utils::properties::ObjcProperty,
     view::View,
@@ -27,6 +28,7 @@ struct NativeNode {
 struct NativeState {
     snapshot: HierarchySnapshot,
     nodes: Vec<NativeNode>,
+    thumbnails: Vec<Option<ObjcProperty>>,
 }
 
 impl NativeState {
@@ -43,7 +45,12 @@ impl NativeState {
                 }
             })
             .collect();
-        Self { snapshot, nodes }
+        let thumbnails = (0..snapshot.nodes.len()).map(|_| None).collect();
+        Self {
+            snapshot,
+            nodes,
+            thumbnails,
+        }
     }
 
     fn node_index(item: id) -> Option<usize> {
@@ -139,6 +146,26 @@ impl NativeHierarchyView {
         drop(old_state);
     }
 
+    pub(super) fn set_thumbnail(&self, slot_index: usize, image: &Image) {
+        let image_id = (&*image.0 as *const Object) as id;
+        let item = {
+            let mut state = self.state.borrow_mut();
+            let Some((node_index, _)) =
+                state.snapshot.nodes.iter().enumerate().find(|(_, node)| {
+                    node.id == super::model::HierarchyItemId::MaterialSlot(slot_index)
+                })
+            else {
+                return;
+            };
+            state.thumbnails[node_index] = Some(ObjcProperty::retain(image_id));
+            state.item(node_index)
+        };
+        let outline = self.outline.get(|outline| outline as *const Object as id);
+        unsafe {
+            let _: () = msg_send![outline, reloadItem: item reloadChildren: NO];
+        }
+    }
+
     fn reload_and_expand(&self) {
         let outline = self.outline.get(|outline| outline as *const Object as id);
         unsafe {
@@ -185,15 +212,30 @@ unsafe fn pin_to_edges(child: id, parent: id) {
     }
 }
 
-unsafe fn center_text_field(text_field: id, cell: id) {
-    let text_leading: id = unsafe { msg_send![text_field, leadingAnchor] };
+unsafe fn layout_cell(image_view: id, text_field: id, cell: id) {
+    let image_leading: id = unsafe { msg_send![image_view, leadingAnchor] };
     let cell_leading: id = unsafe { msg_send![cell, leadingAnchor] };
+    let image_trailing: id = unsafe { msg_send![image_view, trailingAnchor] };
+    let image_center_y: id = unsafe { msg_send![image_view, centerYAnchor] };
+    let cell_center_y: id = unsafe { msg_send![cell, centerYAnchor] };
+    let text_leading: id = unsafe { msg_send![text_field, leadingAnchor] };
     let text_trailing: id = unsafe { msg_send![text_field, trailingAnchor] };
     let cell_trailing: id = unsafe { msg_send![cell, trailingAnchor] };
     let text_center_y: id = unsafe { msg_send![text_field, centerYAnchor] };
-    let cell_center_y: id = unsafe { msg_send![cell, centerYAnchor] };
     let constraints = NSArray::new(&[
-        unsafe { msg_send![text_leading, constraintEqualToAnchor: cell_leading] },
+        unsafe { msg_send![image_leading, constraintEqualToAnchor: cell_leading] },
+        unsafe { msg_send![image_center_y, constraintEqualToAnchor: cell_center_y] },
+        unsafe {
+            let anchor: id = msg_send![image_view, widthAnchor];
+            msg_send![anchor, constraintEqualToConstant: 18.0f64]
+        },
+        unsafe {
+            let anchor: id = msg_send![image_view, heightAnchor];
+            msg_send![anchor, constraintEqualToConstant: 18.0f64]
+        },
+        unsafe {
+            msg_send![text_leading, constraintEqualToAnchor: image_trailing constant: 5.0f64]
+        },
         unsafe { msg_send![text_trailing, constraintLessThanOrEqualToAnchor: cell_trailing] },
         unsafe { msg_send![text_center_y, constraintEqualToAnchor: cell_center_y] },
     ]);
@@ -252,12 +294,17 @@ extern "C" fn is_item_expandable(delegate: &Object, _: Sel, _: id, item: id) -> 
 }
 
 extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item: id) -> id {
-    let title = with_state(delegate, None, |state| {
+    let item_data = with_state(delegate, None, |state| {
         NativeState::node_index(item)
-            .and_then(|index| state.snapshot.nodes.get(index))
-            .map(|node| node.title.clone())
+            .and_then(|index| state.snapshot.nodes.get(index).map(|node| (index, node)))
+            .map(|(index, node)| {
+                let thumbnail = state.thumbnails[index]
+                    .as_ref()
+                    .map(|image| image.get(|image| image as *const Object as id));
+                (node.title.clone(), thumbnail)
+            })
     });
-    let Some(title) = title else {
+    let Some((title, thumbnail)) = item_data else {
         return nil;
     };
 
@@ -268,6 +315,12 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
             cell = msg_send![class!(NSTableCellView), new];
             let _: () = msg_send![cell, setIdentifier: &*identifier];
 
+            let image_view: id = msg_send![class!(NSImageView), new];
+            let _: () = msg_send![image_view, setTranslatesAutoresizingMaskIntoConstraints: NO];
+            let _: () = msg_send![image_view, setImageScaling: 3usize];
+            let _: () = msg_send![cell, addSubview: image_view];
+            let _: () = msg_send![cell, setImageView: image_view];
+
             let text_field: id =
                 msg_send![class!(NSTextField), labelWithString: &*NSString::new("")];
             let _: () = msg_send![text_field, setTranslatesAutoresizingMaskIntoConstraints: NO];
@@ -276,9 +329,12 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
             let _: () = msg_send![text_field, setLineBreakMode: 4usize];
             let _: () = msg_send![cell, addSubview: text_field];
             let _: () = msg_send![cell, setTextField: text_field];
-            center_text_field(text_field, cell);
+            layout_cell(image_view, text_field, cell);
         }
         let text_field: id = msg_send![cell, textField];
+        let image_view: id = msg_send![cell, imageView];
+        let _: () = msg_send![image_view, setImage: thumbnail.unwrap_or(nil)];
+        let _: () = msg_send![image_view, setHidden: if thumbnail.is_some() { NO } else { YES }];
         let title = NSString::new(&title);
         let _: () = msg_send![text_field, setStringValue: &*title];
         cell
