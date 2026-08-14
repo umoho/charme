@@ -23,6 +23,7 @@
 "RecentProjects" = "Recent Projects";
 "ProjectFallback" = "Charme Project";
 "Scene" = "Scene";
+"Hierarchy" = "Hierarchy";
 "EmptyScene" = "No character imported\n\nChoose “Import PMX” to begin.";
 "Materials" = "Material Slots";
 "EmptyMaterials" = "No material slots";

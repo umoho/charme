@@ -23,10 +23,11 @@
 "RecentProjects" = "最近打开的项目";
 "ProjectFallback" = "Charme项目";
 "Scene" = "场景";
+"Hierarchy" = "层级";
 "EmptyScene" = "尚未导入角色\n\n请点击“导入PMX”开始。";
 "Materials" = "材质槽";
 "EmptyMaterials" = "暂无材质槽";
-"Inspector" = "检查器";
+"Inspector" = "检视器";
 "InspectorBody" = "打开文件后，这里将显示材质和Shader参数。";
 "Brightness" = "视口亮度";
 "RendererStarting" = "正在初始化渲染器…";

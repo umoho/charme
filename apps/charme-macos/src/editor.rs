@@ -197,9 +197,11 @@ pub(crate) struct EditorWindow {
     sidebar: View,
     viewport: View,
     inspector: View,
+    inspector_label: Label,
     image_view: ImageView,
     orbit_input: OrbitInputView,
     status: Label,
+    hierarchy_label: Label,
     hierarchy: HierarchyView,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
     active_inspector_slot: RefCell<Option<usize>>,
@@ -230,8 +232,20 @@ impl EditorWindow {
         let image_view = ImageView::new();
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
+        let hierarchy_label = label(
+            localization::text(Key::Hierarchy),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
         let hierarchy = HierarchyView::new();
 
+        let inspector_label = label(
+            localization::text(Key::Inspector),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
         let inspector_heading = label(
             localization::text(Key::Inspector),
             11.0,
@@ -273,9 +287,11 @@ impl EditorWindow {
             sidebar,
             viewport,
             inspector,
+            inspector_label,
             image_view,
             orbit_input,
             status,
+            hierarchy_label,
             hierarchy,
             loaded_scene: RefCell::new(None),
             active_inspector_slot: RefCell::new(None),
@@ -944,7 +960,9 @@ impl WindowDelegate for EditorWindow {
         self.viewport.add_subview(&self.image_view);
         self.viewport.add_subview(&self.orbit_input.view);
         self.viewport.add_subview(&self.status);
+        self.sidebar.add_subview(&self.hierarchy_label);
         self.sidebar.add_subview(self.hierarchy.view());
+        self.inspector.add_subview(&self.inspector_label);
         self.inspector.add_subview(&self.inspector_heading);
         self.inspector.add_subview(&self.inspector_preview);
         self.inspector.add_subview(&self.inspector_body);
@@ -987,10 +1005,19 @@ impl WindowDelegate for EditorWindow {
                 .bottom
                 .constraint_equal_to(&self.viewport.bottom)
                 .offset(-12.0),
+            self.hierarchy_label
+                .top
+                .constraint_equal_to(&self.sidebar.top)
+                .offset(14.0),
+            self.hierarchy_label
+                .leading
+                .constraint_equal_to(&self.sidebar.leading)
+                .offset(14.0),
             self.hierarchy
                 .view()
                 .top
-                .constraint_equal_to(&self.sidebar.top),
+                .constraint_equal_to(&self.hierarchy_label.bottom)
+                .offset(8.0),
             self.hierarchy
                 .view()
                 .bottom
@@ -1003,10 +1030,18 @@ impl WindowDelegate for EditorWindow {
                 .view()
                 .trailing
                 .constraint_equal_to(&self.sidebar.trailing),
-            self.inspector_heading
+            self.inspector_label
                 .top
                 .constraint_equal_to(&self.inspector.top)
-                .offset(22.0),
+                .offset(14.0),
+            self.inspector_label
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.inspector_heading
+                .top
+                .constraint_equal_to(&self.inspector_label.bottom)
+                .offset(8.0),
             self.inspector_heading
                 .leading
                 .constraint_equal_to(&self.inspector.leading)

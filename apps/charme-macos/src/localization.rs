@@ -52,6 +52,7 @@ localization_keys!(
     RecentProjects,
     ProjectFallback,
     Scene,
+    Hierarchy,
     EmptyScene,
     Materials,
     EmptyMaterials,
