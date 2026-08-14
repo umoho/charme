@@ -208,6 +208,11 @@ pub(crate) struct EditorWindow {
     inspector_heading: Label,
     inspector_body: Label,
     inspector_preview: ImageView,
+    inspector_body_preview_leading: RefCell<Option<LayoutConstraint>>,
+    inspector_body_full_leading: RefCell<Option<LayoutConstraint>>,
+    parameter_section_preview_top: RefCell<Option<LayoutConstraint>>,
+    parameter_section_full_top: RefCell<Option<LayoutConstraint>>,
+    parameter_section: Label,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
     pub(crate) controller: RefCell<EditorController>,
@@ -261,6 +266,12 @@ impl EditorWindow {
         inspector_preview.set_background_color(Color::SystemGray);
         round_image_view(&inspector_preview, 12.0);
         inspector_preview.set_hidden(true);
+        let parameter_section = label(
+            localization::text(Key::MaterialParameters),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
         let parameter_panel = View::new();
         let status = label(
             localization::text(Key::RendererStarting),
@@ -290,6 +301,11 @@ impl EditorWindow {
             inspector_heading,
             inspector_body,
             inspector_preview,
+            inspector_body_preview_leading: RefCell::new(None),
+            inspector_body_full_leading: RefCell::new(None),
+            parameter_section_preview_top: RefCell::new(None),
+            parameter_section_full_top: RefCell::new(None),
+            parameter_section,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
             controller: RefCell::new(EditorController::new(localization::text(
@@ -307,7 +323,7 @@ impl EditorWindow {
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.current_inspector_preview.replace(None);
-        self.inspector_preview.set_hidden(true);
+        self.set_inspector_preview_visible(false);
         self.active_inspector_slot.replace(None);
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
@@ -326,7 +342,7 @@ impl EditorWindow {
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.current_inspector_preview.replace(None);
-        self.inspector_preview.set_hidden(true);
+        self.set_inspector_preview_visible(false);
         self.active_inspector_slot.replace(None);
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
@@ -652,7 +668,7 @@ impl EditorWindow {
                 match make_image(frame, 1.0) {
                     Ok(image) => {
                         self.inspector_preview.set_image(&image);
-                        self.inspector_preview.set_hidden(false);
+                        self.set_inspector_preview_visible(true);
                         *self.current_inspector_preview.borrow_mut() = Some(image);
                     }
                     Err(error) => eprintln!("Failed to create inspector material preview: {error}"),
@@ -725,7 +741,7 @@ impl EditorWindow {
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
                 self.active_inspector_slot.replace(None);
-                self.inspector_preview.set_hidden(true);
+                self.set_inspector_preview_visible(false);
                 self.inspector_heading.set_text(info.name());
                 self.inspector_body.set_text(localization::format(
                     Key::SceneSummary,
@@ -738,7 +754,7 @@ impl EditorWindow {
             }
             HierarchyItemId::Materials => {
                 self.active_inspector_slot.replace(None);
-                self.inspector_preview.set_hidden(true);
+                self.set_inspector_preview_visible(false);
                 self.inspector_heading
                     .set_text(localization::text(Key::Materials));
                 self.inspector_body.set_text(localization::format(
@@ -770,6 +786,24 @@ impl EditorWindow {
                     ],
                 ));
             }
+        }
+    }
+
+    fn set_inspector_preview_visible(&self, visible: bool) {
+        self.inspector_preview.set_hidden(!visible);
+        if let (Some(with_preview), Some(without_preview)) = (
+            self.inspector_body_preview_leading.borrow().as_ref(),
+            self.inspector_body_full_leading.borrow().as_ref(),
+        ) {
+            with_preview.set_active(visible);
+            without_preview.set_active(!visible);
+        }
+        if let (Some(with_preview), Some(without_preview)) = (
+            self.parameter_section_preview_top.borrow().as_ref(),
+            self.parameter_section_full_top.borrow().as_ref(),
+        ) {
+            with_preview.set_active(visible);
+            without_preview.set_active(!visible);
         }
     }
 
@@ -949,7 +983,29 @@ impl WindowDelegate for EditorWindow {
         self.inspector.add_subview(&self.inspector_label);
         self.inspector.add_subview(&self.inspector_preview);
         self.inspector.add_subview(&self.inspector_body);
+        self.inspector.add_subview(&self.parameter_section);
         self.inspector.add_subview(&self.parameter_panel);
+
+        let body_leading_with_preview = self
+            .inspector_body
+            .leading
+            .constraint_equal_to(&self.inspector_preview.trailing)
+            .offset(14.0);
+        let body_leading_without_preview = self
+            .inspector_body
+            .leading
+            .constraint_equal_to(&self.inspector.leading)
+            .offset(18.0);
+        let section_top_with_preview = self
+            .parameter_section
+            .top
+            .constraint_equal_to(&self.inspector_preview.bottom)
+            .offset(16.0);
+        let section_top_without_preview = self
+            .parameter_section
+            .top
+            .constraint_equal_to(&self.inspector_body.bottom)
+            .offset(16.0);
 
         LayoutConstraint::activate(&[
             self.image_view.top.constraint_equal_to(&self.viewport.top),
@@ -1037,18 +1093,22 @@ impl WindowDelegate for EditorWindow {
                 .top
                 .constraint_equal_to(&self.inspector_label.bottom)
                 .offset(14.0),
-            self.inspector_body
-                .leading
-                .constraint_equal_to(&self.inspector_preview.trailing)
-                .offset(14.0),
+            body_leading_with_preview.clone(),
+            body_leading_without_preview.clone(),
             self.inspector_body
                 .trailing
                 .constraint_equal_to(&self.inspector.trailing)
                 .offset(-18.0),
+            section_top_with_preview.clone(),
+            section_top_without_preview.clone(),
+            self.parameter_section
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
             self.parameter_panel
                 .top
-                .constraint_equal_to(&self.inspector_preview.bottom)
-                .offset(16.0),
+                .constraint_equal_to(&self.parameter_section.bottom)
+                .offset(8.0),
             self.parameter_panel
                 .leading
                 .constraint_equal_to(&self.inspector.leading)
@@ -1062,6 +1122,16 @@ impl WindowDelegate for EditorWindow {
                 .constraint_equal_to(&self.inspector.bottom)
                 .offset(-18.0),
         ]);
+        body_leading_without_preview.set_active(false);
+        self.inspector_body_preview_leading
+            .replace(Some(body_leading_with_preview));
+        self.inspector_body_full_leading
+            .replace(Some(body_leading_without_preview));
+        self.parameter_section_preview_top
+            .replace(Some(section_top_with_preview));
+        self.parameter_section_full_top
+            .replace(Some(section_top_without_preview));
+        self.set_inspector_preview_visible(false);
 
         self.layout_dock();
 

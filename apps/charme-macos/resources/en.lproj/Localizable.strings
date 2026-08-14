@@ -38,6 +38,7 @@
 "ShaderError" = "Shader Error";
 "ReflectionFailed" = "WGSL reflection failed";
 "MaterialInspector" = "Material Inspector";
+"MaterialParameters" = "Material Parameters";
 "WgslShader" = "WGSL Shader";
 "NoMaterials" = "No material slots";
 "ErrorPrefix" = "Error: ";

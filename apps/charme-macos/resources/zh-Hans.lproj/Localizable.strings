@@ -38,6 +38,7 @@
 "ShaderError" = "Shader错误";
 "ReflectionFailed" = "WGSL反射失败";
 "MaterialInspector" = "材质检查器";
+"MaterialParameters" = "材质参数";
 "WgslShader" = "WGSLShader";
 "NoMaterials" = "没有材质槽";
 "ErrorPrefix" = "错误：";
