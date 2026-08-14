@@ -67,7 +67,7 @@ localization_keys!(
     ShaderError,
     ReflectionFailed,
     MaterialInspector,
-    MaterialHeader,
+    MaterialSubtitle,
     MaterialParameters,
     MaterialSource,
     WgslShader,
