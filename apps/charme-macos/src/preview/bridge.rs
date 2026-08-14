@@ -204,7 +204,10 @@ fn dispatch(message: Message) {
     let message = match message {
         Message::Failed(error) => {
             eprintln!("Renderer failure: {error}");
-            Message::Failed(localization::text(Key::RendererFailed).to_owned())
+            Message::Failed(format!(
+                "{}: {error}",
+                localization::text(Key::RendererFailed)
+            ))
         }
         message => message,
     };

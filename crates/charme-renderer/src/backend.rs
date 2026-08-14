@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError},
@@ -58,6 +59,7 @@ enum Completion {
     Frame,
     MaterialThumbnail {
         target: bevy::prelude::Handle<Image>,
+        slot_index: usize,
     },
 }
 
@@ -115,9 +117,8 @@ fn run(
         while let Ok(completion) = completion_rx.try_recv() {
             match completion {
                 Completion::Frame => in_flight = false,
-                Completion::MaterialThumbnail { target } => {
-                    backend.pending_thumbnails = backend.pending_thumbnails.saturating_sub(1);
-                    backend.retire_thumbnail_target(target);
+                Completion::MaterialThumbnail { target, slot_index } => {
+                    backend.finish_material_thumbnail(slot_index, target);
                 }
             }
         }
@@ -234,6 +235,7 @@ struct Backend {
     pending_thumbnails: usize,
     thumbnail_mesh: bevy::prelude::Handle<Mesh>,
     material_previews: Vec<MaterialPreview>,
+    thumbnail_queue: VecDeque<usize>,
     retired_thumbnail_targets: Vec<bevy::prelude::Handle<Image>>,
 }
 
@@ -241,6 +243,7 @@ struct MaterialPreview {
     slot_index: usize,
     target: bevy::prelude::Handle<Image>,
     scene_path: PathBuf,
+    camera: Entity,
     entities: Vec<Entity>,
 }
 
@@ -311,6 +314,7 @@ impl Backend {
             pending_thumbnails: 0,
             thumbnail_mesh,
             material_previews: Vec::new(),
+            thumbnail_queue: VecDeque::new(),
             retired_thumbnail_targets: Vec::new(),
         })
     }
@@ -414,6 +418,7 @@ impl Backend {
     }
 
     fn clear_material_previews(&mut self) {
+        self.thumbnail_queue.clear();
         for preview in self.material_previews.drain(..) {
             for entity in preview.entities {
                 let _ = self.app.world_mut().despawn(entity);
@@ -469,7 +474,10 @@ impl Backend {
                     Tonemapping::None,
                     Camera {
                         clear_color: ClearColorConfig::Custom(Color::NONE),
-                        is_active: true,
+                        // Only one thumbnail camera is active at a time. This
+                        // prevents dozens of simultaneous GPU readbacks from
+                        // overwhelming the device on large PMX models.
+                        is_active: false,
                         ..Default::default()
                     },
                     Projection::Perspective(bevy::prelude::PerspectiveProjection {
@@ -510,12 +518,62 @@ impl Backend {
 
             self.material_previews.push(MaterialPreview {
                 slot_index,
-                target: target.clone(),
+                target,
                 scene_path: scene_path.to_path_buf(),
+                camera,
                 entities,
             });
-            self.request_thumbnail_readback(scene_path, slot_index, target);
+            self.thumbnail_queue.push_back(slot_index);
         }
+        self.start_next_thumbnail_readback();
+    }
+
+    fn finish_material_thumbnail(
+        &mut self,
+        slot_index: usize,
+        target: bevy::prelude::Handle<Image>,
+    ) {
+        self.pending_thumbnails = self.pending_thumbnails.saturating_sub(1);
+        self.retire_thumbnail_target(target);
+        let camera_entity = self
+            .material_previews
+            .iter()
+            .find(|preview| preview.slot_index == slot_index)
+            .map(|preview| preview.camera);
+        if let Some(camera_entity) = camera_entity
+            && let Some(mut camera) = self.app.world_mut().get_mut::<Camera>(camera_entity)
+        {
+            camera.is_active = false;
+        }
+        self.start_next_thumbnail_readback();
+    }
+
+    fn start_next_thumbnail_readback(&mut self) {
+        if self.pending_thumbnails != 0 {
+            return;
+        }
+        let Some(slot_index) = self.thumbnail_queue.pop_front() else {
+            return;
+        };
+        let Some((scene_path, target, camera)) = self
+            .material_previews
+            .iter()
+            .find(|preview| preview.slot_index == slot_index)
+            .map(|preview| {
+                (
+                    preview.scene_path.clone(),
+                    preview.target.clone(),
+                    preview.camera,
+                )
+            })
+        else {
+            self.start_next_thumbnail_readback();
+            return;
+        };
+        if let Some(mut camera) = self.app.world_mut().get_mut::<Camera>(camera) {
+            camera.is_active = true;
+        }
+        self.request_thumbnail_readback(&scene_path, slot_index, target);
     }
 
     fn request_thumbnail_readback(
@@ -549,6 +607,7 @@ impl Backend {
                 ));
                 let _ = completion.send(Completion::MaterialThumbnail {
                     target: completion_target.clone(),
+                    slot_index,
                 });
                 commands.entity(event.entity).despawn();
             });
@@ -591,20 +650,13 @@ impl Backend {
     }
 
     fn refresh_material_previews(&mut self) {
-        let requests = self
-            .material_previews
-            .iter()
-            .map(|preview| {
-                (
-                    preview.scene_path.clone(),
-                    preview.slot_index,
-                    preview.target.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
-        for (scene_path, slot_index, target) in requests {
-            self.request_thumbnail_readback(&scene_path, slot_index, target);
-        }
+        self.thumbnail_queue.clear();
+        self.thumbnail_queue.extend(
+            self.material_previews
+                .iter()
+                .map(|preview| preview.slot_index),
+        );
+        self.start_next_thumbnail_readback();
     }
 
     fn update_camera_transform(&mut self) -> Result<(), RendererError> {
