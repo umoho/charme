@@ -50,7 +50,6 @@ pub(crate) enum Message {
     Undo,
     Redo,
     MenuContextChanged(MenuContext),
-    Brightness(f32),
     Orbit {
         delta_x: f32,
         delta_y: f32,
@@ -183,7 +182,6 @@ impl Dispatcher for CharmeApp {
                         ApplicationEvent::Failed(error) => window.show_error(&error),
                         _ => {}
                     },
-                    Message::Brightness(value) => window.set_brightness(value),
                     Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
                     Message::Zoom(delta) => window.zoom(delta),
                     Message::LoadPmx(path) => window.import_pmx(path),

@@ -46,7 +46,7 @@ use self::{
     },
     hierarchy::HierarchyView,
     inspector::ParameterControl,
-    viewport::{BrightnessSlider, OrbitInputView, make_image},
+    viewport::{OrbitInputView, make_image},
 };
 use crate::{
     app::{CharmeApp, MenuContext, Message},
@@ -212,8 +212,6 @@ pub(crate) struct EditorWindow {
     parameter_controls: RefCell<Vec<ParameterControl>>,
     pub(crate) controller: RefCell<EditorController>,
     active_material: RefCell<Option<MaterialId>>,
-    brightness_label: Label,
-    brightness: BrightnessSlider,
     current_image: RefCell<Option<Image>>,
     current_inspector_preview: RefCell<Option<Image>>,
     bridge: RefCell<Option<RenderBridge>>,
@@ -263,13 +261,6 @@ impl EditorWindow {
         inspector_preview.set_background_color(Color::SystemGray);
         inspector_preview.set_hidden(true);
         let parameter_panel = View::new();
-        let brightness_label = label(
-            localization::text(Key::Brightness),
-            12.0,
-            false,
-            Color::Label,
-        );
-        let brightness = BrightnessSlider::new(0.3);
         let status = label(
             localization::text(Key::RendererStarting),
             11.0,
@@ -304,8 +295,6 @@ impl EditorWindow {
                 Key::UntitledCharacter,
             ))),
             active_material: RefCell::new(None),
-            brightness_label,
-            brightness,
             current_image: RefCell::new(None),
             current_inspector_preview: RefCell::new(None),
             bridge: RefCell::new(None),
@@ -783,12 +772,6 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn set_brightness(&self, value: f32) {
-        if let Some(bridge) = self.bridge.borrow().as_ref() {
-            bridge.set_brightness(value);
-        }
-    }
-
     pub(crate) fn orbit(&self, delta_x: f32, delta_y: f32) {
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             bridge.orbit(delta_x, delta_y);
@@ -966,8 +949,6 @@ impl WindowDelegate for EditorWindow {
         self.inspector.add_subview(&self.inspector_preview);
         self.inspector.add_subview(&self.inspector_body);
         self.inspector.add_subview(&self.parameter_panel);
-        self.inspector.add_subview(&self.brightness_label);
-        self.inspector.add_subview(&self.brightness.view);
 
         LayoutConstraint::activate(&[
             self.image_view.top.constraint_equal_to(&self.viewport.top),
@@ -1077,35 +1058,8 @@ impl WindowDelegate for EditorWindow {
                 .offset(-18.0),
             self.parameter_panel
                 .bottom
-                .constraint_equal_to(&self.brightness_label.top)
-                .offset(-12.0),
-            self.brightness
-                .view
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.brightness
-                .view
-                .trailing
-                .constraint_equal_to(&self.inspector.trailing)
-                .offset(-18.0),
-            self.brightness
-                .view
-                .bottom
                 .constraint_equal_to(&self.inspector.bottom)
                 .offset(-18.0),
-            self.brightness
-                .view
-                .height
-                .constraint_equal_to_constant(28.0),
-            self.brightness_label
-                .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
-            self.brightness_label
-                .bottom
-                .constraint_equal_to(&self.brightness.view.top)
-                .offset(-4.0),
         ]);
 
         self.layout_dock();

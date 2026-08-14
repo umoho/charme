@@ -58,7 +58,6 @@ localization_keys!(
     EmptyMaterials,
     Inspector,
     InspectorBody,
-    Brightness,
     RendererStarting,
     ProjectOpened,
     WaitingCharacter,

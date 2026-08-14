@@ -29,7 +29,6 @@
 "EmptyMaterials" = "暂无材质槽";
 "Inspector" = "检视器";
 "InspectorBody" = "打开文件后，这里将显示材质和Shader参数。";
-"Brightness" = "视口亮度";
 "RendererStarting" = "正在初始化渲染器…";
 "ProjectOpened" = "项目已打开";
 "WaitingCharacter" = "等待角色模型…";

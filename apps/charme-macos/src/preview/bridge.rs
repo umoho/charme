@@ -17,7 +17,6 @@ use crate::{
 
 enum Command {
     Resize { size: OutputSize, scale: f64 },
-    SetBackground(BackgroundColor),
     Orbit { delta_x: f32, delta_y: f32 },
     Zoom(f32),
     LoadPmx(PathBuf),
@@ -61,12 +60,6 @@ impl RenderBridge {
                             Ok(Command::Resize { size, scale }) => {
                                 display_scale = scale;
                                 if let Err(error) = renderer.resize(size) {
-                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
-                                    break 'running;
-                                }
-                            }
-                            Ok(Command::SetBackground(background)) => {
-                                if let Err(error) = renderer.set_background(background) {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -166,16 +159,6 @@ impl RenderBridge {
 
     pub(crate) fn resize(&self, size: OutputSize, scale: f64) {
         let _ = self.commands.send(Command::Resize { size, scale });
-    }
-
-    pub(crate) fn set_brightness(&self, value: f32) {
-        let value = value.clamp(0.0, 1.0);
-        let background = BackgroundColor::rgb(
-            0.015 + value * 0.08,
-            0.018 + value * 0.09,
-            0.025 + value * 0.12,
-        );
-        let _ = self.commands.send(Command::SetBackground(background));
     }
 
     pub(crate) fn orbit(&self, delta_x: f32, delta_y: f32) {

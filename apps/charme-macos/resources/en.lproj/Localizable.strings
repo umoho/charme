@@ -29,7 +29,6 @@
 "EmptyMaterials" = "No material slots";
 "Inspector" = "Inspector";
 "InspectorBody" = "Materials and Shader parameters will appear here after opening a file.";
-"Brightness" = "Viewport Brightness";
 "RendererStarting" = "Starting renderer…";
 "ProjectOpened" = "Project opened";
 "WaitingCharacter" = "Waiting for character model…";
