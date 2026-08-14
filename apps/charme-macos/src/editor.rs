@@ -862,6 +862,7 @@ impl EditorWindow {
                 };
                 self.active_inspector_slot.replace(Some(index));
                 self.set_source_visible(true);
+                self.set_parameter_section_visible(!self.parameter_controls.borrow().is_empty());
                 self.set_inspector_preview_loading();
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
                     bridge.request_material_inspector_preview(index);
