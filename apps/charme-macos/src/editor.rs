@@ -272,7 +272,8 @@ impl EditorWindow {
             true,
             Color::LabelSecondary,
         );
-        let parameter_panel = View::new();
+        let parameter_panel = panel(Color::SystemFillQuaternary);
+        parameter_panel.layer.set_corner_radius(8.0);
         let status = label(
             localization::text(Key::RendererStarting),
             11.0,
@@ -566,11 +567,13 @@ impl EditorWindow {
                 control
                     .view
                     .leading
-                    .constraint_equal_to(&self.parameter_panel.leading),
+                    .constraint_equal_to(&self.parameter_panel.leading)
+                    .offset(10.0),
                 control
                     .view
                     .trailing
-                    .constraint_equal_to(&self.parameter_panel.trailing),
+                    .constraint_equal_to(&self.parameter_panel.trailing)
+                    .offset(-10.0),
                 control.view.height.constraint_equal_to_constant(48.0),
             ]);
             controls.push(control);
