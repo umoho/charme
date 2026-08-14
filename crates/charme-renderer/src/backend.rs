@@ -283,7 +283,8 @@ struct MaterialPreview {
 
 const MATERIAL_PREVIEW_SIZE: u32 = 64;
 const MATERIAL_INSPECTOR_PREVIEW_SIZE: u32 = 256;
-const MATERIAL_PREVIEW_LAYER: usize = 30;
+const MATERIAL_THUMBNAIL_LAYER: usize = 30;
+const MATERIAL_INSPECTOR_LAYER: usize = 31;
 
 impl Backend {
     fn new(
@@ -332,12 +333,14 @@ impl Backend {
             &mut app,
             thumbnail_mesh.clone(),
             MATERIAL_PREVIEW_SIZE,
+            MATERIAL_THUMBNAIL_LAYER,
             false,
         );
         let inspector_preview = spawn_material_preview_studio(
             &mut app,
             thumbnail_mesh,
             MATERIAL_INSPECTOR_PREVIEW_SIZE,
+            MATERIAL_INSPECTOR_LAYER,
             true,
         );
 
@@ -845,6 +848,7 @@ fn spawn_material_preview_studio(
     app: &mut App,
     mesh: bevy::prelude::Handle<Mesh>,
     size: u32,
+    layer: usize,
     with_floor: bool,
 ) -> MaterialPreviewStudio {
     let target = add_preview_target(app, size);
@@ -852,7 +856,7 @@ fn spawn_material_preview_studio(
         .world_mut()
         .resource_mut::<Assets<CharmeMaterial>>()
         .add(CharmeMaterial::default());
-    let render_layers = RenderLayers::layer(MATERIAL_PREVIEW_LAYER);
+    let render_layers = RenderLayers::layer(layer);
     let camera_transform = material_preview_camera_transform(Vec3::ZERO);
     let total_distance = camera_transform.translation.length();
     let world = app.world_mut();
