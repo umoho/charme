@@ -5,7 +5,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use charme_core::ParameterValue;
+use charme_core::{MaterialSlotId, ParameterValue};
 
 use crate::{
     BackgroundColor, Frame, OutputSize, PmxSceneInfo, RendererConfig, RendererError,
@@ -29,7 +29,9 @@ pub enum RendererNotification {
     MaterialThumbnailReady {
         /// The PMX scene that owns the thumbnail.
         path: PathBuf,
-        /// The zero-based PMX material-slot index.
+        /// Stable identifier of the PMX material slot.
+        slot_id: MaterialSlotId,
+        /// The zero-based PMX material-slot index, retained for thumbnail layout.
         slot_index: usize,
         /// The thumbnail pixels, in the renderer's BGRA sRGB format.
         frame: Frame,
@@ -38,7 +40,9 @@ pub enum RendererNotification {
     MaterialInspectorPreviewReady {
         /// The PMX scene that owns the preview.
         path: PathBuf,
-        /// The zero-based PMX material-slot index.
+        /// Stable identifier of the PMX material slot.
+        slot_id: MaterialSlotId,
+        /// The zero-based PMX material-slot index, retained for preview layout.
         slot_index: usize,
         /// The preview pixels, in the renderer's BGRA sRGB format.
         frame: Frame,
@@ -180,7 +184,19 @@ impl Renderer {
     /// are read through [`Renderer::try_recv_material_thumbnail`]. A failed load
     /// does not replace the currently displayed scene.
     pub fn load_pmx(&self, path: impl AsRef<Path>) -> Result<(), RendererError> {
-        self.send(Command::LoadPmx(path.as_ref().to_path_buf()))
+        self.load_pmx_with_slot_ids(path, Vec::new())
+    }
+
+    /// Loads a PMX model while preserving known slot IDs by source material index.
+    pub fn load_pmx_with_slot_ids(
+        &self,
+        path: impl AsRef<Path>,
+        existing_slot_ids: Vec<(u32, MaterialSlotId)>,
+    ) -> Result<(), RendererError> {
+        self.send(Command::LoadPmx {
+            path: path.as_ref().to_path_buf(),
+            existing_slot_ids,
+        })
     }
 
     /// Updates a fixed-ABI material parameter and requests a new frame.
@@ -199,6 +215,26 @@ impl Renderer {
             });
         }
         self.send(Command::SetMaterialParameter {
+            slot_id: None,
+            path: path.into(),
+            value,
+        })
+    }
+
+    /// Updates a parameter on one stable PMX material slot only.
+    pub fn set_material_parameter_for_slot(
+        &self,
+        slot_id: MaterialSlotId,
+        path: impl Into<String>,
+        value: ParameterValue,
+    ) -> Result<(), RendererError> {
+        if !value.is_finite() {
+            return Err(RendererError::InvalidConfiguration {
+                message: "material parameters must be finite".to_owned(),
+            });
+        }
+        self.send(Command::SetMaterialParameter {
+            slot_id: Some(slot_id),
             path: path.into(),
             value,
         })
@@ -209,7 +245,21 @@ impl Renderer {
         &self,
         slot_index: usize,
     ) -> Result<(), RendererError> {
-        self.send(Command::RequestMaterialInspectorPreview { slot_index })
+        self.send(Command::RequestMaterialInspectorPreview {
+            slot_id: None,
+            slot_index: Some(slot_index),
+        })
+    }
+
+    /// Requests a preview using the stable identity of one PMX material slot.
+    pub fn request_material_inspector_preview_for_slot(
+        &self,
+        slot_id: MaterialSlotId,
+    ) -> Result<(), RendererError> {
+        self.send(Command::RequestMaterialInspectorPreview {
+            slot_id: Some(slot_id),
+            slot_index: None,
+        })
     }
 
     /// Requests a frame representing the latest renderer state.

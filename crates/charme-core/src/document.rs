@@ -351,6 +351,23 @@ impl MaterialSlot {
         }
     }
 
+    /// Creates an imported material slot with a caller-provided stable identifier.
+    pub fn with_id(
+        id: MaterialSlotId,
+        source_index: u32,
+        source_name: impl Into<String>,
+        source_english_name: impl Into<String>,
+        material: Option<MaterialId>,
+    ) -> Self {
+        Self {
+            id,
+            source_index,
+            source_name: source_name.into(),
+            source_english_name: source_english_name.into(),
+            material,
+        }
+    }
+
     /// Returns the stable slot identifier.
     pub const fn id(&self) -> MaterialSlotId {
         self.id
@@ -451,6 +468,17 @@ mod tests {
             Err(DocumentValidationError::MissingShader { material, .. })
                 if material == material_id
         ));
+    }
+
+    #[test]
+    fn slot_with_id_preserves_binding_identity() {
+        let id = MaterialSlotId::new();
+        let material = MaterialId::new();
+        let slot = MaterialSlot::with_id(id, 2, "身体", "Body", Some(material));
+
+        assert_eq!(slot.id(), id);
+        assert_eq!(slot.source_index(), 2);
+        assert_eq!(slot.material(), Some(material));
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod appkit;
 mod model;
 
 use cacao::image::Image;
+use charme_core::MaterialSlotId;
 use charme_renderer::PmxSceneInfo;
 
 use appkit::NativeHierarchyView;
@@ -36,7 +37,7 @@ impl HierarchyView {
             .set_snapshot(HierarchySnapshot::from_scene(info));
     }
 
-    pub(crate) fn set_material_thumbnail(&self, slot_index: usize, image: &Image) {
-        self.native.set_thumbnail(slot_index, image);
+    pub(crate) fn set_material_thumbnail(&self, slot_id: MaterialSlotId, image: &Image) {
+        self.native.set_thumbnail(slot_id, image);
     }
 }

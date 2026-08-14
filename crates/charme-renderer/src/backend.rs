@@ -31,7 +31,7 @@ use bevy::{
 };
 
 use charme_bevy::{CharmeMaterial, CharmeMaterialPlugin, ParameterError};
-use charme_core::ParameterValue;
+use charme_core::{MaterialSlotId, ParameterValue};
 
 use crate::{
     BackgroundColor, Frame, OutputSize, PixelFormat, RendererConfig, RendererError,
@@ -42,12 +42,25 @@ use crate::{
 pub(crate) enum Command {
     Resize(OutputSize),
     SetBackground(BackgroundColor),
-    Orbit { delta_x: f32, delta_y: f32 },
+    Orbit {
+        delta_x: f32,
+        delta_y: f32,
+    },
     Zoom(f32),
     ResetCamera,
-    LoadPmx(PathBuf),
-    SetMaterialParameter { path: String, value: ParameterValue },
-    RequestMaterialInspectorPreview { slot_index: usize },
+    LoadPmx {
+        path: PathBuf,
+        existing_slot_ids: Vec<(u32, MaterialSlotId)>,
+    },
+    SetMaterialParameter {
+        slot_id: Option<MaterialSlotId>,
+        path: String,
+        value: ParameterValue,
+    },
+    RequestMaterialInspectorPreview {
+        slot_id: Option<MaterialSlotId>,
+        slot_index: Option<usize>,
+    },
     Redraw,
     Shutdown,
 }
@@ -131,6 +144,7 @@ fn run(
             || dirty
             || backend.pending_thumbnails != 0
             || backend.pending_inspector_preview
+            || backend.requested_inspector_slot.is_some()
             || !backend.thumbnail_queue.is_empty()
         {
             match commands.recv_timeout(Duration::from_millis(1)) {
@@ -167,15 +181,25 @@ fn run(
                     backend.reset_camera()?;
                     dirty = true;
                 }
-                Command::LoadPmx(path) => {
-                    dirty |= backend.load_pmx(path)?;
+                Command::LoadPmx {
+                    path,
+                    existing_slot_ids,
+                } => {
+                    dirty |= backend.load_pmx(path, &existing_slot_ids)?;
                 }
-                Command::SetMaterialParameter { path, value } => {
-                    dirty |= backend.set_material_parameter(path, value);
+                Command::SetMaterialParameter {
+                    slot_id,
+                    path,
+                    value,
+                } => {
+                    dirty |= backend.set_material_parameter(slot_id, path, value);
                 }
                 Command::Redraw => dirty = true,
-                Command::RequestMaterialInspectorPreview { slot_index } => {
-                    backend.request_material_inspector_preview(slot_index);
+                Command::RequestMaterialInspectorPreview {
+                    slot_id,
+                    slot_index,
+                } => {
+                    backend.request_material_inspector_preview(slot_id, slot_index);
                 }
                 Command::Shutdown => return Ok(()),
             }
@@ -203,15 +227,25 @@ fn run(
                     backend.reset_camera()?;
                     dirty = true;
                 }
-                Ok(Command::LoadPmx(path)) => {
-                    dirty |= backend.load_pmx(path)?;
+                Ok(Command::LoadPmx {
+                    path,
+                    existing_slot_ids,
+                }) => {
+                    dirty |= backend.load_pmx(path, &existing_slot_ids)?;
                 }
-                Ok(Command::SetMaterialParameter { path, value }) => {
-                    dirty |= backend.set_material_parameter(path, value);
+                Ok(Command::SetMaterialParameter {
+                    slot_id,
+                    path,
+                    value,
+                }) => {
+                    dirty |= backend.set_material_parameter(slot_id, path, value);
                 }
                 Ok(Command::Redraw) => dirty = true,
-                Ok(Command::RequestMaterialInspectorPreview { slot_index }) => {
-                    backend.request_material_inspector_preview(slot_index);
+                Ok(Command::RequestMaterialInspectorPreview {
+                    slot_id,
+                    slot_index,
+                }) => {
+                    backend.request_material_inspector_preview(slot_id, slot_index);
                 }
                 Ok(Command::Shutdown) => return Ok(()),
                 Err(TryRecvError::Empty) => break,
@@ -259,7 +293,7 @@ struct Backend {
     completion: Sender<Completion>,
     pending_thumbnails: usize,
     pending_inspector_preview: bool,
-    requested_inspector_slot: Option<usize>,
+    requested_inspector_slot: Option<MaterialSlotId>,
     thumbnail_preview: MaterialPreviewStudio,
     inspector_preview: MaterialPreviewStudio,
     material_previews: Vec<MaterialPreview>,
@@ -276,6 +310,7 @@ struct MaterialPreviewStudio {
 }
 
 struct MaterialPreview {
+    slot_id: MaterialSlotId,
     slot_index: usize,
     scene_path: PathBuf,
     material: bevy::prelude::Handle<CharmeMaterial>,
@@ -429,8 +464,12 @@ impl Backend {
         self.update_camera_transform()
     }
 
-    fn load_pmx(&mut self, path: PathBuf) -> Result<bool, RendererError> {
-        let prepared = match prepare_pmx_scene(&path) {
+    fn load_pmx(
+        &mut self,
+        path: PathBuf,
+        existing_slot_ids: &[(u32, MaterialSlotId)],
+    ) -> Result<bool, RendererError> {
+        let prepared = match prepare_pmx_scene(&path, existing_slot_ids) {
             Ok(prepared) => prepared,
             Err(message) => {
                 let _ = self.events.send(WorkerEvent::Notification(
@@ -492,7 +531,16 @@ impl Backend {
         materials: &[bevy::prelude::Handle<CharmeMaterial>],
     ) {
         for (slot_index, material) in materials.iter().enumerate() {
+            let Some(slot_id) = self
+                .pmx_scene
+                .as_ref()
+                .and_then(|scene| scene.material_slot_ids.get(slot_index))
+                .copied()
+            else {
+                continue;
+            };
             self.material_previews.push(MaterialPreview {
+                slot_id,
                 slot_index,
                 scene_path: scene_path.to_path_buf(),
                 material: material.clone(),
@@ -565,13 +613,29 @@ impl Backend {
         }
     }
 
-    fn request_material_inspector_preview(&mut self, slot_index: usize) {
-        if self
-            .material_previews
-            .iter()
-            .any(|preview| preview.slot_index == slot_index)
+    fn request_material_inspector_preview(
+        &mut self,
+        slot_id: Option<MaterialSlotId>,
+        slot_index: Option<usize>,
+    ) {
+        let slot_id = slot_id.or_else(|| {
+            slot_index.and_then(|index| {
+                self.pmx_scene
+                    .as_ref()
+                    .and_then(|scene| scene.material_slot_ids.get(index))
+                    .copied()
+            })
+        });
+        if let Some(slot_id) = slot_id
+            && self
+                .material_previews
+                .iter()
+                .any(|preview| preview.slot_id == slot_id)
         {
-            self.requested_inspector_slot = Some(slot_index);
+            self.requested_inspector_slot = Some(slot_id);
+            // The selected Inspector preview has priority over stale thumbnail
+            // work queued by an earlier material edit.
+            self.thumbnail_queue.clear();
         }
     }
 
@@ -579,14 +643,20 @@ impl Backend {
         if self.pending_inspector_preview {
             return;
         }
-        let Some(slot_index) = self.requested_inspector_slot else {
+        let Some(slot_id) = self.requested_inspector_slot else {
             return;
         };
-        let Some((scene_path, material)) = self
+        let Some((scene_path, material, slot_index)) = self
             .material_previews
             .iter()
-            .find(|preview| preview.slot_index == slot_index)
-            .map(|preview| (preview.scene_path.clone(), preview.material.clone()))
+            .find(|preview| preview.slot_id == slot_id)
+            .map(|preview| {
+                (
+                    preview.scene_path.clone(),
+                    preview.material.clone(),
+                    preview.slot_index,
+                )
+            })
         else {
             return;
         };
@@ -598,10 +668,18 @@ impl Backend {
         {
             camera.is_active = true;
         }
-        self.request_inspector_preview_readback(&scene_path, slot_index);
+        self.request_inspector_preview_readback(&scene_path, slot_id, slot_index);
     }
 
     fn request_thumbnail_readback(&mut self, scene_path: &std::path::Path, slot_index: usize) {
+        let Some(slot_id) = self
+            .pmx_scene
+            .as_ref()
+            .and_then(|scene| scene.material_slot_ids.get(slot_index))
+            .copied()
+        else {
+            return;
+        };
         let events = self.events.clone();
         let completion = self.completion.clone();
         let scene_path = scene_path.to_path_buf();
@@ -620,6 +698,7 @@ impl Backend {
                 let _ = events.send(WorkerEvent::Notification(
                     RendererNotification::MaterialThumbnailReady {
                         path: scene_path.clone(),
+                        slot_id,
                         slot_index,
                         frame,
                     },
@@ -629,13 +708,31 @@ impl Backend {
             });
     }
 
-    fn set_material_parameter(&mut self, path: String, value: ParameterValue) -> bool {
+    fn set_material_parameter(
+        &mut self,
+        slot_id: Option<MaterialSlotId>,
+        path: String,
+        value: ParameterValue,
+    ) -> bool {
         let mut changed = false;
-        let handles = self.placeholder_materials.iter().chain(
-            self.pmx_scene
-                .iter()
-                .flat_map(|scene| scene.materials.iter()),
-        );
+        let handles = match slot_id {
+            Some(slot_id) => self
+                .pmx_scene
+                .as_ref()
+                .and_then(|scene| scene.material_for_slot(slot_id))
+                .into_iter()
+                .collect::<Vec<_>>(),
+            None => self.placeholder_materials.iter().collect::<Vec<_>>(),
+        };
+        if handles.is_empty() {
+            let _ = self.events.send(WorkerEvent::Notification(
+                RendererNotification::MaterialParameterRejected {
+                    path,
+                    message: "the selected material slot is not available".to_owned(),
+                },
+            ));
+            return false;
+        }
         for handle in handles {
             let result = self
                 .app
@@ -678,6 +775,7 @@ impl Backend {
     fn request_inspector_preview_readback(
         &mut self,
         scene_path: &std::path::Path,
+        slot_id: MaterialSlotId,
         slot_index: usize,
     ) {
         let events = self.events.clone();
@@ -701,6 +799,7 @@ impl Backend {
                 let _ = events.send(WorkerEvent::Notification(
                     RendererNotification::MaterialInspectorPreviewReady {
                         path: scene_path.clone(),
+                        slot_id,
                         slot_index,
                         frame,
                     },

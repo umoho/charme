@@ -69,6 +69,7 @@ localization_keys!(
     MaterialInspector,
     MaterialSubtitle,
     MaterialParameters,
+    InspectorNoParameters,
     MaterialSource,
     WgslShader,
     NoMaterials,

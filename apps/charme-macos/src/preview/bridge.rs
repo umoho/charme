@@ -7,7 +7,7 @@ use std::{
 
 use cacao::appkit::App;
 use charme_application::ApplicationEvent;
-use charme_core::ParameterValue;
+use charme_core::{MaterialSlotId, ParameterValue};
 use charme_renderer::{BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig};
 
 use crate::{
@@ -16,12 +16,27 @@ use crate::{
 };
 
 enum Command {
-    Resize { size: OutputSize, scale: f64 },
-    Orbit { delta_x: f32, delta_y: f32 },
+    Resize {
+        size: OutputSize,
+        scale: f64,
+    },
+    Orbit {
+        delta_x: f32,
+        delta_y: f32,
+    },
     Zoom(f32),
-    LoadPmx(PathBuf),
-    SetMaterialParameter { path: String, value: ParameterValue },
-    RequestMaterialInspectorPreview { slot_index: usize },
+    LoadPmx {
+        path: PathBuf,
+        existing_slot_ids: Vec<(u32, MaterialSlotId)>,
+    },
+    SetMaterialParameter {
+        slot_id: MaterialSlotId,
+        path: String,
+        value: ParameterValue,
+    },
+    RequestMaterialInspectorPreview {
+        slot_id: MaterialSlotId,
+    },
     Redraw,
     Stop,
 }
@@ -76,21 +91,32 @@ impl RenderBridge {
                                     break 'running;
                                 }
                             }
-                            Ok(Command::LoadPmx(path)) => {
-                                if let Err(error) = renderer.load_pmx(path) {
-                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
-                                    break 'running;
-                                }
-                            }
-                            Ok(Command::SetMaterialParameter { path, value }) => {
-                                if let Err(error) = renderer.set_material_parameter(path, value) {
-                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
-                                    break 'running;
-                                }
-                            }
-                            Ok(Command::RequestMaterialInspectorPreview { slot_index }) => {
+                            Ok(Command::LoadPmx {
+                                path,
+                                existing_slot_ids,
+                            }) => {
                                 if let Err(error) =
-                                    renderer.request_material_inspector_preview(slot_index)
+                                    renderer.load_pmx_with_slot_ids(path, existing_slot_ids)
+                                {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::SetMaterialParameter {
+                                slot_id,
+                                path,
+                                value,
+                            }) => {
+                                if let Err(error) =
+                                    renderer.set_material_parameter_for_slot(slot_id, path, value)
+                                {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::RequestMaterialInspectorPreview { slot_id }) => {
+                                if let Err(error) =
+                                    renderer.request_material_inspector_preview_for_slot(slot_id)
                                 {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
@@ -169,20 +195,30 @@ impl RenderBridge {
         let _ = self.commands.send(Command::Zoom(delta));
     }
 
-    pub(crate) fn load_pmx(&self, path: PathBuf) {
-        let _ = self.commands.send(Command::LoadPmx(path));
+    pub(crate) fn load_pmx(&self, path: PathBuf, existing_slot_ids: Vec<(u32, MaterialSlotId)>) {
+        let _ = self.commands.send(Command::LoadPmx {
+            path,
+            existing_slot_ids,
+        });
     }
 
-    pub(crate) fn set_material_parameter(&self, path: String, value: ParameterValue) {
-        let _ = self
-            .commands
-            .send(Command::SetMaterialParameter { path, value });
+    pub(crate) fn set_material_parameter(
+        &self,
+        slot_id: MaterialSlotId,
+        path: String,
+        value: ParameterValue,
+    ) {
+        let _ = self.commands.send(Command::SetMaterialParameter {
+            slot_id,
+            path,
+            value,
+        });
     }
 
-    pub(crate) fn request_material_inspector_preview(&self, slot_index: usize) {
+    pub(crate) fn request_material_inspector_preview(&self, slot_id: MaterialSlotId) {
         let _ = self
             .commands
-            .send(Command::RequestMaterialInspectorPreview { slot_index });
+            .send(Command::RequestMaterialInspectorPreview { slot_id });
     }
 
     pub(crate) fn request_redraw(&self) {

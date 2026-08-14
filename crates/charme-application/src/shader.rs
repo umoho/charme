@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
+
+use charme_core::ParameterValue;
+const BUILT_IN_SHADER: &str = include_str!("../../../assets/shaders/preview_material.wgsl");
 
 use charme_shader::{
     MetadataBlock, MetadataValue, ParameterType, ScalarType, ShaderComposer, ShaderInterface,
@@ -111,6 +114,46 @@ fn build_inspection(path: PathBuf, interface: &ShaderInterface) -> ShaderInspect
     }
 }
 
+/// Reflects the built-in preview shader used for PMX material slots.
+pub fn inspect_preview_shader() -> Result<ShaderInspection, String> {
+    inspect_shader_source(
+        PathBuf::from("assets/shaders/preview_material.wgsl"),
+        BUILT_IN_SHADER,
+    )
+}
+
+/// Applies persisted material values to reflected scalar control defaults.
+pub fn controls_for_material(
+    inspection: &ShaderInspection,
+    parameters: &BTreeMap<String, ParameterValue>,
+) -> Vec<ParameterControlSpec> {
+    inspection
+        .controls
+        .iter()
+        .cloned()
+        .map(|mut control| {
+            if let Some(value) = parameters.get(&control.key)
+                && let Some(number) = parameter_number(value)
+            {
+                control.initial = number.clamp(control.minimum, control.maximum);
+            }
+            control
+        })
+        .collect()
+}
+
+fn parameter_number(value: &ParameterValue) -> Option<f64> {
+    match value {
+        ParameterValue::F32(value) => Some(*value as f64),
+        ParameterValue::I32(value) => Some(*value as f64),
+        ParameterValue::U32(value) => Some(*value as f64),
+        ParameterValue::Bool(_)
+        | ParameterValue::Vec2(_)
+        | ParameterValue::Vec3(_)
+        | ParameterValue::Vec4(_) => None,
+    }
+}
+
 fn control_kind(parameter_type: &ParameterType) -> Option<(ParameterControlKind, f64, f64)> {
     match parameter_type {
         ParameterType::Scalar(ScalarType::F32) => Some((ParameterControlKind::Float, 0.0, 1.0)),
@@ -148,5 +191,16 @@ mod tests {
         assert_eq!(inspection.controls[0].label, "Roughness");
         assert_eq!(inspection.controls[0].initial, 0.45);
         assert_eq!(inspection.non_scalar_field_count, 1);
+    }
+
+    #[test]
+    fn reflected_controls_use_the_selected_material_value() {
+        let inspection = inspect_preview_shader().unwrap();
+        let parameters =
+            BTreeMap::from([("material.roughness".to_owned(), ParameterValue::F32(0.8))]);
+        let controls = controls_for_material(&inspection, &parameters);
+
+        assert_eq!(controls[0].key, "material.roughness");
+        assert!((controls[0].initial - 0.8).abs() < 1e-6);
     }
 }

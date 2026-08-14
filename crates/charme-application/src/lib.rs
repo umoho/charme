@@ -16,11 +16,18 @@ use charme_core::{
 use thiserror::Error;
 
 mod event;
+mod inspector;
 mod shader;
 
 pub use event::ApplicationEvent;
+pub use inspector::{
+    InspectorProvider, InspectorSection, MaterialInstanceInspectorProvider,
+    MaterialRenderStateProvider, MaterialSelectionContext, MaterialSlotInspectorProvider,
+    SelectionTarget, ShaderParameterProvider, TextureBindingProvider,
+};
 pub use shader::{
-    ParameterControlKind, ParameterControlSpec, ShaderInspection, inspect_shader_source,
+    ParameterControlKind, ParameterControlSpec, ShaderInspection, controls_for_material,
+    inspect_preview_shader, inspect_shader_source,
 };
 
 /// An action that can be issued by any native frontend.

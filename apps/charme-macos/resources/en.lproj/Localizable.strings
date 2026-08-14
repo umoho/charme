@@ -40,6 +40,7 @@
 "MaterialInspector" = "Material Inspector";
 "MaterialSubtitle" = "PMX Material";
 "MaterialParameters" = "Material Parameters";
+"InspectorNoParameters" = "No editable shader parameters";
 "MaterialSource" = "Source";
 "WgslShader" = "WGSL Shader";
 "NoMaterials" = "No material slots";

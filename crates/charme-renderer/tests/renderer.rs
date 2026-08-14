@@ -107,7 +107,11 @@ fn renders_resizes_and_loads_pmx() {
     assert_eq!(info.index_count(), 3);
     assert_eq!(info.material_slots().len(), 1);
     assert_eq!(info.material_slots()[0].name(), "Body");
+    let slot_id = info.material_slots()[0].id();
     assert!(info.warnings().is_empty());
+    renderer
+        .set_material_parameter_for_slot(slot_id, "material.roughness", ParameterValue::F32(0.2))
+        .expect("targeted material parameter should be accepted");
     let pmx_frame = wait_for_frame(&mut renderer);
     assert!(pmx_frame.sequence() > reset.sequence());
     let thumbnail = wait_for_material_thumbnail(&mut renderer);
@@ -115,6 +119,7 @@ fn renders_resizes_and_loads_pmx() {
         path,
         slot_index,
         frame,
+        ..
     } = thumbnail
     else {
         panic!("expected a material thumbnail notification");
@@ -132,6 +137,7 @@ fn renders_resizes_and_loads_pmx() {
         path,
         slot_index,
         frame,
+        ..
     } = inspector_preview
     else {
         panic!("expected an inspector material preview notification");

@@ -40,6 +40,7 @@
 "MaterialInspector" = "材质检查器";
 "MaterialSubtitle" = "PMX材质";
 "MaterialParameters" = "材质参数";
+"InspectorNoParameters" = "没有可编辑的Shader参数";
 "MaterialSource" = "来源";
 "WgslShader" = "WGSLShader";
 "NoMaterials" = "没有材质槽";

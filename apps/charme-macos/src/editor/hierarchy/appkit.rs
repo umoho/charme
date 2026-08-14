@@ -13,6 +13,7 @@ use cacao::{
     utils::properties::ObjcProperty,
     view::View,
 };
+use charme_core::MaterialSlotId;
 
 use super::model::HierarchySnapshot;
 use crate::app::{Message, dispatch};
@@ -146,13 +147,13 @@ impl NativeHierarchyView {
         drop(old_state);
     }
 
-    pub(super) fn set_thumbnail(&self, slot_index: usize, image: &Image) {
+    pub(super) fn set_thumbnail(&self, slot_id: MaterialSlotId, image: &Image) {
         let image_id = (&*image.0 as *const Object) as id;
         let item = {
             let mut state = self.state.borrow_mut();
             let Some((node_index, _)) =
                 state.snapshot.nodes.iter().enumerate().find(|(_, node)| {
-                    node.id == super::model::HierarchyItemId::MaterialSlot(slot_index)
+                    node.id == super::model::HierarchyItemId::MaterialSlot(slot_id)
                 })
             else {
                 return;

@@ -17,10 +17,12 @@ use bevy_pmx::{
     import_pmx, parse_pmx,
 };
 use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
+use charme_core::MaterialSlotId;
 
 /// A PMX material slot exposed to the editor UI.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxMaterialSlot {
+    id: MaterialSlotId,
     index: usize,
     name: String,
     english_name: String,
@@ -30,6 +32,11 @@ pub struct PmxMaterialSlot {
 }
 
 impl PmxMaterialSlot {
+    /// Returns the stable identifier assigned to this imported slot.
+    pub const fn id(&self) -> MaterialSlotId {
+        self.id
+    }
+
     /// Returns the material's zero-based index in the PMX document.
     pub const fn index(&self) -> usize {
         self.index
@@ -125,7 +132,10 @@ struct DecodedTexture {
     has_alpha: bool,
 }
 
-pub(crate) fn prepare_pmx_scene(path: &Path) -> Result<PreparedPmxScene, String> {
+pub(crate) fn prepare_pmx_scene(
+    path: &Path,
+    existing_slot_ids: &[(u32, MaterialSlotId)],
+) -> Result<PreparedPmxScene, String> {
     let source = PmxSource::folder(path.parent().unwrap_or_else(|| Path::new(".")));
     let location = PmxSourceLocation::disk(path.to_path_buf());
     let bytes = source.read_bytes(&location).map_err(|error| {
@@ -140,7 +150,7 @@ pub(crate) fn prepare_pmx_scene(path: &Path) -> Result<PreparedPmxScene, String>
     let (bounds_min, bounds_max) = bounds_for_model(&model)
         .ok_or_else(|| format!("{} contains no vertices", path.display()))?;
     let (textures, warnings) = load_textures(&source, model.texture_paths());
-    let info = scene_info(path, &model, warnings);
+    let info = scene_info(path, &model, warnings, existing_slot_ids);
 
     Ok(PreparedPmxScene {
         info,
@@ -156,6 +166,19 @@ pub(crate) struct SpawnedPmxScene {
     images: Vec<Handle<Image>>,
     meshes: Vec<Handle<Mesh>>,
     pub(crate) materials: Vec<Handle<CharmeMaterial>>,
+    pub(crate) material_slot_ids: Vec<MaterialSlotId>,
+}
+
+impl SpawnedPmxScene {
+    pub(crate) fn material_for_slot(
+        &self,
+        slot_id: MaterialSlotId,
+    ) -> Option<&Handle<CharmeMaterial>> {
+        self.material_slot_ids
+            .iter()
+            .position(|candidate| *candidate == slot_id)
+            .and_then(|index| self.materials.get(index))
+    }
 }
 
 impl SpawnedPmxScene {
@@ -277,11 +300,22 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
         entities,
         images: texture_handles,
         meshes: mesh_handles,
+        material_slot_ids: prepared
+            .info
+            .material_slots()
+            .iter()
+            .map(PmxMaterialSlot::id)
+            .collect(),
         materials: material_handles,
     }
 }
 
-fn scene_info(path: &Path, model: &Pmx, warnings: Vec<String>) -> PmxSceneInfo {
+fn scene_info(
+    path: &Path,
+    model: &Pmx,
+    warnings: Vec<String>,
+    existing_slot_ids: &[(u32, MaterialSlotId)],
+) -> PmxSceneInfo {
     let name = model
         .raw_document()
         .and_then(|document| {
@@ -303,6 +337,11 @@ fn scene_info(path: &Path, model: &Pmx, warnings: Vec<String>) -> PmxSceneInfo {
         .iter()
         .enumerate()
         .map(|(index, record)| PmxMaterialSlot {
+            id: existing_slot_ids
+                .iter()
+                .find(|(source_index, _)| *source_index == index as u32)
+                .map(|(_, id)| *id)
+                .unwrap_or_else(MaterialSlotId::new),
             index,
             name: record.material.name.clone(),
             english_name: record.material.name_english.clone(),

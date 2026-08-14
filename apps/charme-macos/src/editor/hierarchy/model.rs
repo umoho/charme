@@ -1,3 +1,4 @@
+use charme_core::MaterialSlotId;
 use charme_renderer::PmxSceneInfo;
 
 use crate::localization::{self, Key};
@@ -8,7 +9,7 @@ pub(crate) enum HierarchyItemId {
     Scene,
     Model,
     Materials,
-    MaterialSlot(usize),
+    MaterialSlot(MaterialSlotId),
 }
 
 pub(super) struct HierarchyNode {
@@ -58,7 +59,7 @@ impl HierarchySnapshot {
             nodes[2].children.push(node_index);
             let index = format!("{:02}", slot.index());
             nodes.push(HierarchyNode {
-                id: HierarchyItemId::MaterialSlot(slot.index()),
+                id: HierarchyItemId::MaterialSlot(slot.id()),
                 title: localization::format(
                     Key::MaterialSlotListItem,
                     &[("index", &index), ("name", &slot.name())],

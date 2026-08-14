@@ -32,10 +32,13 @@ use cacao::{
     text::Label,
     view::View,
 };
-use charme_application::{EditorAction, EditorController};
+use charme_application::{
+    EditorAction, EditorController, InspectorProvider, MaterialSelectionContext, SelectionTarget,
+    ShaderParameterProvider, controls_for_material, inspect_preview_shader,
+};
 use charme_core::{
-    CharacterSource, EditorCommand, MaterialId, MaterialInstance, ParameterValue, ResourcePath,
-    ResourcePathError, ShaderSource as DocumentShaderSource,
+    CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlot, MaterialSlotId,
+    ParameterValue, ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
 use core_graphics::geometry::{CGPoint, CGRect};
@@ -205,7 +208,7 @@ pub(crate) struct EditorWindow {
     hierarchy_label: Label,
     hierarchy: HierarchyView,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
-    active_inspector_slot: RefCell<Option<usize>>,
+    active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
     inspector_body: Label,
     inspector_preview: ImageView,
@@ -221,6 +224,7 @@ pub(crate) struct EditorWindow {
     parameter_section: Label,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
+    reflected_inspection: RefCell<Option<ShaderInspection>>,
     pub(crate) controller: RefCell<EditorController>,
     active_material: RefCell<Option<MaterialId>>,
     current_image: RefCell<Option<Image>>,
@@ -381,6 +385,7 @@ impl EditorWindow {
             parameter_section,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
+            reflected_inspection: RefCell::new(None),
             controller: RefCell::new(EditorController::new(localization::text(
                 Key::UntitledCharacter,
             ))),
@@ -395,6 +400,7 @@ impl EditorWindow {
         self.controller.replace(controller);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
+        self.reflected_inspection.replace(None);
         self.current_inspector_preview.replace(None);
         self.set_inspector_preview_visible(false);
         self.set_source_visible(false);
@@ -416,6 +422,7 @@ impl EditorWindow {
             )));
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
+        self.reflected_inspection.replace(None);
         self.current_inspector_preview.replace(None);
         self.set_inspector_preview_visible(false);
         self.set_source_visible(false);
@@ -560,8 +567,16 @@ impl EditorWindow {
             Key::LoadingPmx,
             &[("path", &path.display())],
         ));
+        let existing_slot_ids = self
+            .controller
+            .borrow()
+            .document()
+            .material_slots()
+            .iter()
+            .map(|slot| (slot.source_index(), slot.id()))
+            .collect();
         if let Some(bridge) = self.bridge.borrow().as_ref() {
-            bridge.load_pmx(path);
+            bridge.load_pmx(path, existing_slot_ids);
         }
     }
 
@@ -618,6 +633,7 @@ impl EditorWindow {
             .and_then(|name| name.to_str())
             .unwrap_or(localization::text(Key::WgslShader));
         self.install_document_material(&inspection.path, file_name);
+        self.reflected_inspection.replace(Some(inspection.clone()));
         let summary_key = if inspection.non_scalar_field_count == 0 {
             Key::ShaderSummary
         } else {
@@ -634,9 +650,26 @@ impl EditorWindow {
         ));
 
         self.set_source_visible(false);
+        let control_count = self.install_parameter_controls(&inspection.controls);
+        self.set_parameter_section_visible(control_count != 0);
+        self.status.set_text(localization::format(
+            Key::ShaderReflected,
+            &[("file_name", &file_name), ("controls", &control_count)],
+        ));
+    }
+
+    fn install_parameter_controls(
+        &self,
+        specs: &[charme_application::ParameterControlSpec],
+    ) -> usize {
+        let old_controls = self.parameter_controls.replace(Vec::new());
+        for control in old_controls {
+            control.view.objc.with_mut(|view| unsafe {
+                let _: () = msg_send![view, removeFromSuperview];
+            });
+        }
         let mut controls = self.parameter_controls.borrow_mut();
-        controls.clear();
-        for (index, spec) in inspection.controls.iter().take(8).enumerate() {
+        for (index, spec) in specs.iter().take(8).enumerate() {
             let control = ParameterControl::new(spec);
             self.parameter_panel.add_subview(&control.view);
             LayoutConstraint::activate(&[
@@ -659,13 +692,7 @@ impl EditorWindow {
             ]);
             controls.push(control);
         }
-        let control_count = controls.len();
-        drop(controls);
-        self.set_parameter_section_visible(control_count != 0);
-        self.status.set_text(localization::format(
-            Key::ShaderReflected,
-            &[("file_name", &file_name), ("controls", &control_count)],
-        ));
+        controls.len()
     }
 
     fn install_document_material(&self, path: &std::path::Path, name: &str) {
@@ -689,6 +716,12 @@ impl EditorWindow {
             })
             .is_ok()
         {
+            if let Some(slot_id) = *self.active_inspector_slot.borrow() {
+                let _ = self.dispatch_action(EditorAction::Command(EditorCommand::BindMaterial {
+                    slot: slot_id,
+                    material: Some(material_id),
+                }));
+            }
             *self.active_material.borrow_mut() = Some(material_id);
         }
     }
@@ -717,9 +750,12 @@ impl EditorWindow {
             .ok()
         });
         if updated.is_some()
-            && let Some(bridge) = self.bridge.borrow().as_ref()
+            && let (Some(slot_id), Some(bridge)) = (
+                *self.active_inspector_slot.borrow(),
+                self.bridge.borrow().as_ref(),
+            )
         {
-            bridge.set_material_parameter(key.to_owned(), parameter);
+            bridge.set_material_parameter(slot_id, key.to_owned(), parameter);
         }
         let formatted_value = format!("{value:.3}");
         self.status.set_text(localization::format(
@@ -737,13 +773,14 @@ impl EditorWindow {
             RendererNotification::PmxLoaded(info) => self.show_scene_info(&info),
             RendererNotification::MaterialInspectorPreviewReady {
                 path,
-                slot_index,
+                slot_id,
                 frame,
+                ..
             } => {
                 let slot_matches = self
                     .active_inspector_slot
                     .borrow()
-                    .is_some_and(|active| active == slot_index);
+                    .is_some_and(|active| active == slot_id);
                 let scene_matches = self
                     .loaded_scene
                     .borrow()
@@ -770,8 +807,9 @@ impl EditorWindow {
             }
             RendererNotification::MaterialThumbnailReady {
                 path,
-                slot_index,
+                slot_id,
                 frame,
+                ..
             } => {
                 let scene_matches = self
                     .loaded_scene
@@ -782,7 +820,7 @@ impl EditorWindow {
                     return;
                 }
                 match make_image(frame, 1.0) {
-                    Ok(image) => self.hierarchy.set_material_thumbnail(slot_index, &image),
+                    Ok(image) => self.hierarchy.set_material_thumbnail(slot_id, &image),
                     Err(error) => eprintln!("Failed to create material thumbnail: {error}"),
                 }
             }
@@ -798,6 +836,23 @@ impl EditorWindow {
     }
 
     fn show_scene_info(&self, info: &PmxSceneInfo) {
+        self.install_pmx_material_bindings(info);
+        self.reflected_inspection
+            .replace(inspect_preview_shader().ok());
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            let document = self.controller.borrow();
+            for slot in document.document().material_slots() {
+                let Some(material_id) = slot.material() else {
+                    continue;
+                };
+                let Some(material) = document.document().material(material_id) else {
+                    continue;
+                };
+                for (path, value) in material.parameters() {
+                    bridge.set_material_parameter(slot.id(), path.clone(), value.clone());
+                }
+            }
+        }
         self.hierarchy.set_scene(info);
         self.loaded_scene.replace(Some(info.clone()));
         self.select_hierarchy_item(HierarchyItemId::Model);
@@ -815,6 +870,52 @@ impl EditorWindow {
         ));
     }
 
+    fn install_pmx_material_bindings(&self, info: &PmxSceneInfo) {
+        let Ok(shader_path) =
+            ResourcePath::project_relative("assets/shaders/preview_material.wgsl")
+        else {
+            return;
+        };
+        let shader = DocumentShaderSource::new("Preview Material", shader_path);
+        if self
+            .dispatch_action(EditorAction::Command(EditorCommand::UpsertShader(
+                shader.clone(),
+            )))
+            .is_err()
+        {
+            return;
+        }
+        let material_ids = info
+            .material_slots()
+            .iter()
+            .map(|slot| {
+                let material = MaterialInstance::new(slot.name(), shader.id());
+                let material_id = material.id();
+                let _ = self.dispatch_action(EditorAction::Command(EditorCommand::UpsertMaterial(
+                    material,
+                )));
+                material_id
+            })
+            .collect::<Vec<_>>();
+        let slots = info
+            .material_slots()
+            .iter()
+            .zip(material_ids)
+            .map(|(slot, material)| {
+                MaterialSlot::with_id(
+                    slot.id(),
+                    slot.index() as u32,
+                    slot.name(),
+                    slot.english_name(),
+                    Some(material),
+                )
+            })
+            .collect();
+        let _ = self.dispatch_action(EditorAction::Command(EditorCommand::ReplaceMaterialSlots(
+            slots,
+        )));
+    }
+
     pub(crate) fn select_hierarchy_item(&self, item: HierarchyItemId) {
         let scene = self.loaded_scene.borrow();
         let Some(info) = scene.as_ref() else {
@@ -828,6 +929,7 @@ impl EditorWindow {
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
                 self.active_inspector_slot.replace(None);
+                self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
                 self.set_source_visible(false);
                 self.set_parameter_section_visible(false);
@@ -843,6 +945,7 @@ impl EditorWindow {
             }
             HierarchyItemId::Materials => {
                 self.active_inspector_slot.replace(None);
+                self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
                 self.set_source_visible(false);
                 self.set_parameter_section_visible(false);
@@ -856,20 +959,63 @@ impl EditorWindow {
                     ],
                 ));
             }
-            HierarchyItemId::MaterialSlot(index) => {
-                let Some(slot) = info.material_slots().get(index) else {
+            HierarchyItemId::MaterialSlot(slot_id) => {
+                let Some(slot) = info
+                    .material_slots()
+                    .iter()
+                    .find(|slot| slot.id() == slot_id)
+                else {
                     return;
                 };
-                self.active_inspector_slot.replace(Some(index));
+                self.active_inspector_slot.replace(Some(slot_id));
+                let context = MaterialSelectionContext::resolve(
+                    self.controller.borrow().document(),
+                    SelectionTarget::MaterialSlot(slot_id),
+                );
+                self.active_material.replace(context.material);
+                let controls = {
+                    let inspection = self.reflected_inspection.borrow();
+                    let document = self.controller.borrow();
+                    inspection
+                        .as_ref()
+                        .zip(
+                            context
+                                .material
+                                .and_then(|id| document.document().material(id)),
+                        )
+                        .map(|(inspection, material)| {
+                            controls_for_material(inspection, material.parameters())
+                        })
+                        .unwrap_or_default()
+                };
+                let control_count = self.install_parameter_controls(&controls);
+                let has_parameter_section = self
+                    .reflected_inspection
+                    .borrow()
+                    .as_ref()
+                    .and_then(|inspection| {
+                        ShaderParameterProvider
+                            .provide(
+                                self.controller.borrow().document(),
+                                context,
+                                Some(inspection),
+                            )
+                            .map(|section| section.has_content)
+                    })
+                    .unwrap_or(false);
                 self.set_source_visible(true);
-                self.set_parameter_section_visible(!self.parameter_controls.borrow().is_empty());
+                self.set_parameter_section_visible(control_count != 0 && has_parameter_section);
                 self.set_inspector_preview_loading();
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
-                    bridge.request_material_inspector_preview(index);
+                    bridge.request_material_inspector_preview(slot_id);
                 }
                 self.inspector_heading.set_text(slot.name());
                 self.inspector_body
-                    .set_text(localization::text(Key::MaterialSubtitle));
+                    .set_text(localization::text(if control_count == 0 {
+                        Key::InspectorNoParameters
+                    } else {
+                        Key::MaterialSubtitle
+                    }));
                 let missing = localization::text(Key::MissingValue);
                 self.set_source_values([
                     slot.index().to_string(),
