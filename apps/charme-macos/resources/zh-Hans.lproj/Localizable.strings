@@ -38,7 +38,9 @@
 "ShaderError" = "Shader错误";
 "ReflectionFailed" = "WGSL反射失败";
 "MaterialInspector" = "材质检查器";
+"MaterialHeader" = "{name}\n材质槽 {index}";
 "MaterialParameters" = "材质参数";
+"MaterialSource" = "来源";
 "WgslShader" = "WGSLShader";
 "NoMaterials" = "没有材质槽";
 "ErrorPrefix" = "错误：";
@@ -82,7 +84,10 @@
 "SceneSummary" = "{name}\n\n{vertices}个顶点 · {indices}个索引";
 "MaterialSlotListItem" = "{index}  {name}";
 "MoreMaterials" = "\n…以及{count}个";
-"MaterialDetails" = "{name}\n\n源材质槽{index}\n漫反射：{diffuse}\nSphere：{sphere}\nToon：{toon}\n\nCharme材质控件即将支持。";
+"SourceSlot" = "PMX 材质槽";
+"DiffuseTexture" = "漫反射";
+"SphereTexture" = "Sphere";
+"ToonTexture" = "Toon";
 "MissingValue" = "—";
 "SceneLoaded" = "已加载{name} · {slots}个材质槽";
 "SceneLoadedWithWarnings" = "已加载{name} · {warnings}个警告";

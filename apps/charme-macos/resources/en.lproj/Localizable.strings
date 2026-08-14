@@ -38,7 +38,9 @@
 "ShaderError" = "Shader Error";
 "ReflectionFailed" = "WGSL reflection failed";
 "MaterialInspector" = "Material Inspector";
+"MaterialHeader" = "{name}\nMaterial Slot {index}";
 "MaterialParameters" = "Material Parameters";
+"MaterialSource" = "Source";
 "WgslShader" = "WGSL Shader";
 "NoMaterials" = "No material slots";
 "ErrorPrefix" = "Error: ";
@@ -82,7 +84,10 @@
 "SceneSummary" = "{name}\n\n{vertices} vertices · {indices} indices";
 "MaterialSlotListItem" = "{index}  {name}";
 "MoreMaterials" = "\n…and {count} more";
-"MaterialDetails" = "{name}\n\nSource material slot {index}\nDiffuse: {diffuse}\nSphere: {sphere}\nToon: {toon}\n\nCharme material controls are coming soon.";
+"SourceSlot" = "PMX Slot";
+"DiffuseTexture" = "Diffuse";
+"SphereTexture" = "Sphere";
+"ToonTexture" = "Toon";
 "MissingValue" = "—";
 "SceneLoaded" = "Loaded {name} · {slots} material slots";
 "SceneLoadedWithWarnings" = "Loaded {name} · {warnings} warnings";

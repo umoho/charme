@@ -45,7 +45,7 @@ use self::{
         compute_geometry,
     },
     hierarchy::HierarchyView,
-    inspector::ParameterControl,
+    inspector::{ParameterControl, PropertyRow},
     viewport::{OrbitInputView, make_image},
 };
 use crate::{
@@ -212,6 +212,11 @@ pub(crate) struct EditorWindow {
     inspector_body_full_leading: RefCell<Option<LayoutConstraint>>,
     parameter_section_preview_top: RefCell<Option<LayoutConstraint>>,
     parameter_section_full_top: RefCell<Option<LayoutConstraint>>,
+    source_section_preview_top: RefCell<Option<LayoutConstraint>>,
+    source_section_full_top: RefCell<Option<LayoutConstraint>>,
+    source_section: Label,
+    source_panel: View,
+    source_rows: RefCell<Vec<PropertyRow>>,
     parameter_section: Label,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
@@ -266,6 +271,38 @@ impl EditorWindow {
         inspector_preview.set_background_color(Color::SystemGray);
         round_image_view(&inspector_preview, 12.0);
         inspector_preview.set_hidden(true);
+        let source_section = label(
+            localization::text(Key::MaterialSource),
+            11.0,
+            true,
+            Color::LabelSecondary,
+        );
+        let source_panel = panel(Color::SystemFillQuaternary);
+        source_panel.layer.set_corner_radius(8.0);
+        let source_rows = vec![
+            PropertyRow::new(localization::text(Key::SourceSlot)),
+            PropertyRow::new(localization::text(Key::DiffuseTexture)),
+            PropertyRow::new(localization::text(Key::SphereTexture)),
+            PropertyRow::new(localization::text(Key::ToonTexture)),
+        ];
+        for (index, row) in source_rows.iter().enumerate() {
+            source_panel.add_subview(&row.view);
+            LayoutConstraint::activate(&[
+                row.view
+                    .top
+                    .constraint_equal_to(&source_panel.top)
+                    .offset(8.0 + index as f64 * 28.0),
+                row.view
+                    .leading
+                    .constraint_equal_to(&source_panel.leading)
+                    .offset(12.0),
+                row.view
+                    .trailing
+                    .constraint_equal_to(&source_panel.trailing)
+                    .offset(-12.0),
+                row.view.height.constraint_equal_to_constant(22.0),
+            ]);
+        }
         let parameter_section = label(
             localization::text(Key::MaterialParameters),
             11.0,
@@ -274,6 +311,10 @@ impl EditorWindow {
         );
         let parameter_panel = panel(Color::SystemFillQuaternary);
         parameter_panel.layer.set_corner_radius(8.0);
+        source_section.set_hidden(true);
+        source_panel.set_hidden(true);
+        parameter_section.set_hidden(true);
+        parameter_panel.set_hidden(true);
         let status = label(
             localization::text(Key::RendererStarting),
             11.0,
@@ -306,6 +347,11 @@ impl EditorWindow {
             inspector_body_full_leading: RefCell::new(None),
             parameter_section_preview_top: RefCell::new(None),
             parameter_section_full_top: RefCell::new(None),
+            source_section_preview_top: RefCell::new(None),
+            source_section_full_top: RefCell::new(None),
+            source_section,
+            source_panel,
+            source_rows: RefCell::new(source_rows),
             parameter_section,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
@@ -325,6 +371,8 @@ impl EditorWindow {
         self.parameter_controls.borrow_mut().clear();
         self.current_inspector_preview.replace(None);
         self.set_inspector_preview_visible(false);
+        self.set_source_visible(false);
+        self.set_parameter_section_visible(false);
         self.active_inspector_slot.replace(None);
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
@@ -344,6 +392,8 @@ impl EditorWindow {
         self.parameter_controls.borrow_mut().clear();
         self.current_inspector_preview.replace(None);
         self.set_inspector_preview_visible(false);
+        self.set_source_visible(false);
+        self.set_parameter_section_visible(false);
         self.active_inspector_slot.replace(None);
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
@@ -503,6 +553,8 @@ impl EditorWindow {
     }
 
     pub(crate) fn inspect_shader(&self, path: PathBuf) {
+        self.set_source_visible(false);
+        self.set_parameter_section_visible(false);
         self.inspector_heading
             .set_text(localization::text(Key::InspectingShader));
         self.inspector_body.set_text(path.display().to_string());
@@ -518,6 +570,8 @@ impl EditorWindow {
         let inspection = match result {
             Ok(inspection) => inspection,
             Err(error) => {
+                self.set_source_visible(false);
+                self.set_parameter_section_visible(false);
                 self.inspector_heading
                     .set_text(localization::text(Key::ShaderError));
                 self.inspector_body.set_text(localization::format(
@@ -553,6 +607,7 @@ impl EditorWindow {
             ],
         ));
 
+        self.set_source_visible(false);
         let mut controls = self.parameter_controls.borrow_mut();
         controls.clear();
         for (index, spec) in inspection.controls.iter().take(8).enumerate() {
@@ -578,9 +633,12 @@ impl EditorWindow {
             ]);
             controls.push(control);
         }
+        let control_count = controls.len();
+        drop(controls);
+        self.set_parameter_section_visible(control_count != 0);
         self.status.set_text(localization::format(
             Key::ShaderReflected,
-            &[("file_name", &file_name), ("controls", &controls.len())],
+            &[("file_name", &file_name), ("controls", &control_count)],
         ));
     }
 
@@ -734,8 +792,8 @@ impl EditorWindow {
     pub(crate) fn select_hierarchy_item(&self, item: HierarchyItemId) {
         let scene = self.loaded_scene.borrow();
         let Some(info) = scene.as_ref() else {
-            self.inspector_heading
-                .set_text(localization::text(Key::Inspector));
+            self.set_source_visible(false);
+            self.set_parameter_section_visible(false);
             self.inspector_body
                 .set_text(localization::text(Key::EmptyScene));
             return;
@@ -745,6 +803,8 @@ impl EditorWindow {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
                 self.active_inspector_slot.replace(None);
                 self.set_inspector_preview_visible(false);
+                self.set_source_visible(false);
+                self.set_parameter_section_visible(false);
                 self.inspector_heading.set_text(info.name());
                 self.inspector_body.set_text(localization::format(
                     Key::SceneSummary,
@@ -758,6 +818,8 @@ impl EditorWindow {
             HierarchyItemId::Materials => {
                 self.active_inspector_slot.replace(None);
                 self.set_inspector_preview_visible(false);
+                self.set_source_visible(false);
+                self.set_parameter_section_visible(false);
                 self.inspector_heading
                     .set_text(localization::text(Key::Materials));
                 self.inspector_body.set_text(localization::format(
@@ -773,21 +835,21 @@ impl EditorWindow {
                     return;
                 };
                 self.active_inspector_slot.replace(Some(index));
+                self.set_source_visible(true);
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
                     bridge.request_material_inspector_preview(index);
                 }
-                self.inspector_heading.set_text(slot.name());
                 let missing = localization::text(Key::MissingValue);
                 self.inspector_body.set_text(localization::format(
-                    Key::MaterialDetails,
-                    &[
-                        ("name", &slot.name()),
-                        ("index", &slot.index()),
-                        ("diffuse", &slot.diffuse_texture().unwrap_or(missing)),
-                        ("sphere", &slot.sphere_texture().unwrap_or(missing)),
-                        ("toon", &slot.toon_texture().unwrap_or(missing)),
-                    ],
+                    Key::MaterialHeader,
+                    &[("name", &slot.name()), ("index", &slot.index())],
                 ));
+                self.set_source_values([
+                    slot.index().to_string(),
+                    slot.diffuse_texture().unwrap_or(missing).to_owned(),
+                    slot.sphere_texture().unwrap_or(missing).to_owned(),
+                    slot.toon_texture().unwrap_or(missing).to_owned(),
+                ]);
             }
         }
     }
@@ -801,13 +863,36 @@ impl EditorWindow {
             with_preview.set_active(visible);
             without_preview.set_active(!visible);
         }
+    }
+
+    fn set_source_visible(&self, visible: bool) {
+        self.source_section.set_hidden(!visible);
+        self.source_panel.set_hidden(!visible);
         if let (Some(with_preview), Some(without_preview)) = (
-            self.parameter_section_preview_top.borrow().as_ref(),
-            self.parameter_section_full_top.borrow().as_ref(),
+            self.source_section_preview_top.borrow().as_ref(),
+            self.source_section_full_top.borrow().as_ref(),
         ) {
             with_preview.set_active(visible);
             without_preview.set_active(!visible);
         }
+        if let (Some(with_source), Some(without_source)) = (
+            self.parameter_section_preview_top.borrow().as_ref(),
+            self.parameter_section_full_top.borrow().as_ref(),
+        ) {
+            with_source.set_active(visible);
+            without_source.set_active(!visible);
+        }
+    }
+
+    fn set_source_values(&self, values: [String; 4]) {
+        for (row, value) in self.source_rows.borrow().iter().zip(values) {
+            row.set_value(value);
+        }
+    }
+
+    fn set_parameter_section_visible(&self, visible: bool) {
+        self.parameter_section.set_hidden(!visible);
+        self.parameter_panel.set_hidden(!visible);
     }
 
     pub(crate) fn orbit(&self, delta_x: f32, delta_y: f32) {
@@ -986,6 +1071,8 @@ impl WindowDelegate for EditorWindow {
         self.inspector.add_subview(&self.inspector_label);
         self.inspector.add_subview(&self.inspector_preview);
         self.inspector.add_subview(&self.inspector_body);
+        self.inspector.add_subview(&self.source_section);
+        self.inspector.add_subview(&self.source_panel);
         self.inspector.add_subview(&self.parameter_section);
         self.inspector.add_subview(&self.parameter_panel);
 
@@ -999,12 +1086,22 @@ impl WindowDelegate for EditorWindow {
             .leading
             .constraint_equal_to(&self.inspector.leading)
             .offset(18.0);
-        let section_top_with_preview = self
-            .parameter_section
+        let source_top_with_preview = self
+            .source_section
             .top
             .constraint_equal_to(&self.inspector_preview.bottom)
             .offset(16.0);
-        let section_top_without_preview = self
+        let source_top_without_preview = self
+            .source_section
+            .top
+            .constraint_equal_to(&self.inspector_body.bottom)
+            .offset(16.0);
+        let section_top_with_source = self
+            .parameter_section
+            .top
+            .constraint_equal_to(&self.source_panel.bottom)
+            .offset(16.0);
+        let section_top_without_source = self
             .parameter_section
             .top
             .constraint_equal_to(&self.inspector_body.bottom)
@@ -1102,8 +1199,27 @@ impl WindowDelegate for EditorWindow {
                 .trailing
                 .constraint_equal_to(&self.inspector.trailing)
                 .offset(-18.0),
-            section_top_with_preview.clone(),
-            section_top_without_preview.clone(),
+            source_top_with_preview.clone(),
+            source_top_without_preview.clone(),
+            self.source_section
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.source_panel
+                .top
+                .constraint_equal_to(&self.source_section.bottom)
+                .offset(8.0),
+            self.source_panel
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.source_panel
+                .trailing
+                .constraint_equal_to(&self.inspector.trailing)
+                .offset(-18.0),
+            self.source_panel.height.constraint_equal_to_constant(120.0),
+            section_top_with_source.clone(),
+            section_top_without_source.clone(),
             self.parameter_section
                 .leading
                 .constraint_equal_to(&self.inspector.leading)
@@ -1131,9 +1247,14 @@ impl WindowDelegate for EditorWindow {
         self.inspector_body_full_leading
             .replace(Some(body_leading_without_preview));
         self.parameter_section_preview_top
-            .replace(Some(section_top_with_preview));
+            .replace(Some(section_top_with_source));
         self.parameter_section_full_top
-            .replace(Some(section_top_without_preview));
+            .replace(Some(section_top_without_source));
+        self.source_section_preview_top
+            .replace(Some(source_top_with_preview));
+        self.source_section_full_top
+            .replace(Some(source_top_without_preview));
+        self.set_source_visible(false);
         self.set_inspector_preview_visible(false);
 
         self.layout_dock();
