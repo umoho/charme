@@ -57,11 +57,14 @@ Build and open the native macOS application bundle with:
 
 ```sh
 cargo install cargo-packager --version 0.11.8 --locked # once
-scripts/build-macos-app.sh
-scripts/open-macos-app.sh
+scripts/run-macos-app.sh                 # debug: build then run
+scripts/run-macos-app.sh --release       # release: build then run
+scripts/run-macos-app.sh --run-only      # run an existing debug bundle
+scripts/run-macos-app.sh --build-only    # build without running
 ```
 
-The bundle is written to `target/release/bundle/Charme.app`. See
+The default debug bundle is written to `target/debug/bundle/Charme.app`; use
+`--release` for `target/release/bundle/Charme.app`. See
 [`docs/macos-packaging.md`](docs/macos-packaging.md) for localization, file
 association, signing, and release details.
 

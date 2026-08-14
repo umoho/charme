@@ -12,14 +12,22 @@ cargo install cargo-packager --version 0.11.8 --locked
 
 ## 构建与启动
 
-从仓库根目录运行：
+从仓库根目录运行单个脚本即可构建并启动 debug 应用：
 
 ```sh
-scripts/build-macos-app.sh
-scripts/open-macos-app.sh
+scripts/run-macos-app.sh
 ```
 
-产物位于 `target/release/bundle/Charme.app`。也可以直接运行：
+也可以指定 release，或只构建/只运行：
+
+```sh
+scripts/run-macos-app.sh --release
+scripts/run-macos-app.sh --build-only --release
+scripts/run-macos-app.sh --run-only
+```
+
+debug 产物位于 `target/debug/bundle/Charme.app`，release 产物位于
+`target/release/bundle/Charme.app`。也可以直接运行：
 
 ```sh
 cargo packager --config Packager.toml
