@@ -124,6 +124,23 @@ fn renders_resizes_and_loads_pmx() {
     assert_eq!(frame.size(), OutputSize::new(64, 64));
     assert_eq!(frame.pixel_format(), PixelFormat::Bgra8Srgb);
 
+    renderer
+        .request_material_inspector_preview(0)
+        .expect("inspector preview should be accepted");
+    let inspector_preview = wait_for_notification(&mut renderer);
+    let RendererNotification::MaterialInspectorPreviewReady {
+        path,
+        slot_index,
+        frame,
+    } = inspector_preview
+    else {
+        panic!("expected an inspector material preview notification");
+    };
+    assert_eq!(path, pmx_path);
+    assert_eq!(slot_index, 0);
+    assert_eq!(frame.size(), OutputSize::new(256, 256));
+    assert_eq!(frame.pixel_format(), PixelFormat::Bgra8Srgb);
+
     let missing = pmx_path.with_file_name("missing-model.pmx");
     renderer
         .load_pmx(&missing)

@@ -15,10 +15,12 @@ use bevy::{
         Camera, Camera3d, ClearColorConfig, Projection, RenderTarget, visibility::RenderLayers,
     },
     core_pipeline::tonemapping::Tonemapping,
-    image::Image,
+    image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
+    mesh::VertexAttributeValues,
     prelude::{
-        Color, Commands, Cuboid, DirectionalLight, Entity, Mesh, Mesh3d, MeshMaterial3d, Meshable,
-        On, Plane3d, Quat, Sphere, StandardMaterial, Transform, Vec3,
+        Color, Commands, Cuboid, DirectionalLight, Entity, Mesh, Mesh3d, MeshBuilder,
+        MeshMaterial3d, Meshable, On, Plane3d, Quat, Sphere, StandardMaterial, Transform, Vec2,
+        Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
@@ -45,6 +47,7 @@ pub(crate) enum Command {
     ResetCamera,
     LoadPmx(PathBuf),
     SetMaterialParameter { path: String, value: ParameterValue },
+    RequestMaterialInspectorPreview { slot_index: usize },
     Redraw,
     Shutdown,
 }
@@ -58,6 +61,7 @@ pub(crate) enum WorkerEvent {
 enum Completion {
     Frame,
     MaterialThumbnail { slot_index: usize },
+    MaterialInspectorPreview { slot_index: usize },
 }
 
 pub(crate) fn spawn(
@@ -117,12 +121,16 @@ fn run(
                 Completion::MaterialThumbnail { slot_index } => {
                     backend.finish_material_thumbnail(slot_index);
                 }
+                Completion::MaterialInspectorPreview { slot_index } => {
+                    backend.finish_material_inspector_preview(slot_index);
+                }
             }
         }
 
         let command = if in_flight
             || dirty
             || backend.pending_thumbnails != 0
+            || backend.pending_inspector_preview
             || !backend.thumbnail_queue.is_empty()
         {
             match commands.recv_timeout(Duration::from_millis(1)) {
@@ -166,6 +174,9 @@ fn run(
                     dirty |= backend.set_material_parameter(path, value);
                 }
                 Command::Redraw => dirty = true,
+                Command::RequestMaterialInspectorPreview { slot_index } => {
+                    backend.request_material_inspector_preview(slot_index);
+                }
                 Command::Shutdown => return Ok(()),
             }
         }
@@ -199,6 +210,9 @@ fn run(
                     dirty |= backend.set_material_parameter(path, value);
                 }
                 Ok(Command::Redraw) => dirty = true,
+                Ok(Command::RequestMaterialInspectorPreview { slot_index }) => {
+                    backend.request_material_inspector_preview(slot_index);
+                }
                 Ok(Command::Shutdown) => return Ok(()),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Ok(()),
@@ -218,9 +232,12 @@ fn run(
         // has no pending redraw or readback.
         if !dirty && !in_flight {
             backend.start_next_thumbnail_readback();
+            if backend.pending_thumbnails == 0 {
+                backend.start_inspector_preview_readback();
+            }
         }
 
-        if in_flight || backend.pending_thumbnails != 0 {
+        if in_flight || backend.pending_thumbnails != 0 || backend.pending_inspector_preview {
             backend.app.update();
         }
     }
@@ -241,17 +258,21 @@ struct Backend {
     events: Sender<WorkerEvent>,
     completion: Sender<Completion>,
     pending_thumbnails: usize,
-    shared_material_preview: SharedMaterialPreview,
+    pending_inspector_preview: bool,
+    requested_inspector_slot: Option<usize>,
+    thumbnail_preview: MaterialPreviewStudio,
+    inspector_preview: MaterialPreviewStudio,
     material_previews: Vec<MaterialPreview>,
     thumbnail_queue: VecDeque<usize>,
 }
 
-struct SharedMaterialPreview {
+struct MaterialPreviewStudio {
     target: bevy::prelude::Handle<Image>,
     object: Entity,
     camera: Entity,
+    _floor: Option<Entity>,
     _lights: [Entity; 2],
-    _fallback_material: bevy::prelude::Handle<CharmeMaterial>,
+    fallback_material: bevy::prelude::Handle<CharmeMaterial>,
 }
 
 struct MaterialPreview {
@@ -261,6 +282,7 @@ struct MaterialPreview {
 }
 
 const MATERIAL_PREVIEW_SIZE: u32 = 64;
+const MATERIAL_INSPECTOR_PREVIEW_SIZE: u32 = 256;
 const MATERIAL_PREVIEW_LAYER: usize = 30;
 
 impl Backend {
@@ -306,7 +328,18 @@ impl Backend {
             orbit,
         );
 
-        let shared_material_preview = spawn_shared_material_preview(&mut app, thumbnail_mesh);
+        let thumbnail_preview = spawn_material_preview_studio(
+            &mut app,
+            thumbnail_mesh.clone(),
+            MATERIAL_PREVIEW_SIZE,
+            false,
+        );
+        let inspector_preview = spawn_material_preview_studio(
+            &mut app,
+            thumbnail_mesh,
+            MATERIAL_INSPECTOR_PREVIEW_SIZE,
+            true,
+        );
 
         // Make the image and camera visible to the render world before reporting
         // successful initialization.
@@ -327,7 +360,10 @@ impl Backend {
             events,
             completion,
             pending_thumbnails: 0,
-            shared_material_preview,
+            pending_inspector_preview: false,
+            requested_inspector_slot: None,
+            thumbnail_preview,
+            inspector_preview,
             material_previews: Vec::new(),
             thumbnail_queue: VecDeque::new(),
         })
@@ -434,11 +470,17 @@ impl Backend {
     fn clear_material_previews(&mut self) {
         self.thumbnail_queue.clear();
         self.material_previews.clear();
-        if self.pending_thumbnails == 0 {
-            self.set_shared_preview_material(
-                self.shared_material_preview._fallback_material.clone(),
+        if self.pending_thumbnails == 0 && !self.pending_inspector_preview {
+            self.set_preview_material(
+                self.thumbnail_preview.object,
+                self.thumbnail_preview.fallback_material.clone(),
+            );
+            self.set_preview_material(
+                self.inspector_preview.object,
+                self.inspector_preview.fallback_material.clone(),
             );
         }
+        self.requested_inspector_slot = None;
     }
 
     fn spawn_material_previews(
@@ -462,7 +504,18 @@ impl Backend {
         if let Some(mut camera) = self
             .app
             .world_mut()
-            .get_mut::<Camera>(self.shared_material_preview.camera)
+            .get_mut::<Camera>(self.thumbnail_preview.camera)
+        {
+            camera.is_active = false;
+        }
+    }
+
+    fn finish_material_inspector_preview(&mut self, _slot_index: usize) {
+        self.pending_inspector_preview = false;
+        if let Some(mut camera) = self
+            .app
+            .world_mut()
+            .get_mut::<Camera>(self.inspector_preview.camera)
         {
             camera.is_active = false;
         }
@@ -484,25 +537,65 @@ impl Backend {
             self.start_next_thumbnail_readback();
             return;
         };
-        self.set_shared_preview_material(material);
+        self.set_preview_material(self.thumbnail_preview.object, material);
         if let Some(mut camera) = self
             .app
             .world_mut()
-            .get_mut::<Camera>(self.shared_material_preview.camera)
+            .get_mut::<Camera>(self.thumbnail_preview.camera)
         {
             camera.is_active = true;
         }
         self.request_thumbnail_readback(&scene_path, slot_index);
     }
 
-    fn set_shared_preview_material(&mut self, material: bevy::prelude::Handle<CharmeMaterial>) {
+    fn set_preview_material(
+        &mut self,
+        object: Entity,
+        material: bevy::prelude::Handle<CharmeMaterial>,
+    ) {
         if let Some(mut current) = self
             .app
             .world_mut()
-            .get_mut::<MeshMaterial3d<CharmeMaterial>>(self.shared_material_preview.object)
+            .get_mut::<MeshMaterial3d<CharmeMaterial>>(object)
         {
             current.0 = material;
         }
+    }
+
+    fn request_material_inspector_preview(&mut self, slot_index: usize) {
+        if self
+            .material_previews
+            .iter()
+            .any(|preview| preview.slot_index == slot_index)
+        {
+            self.requested_inspector_slot = Some(slot_index);
+        }
+    }
+
+    fn start_inspector_preview_readback(&mut self) {
+        if self.pending_inspector_preview {
+            return;
+        }
+        let Some(slot_index) = self.requested_inspector_slot else {
+            return;
+        };
+        let Some((scene_path, material)) = self
+            .material_previews
+            .iter()
+            .find(|preview| preview.slot_index == slot_index)
+            .map(|preview| (preview.scene_path.clone(), preview.material.clone()))
+        else {
+            return;
+        };
+        self.set_preview_material(self.inspector_preview.object, material);
+        if let Some(mut camera) = self
+            .app
+            .world_mut()
+            .get_mut::<Camera>(self.inspector_preview.camera)
+        {
+            camera.is_active = true;
+        }
+        self.request_inspector_preview_readback(&scene_path, slot_index);
     }
 
     fn request_thumbnail_readback(&mut self, scene_path: &std::path::Path, slot_index: usize) {
@@ -512,9 +605,7 @@ impl Backend {
         self.pending_thumbnails += 1;
         self.app
             .world_mut()
-            .spawn(Readback::texture(
-                self.shared_material_preview.target.clone(),
-            ))
+            .spawn(Readback::texture(self.thumbnail_preview.target.clone()))
             .observe(move |event: On<ReadbackComplete>, mut commands: Commands| {
                 let frame = Frame::new(
                     slot_index as u64,
@@ -579,6 +670,41 @@ impl Backend {
                 .map(|preview| preview.slot_index),
         );
         self.start_next_thumbnail_readback();
+    }
+
+    fn request_inspector_preview_readback(
+        &mut self,
+        scene_path: &std::path::Path,
+        slot_index: usize,
+    ) {
+        let events = self.events.clone();
+        let completion = self.completion.clone();
+        let scene_path = scene_path.to_path_buf();
+        self.pending_inspector_preview = true;
+        self.app
+            .world_mut()
+            .spawn(Readback::texture(self.inspector_preview.target.clone()))
+            .observe(move |event: On<ReadbackComplete>, mut commands: Commands| {
+                let frame = Frame::new(
+                    slot_index as u64,
+                    OutputSize::new(
+                        MATERIAL_INSPECTOR_PREVIEW_SIZE,
+                        MATERIAL_INSPECTOR_PREVIEW_SIZE,
+                    ),
+                    PixelFormat::Bgra8Srgb,
+                    aligned_bytes_per_row(MATERIAL_INSPECTOR_PREVIEW_SIZE),
+                    event.data.clone(),
+                );
+                let _ = events.send(WorkerEvent::Notification(
+                    RendererNotification::MaterialInspectorPreviewReady {
+                        path: scene_path.clone(),
+                        slot_index,
+                        frame,
+                    },
+                ));
+                let _ = completion.send(Completion::MaterialInspectorPreview { slot_index });
+                commands.entity(event.entity).despawn();
+            });
     }
 
     fn update_camera_transform(&mut self) -> Result<(), RendererError> {
@@ -657,11 +783,11 @@ fn add_target_image(
     app.world_mut().resource_mut::<Assets<Image>>().add(image)
 }
 
-fn add_thumbnail_target(app: &mut App) -> bevy::prelude::Handle<Image> {
+fn add_preview_target(app: &mut App, size: u32) -> bevy::prelude::Handle<Image> {
     let mut image = Image::new_uninit(
         Extent3d {
-            width: MATERIAL_PREVIEW_SIZE,
-            height: MATERIAL_PREVIEW_SIZE,
+            width: size,
+            height: size,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -672,15 +798,56 @@ fn add_thumbnail_target(app: &mut App) -> bevy::prelude::Handle<Image> {
     app.world_mut().resource_mut::<Assets<Image>>().add(image)
 }
 
+fn new_checker_image() -> Image {
+    let mut checker = Image::new_fill(
+        Extent3d {
+            width: 2,
+            height: 2,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[
+            40, 40, 40, 255, 100, 100, 100, 255, 100, 100, 100, 255, 40, 40, 40, 255,
+        ],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    checker.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        mag_filter: ImageFilterMode::Nearest,
+        min_filter: ImageFilterMode::Nearest,
+        ..Default::default()
+    });
+    checker
+}
+
+fn new_preview_floor_mesh() -> Mesh {
+    let mut plane = Plane3d {
+        half_size: Vec2::splat(4.0),
+        ..Default::default()
+    }
+    .mesh()
+    .build();
+    if let Some(VertexAttributeValues::Float32x2(uvs)) = plane.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+        for uv in uvs.iter_mut() {
+            *uv = [uv[0] * 8.0, uv[1] * 8.0];
+        }
+    }
+    plane
+}
+
 fn material_preview_camera_transform(offset: Vec3) -> Transform {
     Transform::from_translation(offset + Vec3::new(0.0, 1.5, 2.5)).looking_at(offset, Vec3::Y)
 }
 
-fn spawn_shared_material_preview(
+fn spawn_material_preview_studio(
     app: &mut App,
     mesh: bevy::prelude::Handle<Mesh>,
-) -> SharedMaterialPreview {
-    let target = add_thumbnail_target(app);
+    size: u32,
+    with_floor: bool,
+) -> MaterialPreviewStudio {
+    let target = add_preview_target(app, size);
     let fallback_material = app
         .world_mut()
         .resource_mut::<Assets<CharmeMaterial>>()
@@ -697,6 +864,30 @@ fn spawn_shared_material_preview(
             render_layers.clone(),
         ))
         .id();
+    let floor = with_floor.then(|| {
+        let floor_mesh = world
+            .resource_mut::<Assets<Mesh>>()
+            .add(new_preview_floor_mesh());
+        let floor_texture = world
+            .resource_mut::<Assets<Image>>()
+            .add(new_checker_image());
+        let floor_material =
+            world
+                .resource_mut::<Assets<StandardMaterial>>()
+                .add(StandardMaterial {
+                    base_color_texture: Some(floor_texture),
+                    perceptual_roughness: 0.9,
+                    ..Default::default()
+                });
+        world
+            .spawn((
+                Mesh3d(floor_mesh),
+                MeshMaterial3d(floor_material),
+                Transform::from_xyz(0.0, -1.0, 0.0),
+                render_layers.clone(),
+            ))
+            .id()
+    });
     let camera = world
         .spawn((
             Camera3d::default(),
@@ -739,12 +930,13 @@ fn spawn_shared_material_preview(
         ))
         .id();
 
-    SharedMaterialPreview {
+    MaterialPreviewStudio {
         target,
         object,
         camera,
+        _floor: floor,
         _lights: [key_light, fill_light],
-        _fallback_material: fallback_material,
+        fallback_material,
     }
 }
 

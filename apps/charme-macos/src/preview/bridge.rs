@@ -22,6 +22,7 @@ enum Command {
     Zoom(f32),
     LoadPmx(PathBuf),
     SetMaterialParameter { path: String, value: ParameterValue },
+    RequestMaterialInspectorPreview { slot_index: usize },
     Redraw,
     Stop,
 }
@@ -90,6 +91,14 @@ impl RenderBridge {
                             }
                             Ok(Command::SetMaterialParameter { path, value }) => {
                                 if let Err(error) = renderer.set_material_parameter(path, value) {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::RequestMaterialInspectorPreview { slot_index }) => {
+                                if let Err(error) =
+                                    renderer.request_material_inspector_preview(slot_index)
+                                {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -185,6 +194,12 @@ impl RenderBridge {
         let _ = self
             .commands
             .send(Command::SetMaterialParameter { path, value });
+    }
+
+    pub(crate) fn request_material_inspector_preview(&self, slot_index: usize) {
+        let _ = self
+            .commands
+            .send(Command::RequestMaterialInspectorPreview { slot_index });
     }
 
     pub(crate) fn request_redraw(&self) {

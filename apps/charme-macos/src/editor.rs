@@ -202,8 +202,10 @@ pub(crate) struct EditorWindow {
     status: Label,
     hierarchy: HierarchyView,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
+    active_inspector_slot: RefCell<Option<usize>>,
     inspector_heading: Label,
     inspector_body: Label,
+    inspector_preview: ImageView,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
     pub(crate) controller: RefCell<EditorController>,
@@ -211,6 +213,7 @@ pub(crate) struct EditorWindow {
     brightness_label: Label,
     brightness: BrightnessSlider,
     current_image: RefCell<Option<Image>>,
+    current_inspector_preview: RefCell<Option<Image>>,
     bridge: RefCell<Option<RenderBridge>>,
 }
 
@@ -242,6 +245,9 @@ impl EditorWindow {
             Color::Label,
         );
         inspector_body.set_max_number_of_lines(0);
+        let inspector_preview = ImageView::new();
+        inspector_preview.set_background_color(Color::SystemGray);
+        inspector_preview.set_hidden(true);
         let parameter_panel = View::new();
         let brightness_label = label(
             localization::text(Key::Brightness),
@@ -272,8 +278,10 @@ impl EditorWindow {
             status,
             hierarchy,
             loaded_scene: RefCell::new(None),
+            active_inspector_slot: RefCell::new(None),
             inspector_heading,
             inspector_body,
+            inspector_preview,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
             controller: RefCell::new(EditorController::new(localization::text(
@@ -283,6 +291,7 @@ impl EditorWindow {
             brightness_label,
             brightness,
             current_image: RefCell::new(None),
+            current_inspector_preview: RefCell::new(None),
             bridge: RefCell::new(None),
         }
     }
@@ -291,6 +300,9 @@ impl EditorWindow {
         self.controller.replace(controller);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
+        self.current_inspector_preview.replace(None);
+        self.inspector_preview.set_hidden(true);
+        self.active_inspector_slot.replace(None);
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
         self.inspector_heading
@@ -307,6 +319,9 @@ impl EditorWindow {
             )));
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
+        self.current_inspector_preview.replace(None);
+        self.inspector_preview.set_hidden(true);
+        self.active_inspector_slot.replace(None);
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
         self.inspector_heading
@@ -611,6 +626,32 @@ impl EditorWindow {
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
             RendererNotification::PmxLoaded(info) => self.show_scene_info(&info),
+            RendererNotification::MaterialInspectorPreviewReady {
+                path,
+                slot_index,
+                frame,
+            } => {
+                let slot_matches = self
+                    .active_inspector_slot
+                    .borrow()
+                    .is_some_and(|active| active == slot_index);
+                let scene_matches = self
+                    .loaded_scene
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|scene| scene.path() == path);
+                if !scene_matches || !slot_matches {
+                    return;
+                }
+                match make_image(frame, 1.0) {
+                    Ok(image) => {
+                        self.inspector_preview.set_image(&image);
+                        self.inspector_preview.set_hidden(false);
+                        *self.current_inspector_preview.borrow_mut() = Some(image);
+                    }
+                    Err(error) => eprintln!("Failed to create inspector material preview: {error}"),
+                }
+            }
             RendererNotification::PmxLoadFailed { path, message } => {
                 eprintln!("Failed to load PMX {}: {message}", path.display());
                 self.show_error(&localization::format(
@@ -677,6 +718,8 @@ impl EditorWindow {
 
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
+                self.active_inspector_slot.replace(None);
+                self.inspector_preview.set_hidden(true);
                 self.inspector_heading.set_text(info.name());
                 self.inspector_body.set_text(localization::format(
                     Key::SceneSummary,
@@ -688,6 +731,8 @@ impl EditorWindow {
                 ));
             }
             HierarchyItemId::Materials => {
+                self.active_inspector_slot.replace(None);
+                self.inspector_preview.set_hidden(true);
                 self.inspector_heading
                     .set_text(localization::text(Key::Materials));
                 self.inspector_body.set_text(localization::format(
@@ -702,6 +747,10 @@ impl EditorWindow {
                 let Some(slot) = info.material_slots().get(index) else {
                     return;
                 };
+                self.active_inspector_slot.replace(Some(index));
+                if let Some(bridge) = self.bridge.borrow().as_ref() {
+                    bridge.request_material_inspector_preview(index);
+                }
                 self.inspector_heading.set_text(slot.name());
                 let missing = localization::text(Key::MissingValue);
                 self.inspector_body.set_text(localization::format(
@@ -897,6 +946,7 @@ impl WindowDelegate for EditorWindow {
         self.viewport.add_subview(&self.status);
         self.sidebar.add_subview(self.hierarchy.view());
         self.inspector.add_subview(&self.inspector_heading);
+        self.inspector.add_subview(&self.inspector_preview);
         self.inspector.add_subview(&self.inspector_body);
         self.inspector.add_subview(&self.parameter_panel);
         self.inspector.add_subview(&self.brightness_label);
@@ -961,22 +1011,36 @@ impl WindowDelegate for EditorWindow {
                 .leading
                 .constraint_equal_to(&self.inspector.leading)
                 .offset(18.0),
+            self.inspector_preview
+                .top
+                .constraint_equal_to(&self.inspector_heading.bottom)
+                .offset(10.0),
+            self.inspector_preview
+                .leading
+                .constraint_equal_to(&self.inspector.leading)
+                .offset(18.0),
+            self.inspector_preview
+                .width
+                .constraint_equal_to_constant(128.0),
+            self.inspector_preview
+                .height
+                .constraint_equal_to_constant(128.0),
             self.inspector_body
                 .top
                 .constraint_equal_to(&self.inspector_heading.bottom)
                 .offset(14.0),
             self.inspector_body
                 .leading
-                .constraint_equal_to(&self.inspector.leading)
-                .offset(18.0),
+                .constraint_equal_to(&self.inspector_preview.trailing)
+                .offset(14.0),
             self.inspector_body
                 .trailing
                 .constraint_equal_to(&self.inspector.trailing)
                 .offset(-18.0),
             self.parameter_panel
                 .top
-                .constraint_equal_to(&self.inspector.top)
-                .offset(132.0),
+                .constraint_equal_to(&self.inspector_preview.bottom)
+                .offset(16.0),
             self.parameter_panel
                 .leading
                 .constraint_equal_to(&self.inspector.leading)

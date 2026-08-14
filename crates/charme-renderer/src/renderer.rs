@@ -34,6 +34,15 @@ pub enum RendererNotification {
         /// The thumbnail pixels, in the renderer's BGRA sRGB format.
         frame: Frame,
     },
+    /// A larger material preview with a floor is ready for the Inspector.
+    MaterialInspectorPreviewReady {
+        /// The PMX scene that owns the preview.
+        path: PathBuf,
+        /// The zero-based PMX material-slot index.
+        slot_index: usize,
+        /// The preview pixels, in the renderer's BGRA sRGB format.
+        frame: Frame,
+    },
     /// A material parameter was rejected without disturbing the current scene.
     MaterialParameterRejected {
         /// The reflected parameter path.
@@ -193,6 +202,14 @@ impl Renderer {
             path: path.into(),
             value,
         })
+    }
+
+    /// Requests a larger, floor-backed preview for one PMX material slot.
+    pub fn request_material_inspector_preview(
+        &self,
+        slot_index: usize,
+    ) -> Result<(), RendererError> {
+        self.send(Command::RequestMaterialInspectorPreview { slot_index })
     }
 
     /// Requests a frame representing the latest renderer state.
