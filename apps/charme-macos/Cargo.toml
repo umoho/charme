@@ -12,6 +12,7 @@ path = "src/main.rs"
 debug-ui = []
 
 [dependencies]
+charme-application = { path = "../../crates/charme-application" }
 charme-core = { path = "../../crates/charme-core" }
 charme-renderer = { path = "../../crates/charme-renderer" }
 charme-shader = { path = "../../crates/charme-shader" }

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/charme-macos",
+    "crates/charme-application",
     "crates/charme-bevy",
     "crates/charme-core",
     "crates/charme-renderer",

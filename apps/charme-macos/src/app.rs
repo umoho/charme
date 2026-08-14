@@ -16,7 +16,7 @@ use cacao::{
     notification_center::Dispatcher,
     objc::{msg_send, sel, sel_impl},
 };
-use charme_core::EditorSession;
+use charme_application::{EditorAction, EditorController};
 use charme_renderer::{Frame, RendererNotification};
 use url::Url;
 
@@ -275,7 +275,7 @@ impl CharmeApp {
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
         {
-            let _ = editor.session.borrow_mut().undo();
+            let _ = editor.session.borrow_mut().dispatch(EditorAction::Undo);
             self.refresh_menus();
         }
     }
@@ -286,7 +286,7 @@ impl CharmeApp {
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
         {
-            let _ = editor.session.borrow_mut().redo();
+            let _ = editor.session.borrow_mut().dispatch(EditorAction::Redo);
             self.refresh_menus();
         }
     }
@@ -313,8 +313,8 @@ impl CharmeApp {
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
             .map(|window| {
-                let session = window.session.borrow();
-                (session.is_dirty(), session.can_undo(), session.can_redo())
+                let view_model = window.session.borrow().view_model();
+                (view_model.dirty, view_model.can_undo, view_model.can_redo)
             })
             .unwrap_or((false, false, false));
         update_menu_state(self.menu_context.get(), dirty, can_undo, can_redo);
@@ -345,7 +345,7 @@ impl CharmeApp {
             ));
             return;
         }
-        let session = match EditorSession::open(&path) {
+        let session = match EditorController::open(&path) {
             Ok(session) => session,
             Err(error) => {
                 eprintln!("Failed to open project {}: {error}", path.display());

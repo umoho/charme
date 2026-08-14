@@ -31,9 +31,10 @@ use cacao::{
     text::Label,
     view::View,
 };
+use charme_application::{EditorAction, EditorController};
 use charme_core::{
-    CharacterSource, EditorCommand, EditorSession, MaterialId, MaterialInstance, ParameterValue,
-    ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
+    CharacterSource, EditorCommand, MaterialId, MaterialInstance, ParameterValue, ResourcePath,
+    ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
 use core_graphics::geometry::{CGPoint, CGRect};
@@ -205,7 +206,7 @@ pub(crate) struct EditorWindow {
     inspector_body: Label,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
-    pub(crate) session: RefCell<EditorSession>,
+    pub(crate) session: RefCell<EditorController>,
     active_material: RefCell<Option<MaterialId>>,
     brightness_label: Label,
     brightness: BrightnessSlider,
@@ -275,7 +276,7 @@ impl EditorWindow {
             inspector_body,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
-            session: RefCell::new(EditorSession::new(localization::text(
+            session: RefCell::new(EditorController::new(localization::text(
                 Key::UntitledCharacter,
             ))),
             active_material: RefCell::new(None),
@@ -286,7 +287,7 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn install_session(&self, session: EditorSession) {
+    pub(crate) fn install_session(&self, session: EditorController) {
         self.session.replace(session);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
@@ -301,7 +302,9 @@ impl EditorWindow {
 
     pub(crate) fn reset_session(&self) {
         self.session
-            .replace(EditorSession::new(localization::text(Key::UntitledProject)));
+            .replace(EditorController::new(localization::text(
+                Key::UntitledProject,
+            )));
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.loaded_scene.replace(None);
@@ -313,14 +316,14 @@ impl EditorWindow {
         App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
     }
 
-    pub(crate) fn save_project(&self) -> Result<(), charme_core::SessionPersistenceError> {
+    pub(crate) fn save_project(&self) -> Result<(), charme_application::EditorControllerError> {
         self.session.borrow_mut().save()
     }
 
     pub(crate) fn save_project_as(
         &self,
         path: PathBuf,
-    ) -> Result<(), charme_core::SessionPersistenceError> {
+    ) -> Result<(), charme_application::EditorControllerError> {
         self.session.borrow_mut().save_as(path)
     }
 
@@ -396,12 +399,12 @@ impl EditorWindow {
                 return;
             }
         };
-        if let Err(error) = self
-            .session
-            .borrow_mut()
-            .apply(EditorCommand::SetCharacter(Some(CharacterSource::pmx(
-                resource,
-            ))))
+        if let Err(error) =
+            self.session
+                .borrow_mut()
+                .dispatch(EditorAction::Command(EditorCommand::SetCharacter(Some(
+                    CharacterSource::pmx(resource),
+                ))))
         {
             eprintln!("Failed to update the project character: {error}");
             self.show_error(&localization::format(
@@ -531,8 +534,12 @@ impl EditorWindow {
         let material_id = material.id();
         let mut session = self.session.borrow_mut();
         if session
-            .apply(EditorCommand::UpsertShader(shader))
-            .and_then(|_| session.apply(EditorCommand::UpsertMaterial(material)))
+            .dispatch(EditorAction::Command(EditorCommand::UpsertShader(shader)))
+            .and_then(|_| {
+                session.dispatch(EditorAction::Command(EditorCommand::UpsertMaterial(
+                    material,
+                )))
+            })
             .is_ok()
         {
             *self.active_material.borrow_mut() = Some(material_id);
@@ -557,11 +564,11 @@ impl EditorWindow {
         let updated = active_material.and_then(|material| {
             self.session
                 .borrow_mut()
-                .apply(EditorCommand::SetMaterialParameter {
+                .dispatch(EditorAction::Command(EditorCommand::SetMaterialParameter {
                     material,
                     path: key.to_owned(),
                     value: Some(parameter.clone()),
-                })
+                }))
                 .ok()
         });
         if updated.is_some()
