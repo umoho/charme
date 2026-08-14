@@ -15,6 +15,12 @@ use charme_core::{
 };
 use thiserror::Error;
 
+mod shader;
+
+pub use shader::{
+    ParameterControlKind, ParameterControlSpec, ShaderInspection, inspect_shader_source,
+};
+
 /// An action that can be issued by any native frontend.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorAction {
