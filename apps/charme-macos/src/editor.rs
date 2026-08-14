@@ -259,6 +259,7 @@ impl EditorWindow {
         inspector_body.set_max_number_of_lines(0);
         let inspector_preview = ImageView::new();
         inspector_preview.set_background_color(Color::SystemGray);
+        round_image_view(&inspector_preview, 12.0);
         inspector_preview.set_hidden(true);
         let parameter_panel = View::new();
         let status = label(
@@ -1133,6 +1134,15 @@ fn default_dock_layout() -> (DockTree, BTreeMap<NodeId, DockDivider>) {
         (center, DockDivider::new(center, Axis::Horizontal)),
     ]);
     (tree, dividers)
+}
+
+fn round_image_view(view: &ImageView, radius: f64) {
+    view.objc.with_mut(|view| unsafe {
+        let _: () = msg_send![view, setWantsLayer: YES];
+        let layer: id = msg_send![view, layer];
+        let _: () = msg_send![layer, setCornerRadius: radius];
+        let _: () = msg_send![layer, setMasksToBounds: YES];
+    });
 }
 
 fn to_cacao_rect(rect: Rect) -> cacao::geometry::Rect {
