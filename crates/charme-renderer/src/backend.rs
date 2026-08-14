@@ -212,6 +212,13 @@ fn run(
             in_flight = true;
         }
 
+        // Keep viewport frames responsive while thumbnails are generated in
+        // the background. Only start the next thumbnail when the main camera
+        // has no pending redraw or readback.
+        if !dirty && !in_flight {
+            backend.start_next_thumbnail_readback();
+        }
+
         if in_flight || backend.pending_thumbnails != 0 {
             backend.app.update();
         }
@@ -545,7 +552,6 @@ impl Backend {
         {
             camera.is_active = false;
         }
-        self.start_next_thumbnail_readback();
     }
 
     fn start_next_thumbnail_readback(&mut self) {
