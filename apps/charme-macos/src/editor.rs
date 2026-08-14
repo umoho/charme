@@ -677,7 +677,7 @@ impl EditorWindow {
                     .view
                     .top
                     .constraint_equal_to(&self.parameter_panel.top)
-                    .offset(index as f64 * 58.0),
+                    .offset(10.0 + index as f64 * 58.0),
                 control
                     .view
                     .leading
