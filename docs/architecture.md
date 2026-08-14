@@ -14,17 +14,10 @@
 ## Packages
 
 ```text
-charme-core
-    ▲
-    ├── charme-shader
-    │       ▲
-    └───────┴── charme-bevy
-                    ▲
-                    │
-             charme-renderer ─── bevy_pmx
-                    ▲
-                    │
-              charme-macos
+charme-core ──────┬── charme-application ──────┐
+                  ├── charme-bevy ─────────────┤
+charme-shader ────┘                            ├── charme-macos
+charme-renderer ─── charme-bevy + bevy_pmx ────┘
 ```
 
 ### `charme-core`
@@ -36,6 +29,14 @@ commands, events, persistence, and undo/redo semantics.
 
 Owns WGSL composition, metadata parsing, reflection, diagnostics, parameter
 layout, and runtime value packing. It may use Naga but does not depend on Bevy.
+
+### `charme-application`
+
+Owns the platform-independent application layer shared by native frontends.
+`EditorController` coordinates actions against `EditorSession`, while
+`EditorViewModel` and shader inspection projections expose presentation-ready
+state without native widget types. It depends on core and shader tooling, but
+not on cacao, AppKit, or another platform UI framework.
 
 ### `charme-bevy`
 
@@ -56,8 +57,10 @@ It is not part of the exported runtime dependency set.
 ### Platform applications
 
 Each operating system gets a native application package. The macOS frontend is
-implemented first. Future Windows and Linux frontends should consume the same
-core and renderer APIs without requiring a shared widget abstraction.
+implemented first. Future Windows and Linux frontends should consume the shared
+application actions and view models plus the renderer API, without requiring a
+shared widget abstraction. Native UI messages remain platform adapters around
+those application-level actions.
 
 ## Dependency policy
 
