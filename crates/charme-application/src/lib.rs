@@ -58,6 +58,19 @@ pub struct EditorViewModel {
     pub material_slot_count: usize,
 }
 
+/// The result of one application action.
+///
+/// The domain event describes what changed, while the view model is the
+/// complete presentation projection after the action. Frontends can therefore
+/// update from one value without reaching into the domain session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditorUpdate {
+    /// Complete presentation state after the action.
+    pub view_model: EditorViewModel,
+    /// Domain change emitted by the action, if the document changed.
+    pub event: Option<EditorEvent>,
+}
+
 /// An application-level failure while executing an editor operation.
 #[derive(Debug, Error)]
 pub enum EditorControllerError {
@@ -130,12 +143,16 @@ impl EditorController {
     pub fn dispatch(
         &mut self,
         action: EditorAction,
-    ) -> Result<Option<EditorEvent>, EditorControllerError> {
-        match action {
-            EditorAction::Command(command) => self.apply(command),
-            EditorAction::Undo => Ok(self.session.undo()?),
-            EditorAction::Redo => Ok(self.session.redo()?),
-        }
+    ) -> Result<EditorUpdate, EditorControllerError> {
+        let event = match action {
+            EditorAction::Command(command) => self.apply(command)?,
+            EditorAction::Undo => self.session.undo()?,
+            EditorAction::Redo => self.session.redo()?,
+        };
+        Ok(EditorUpdate {
+            view_model: self.view_model(),
+            event,
+        })
     }
 
     /// Applies one semantic document command.
@@ -179,13 +196,14 @@ mod tests {
         assert!(!controller.view_model().dirty);
         assert!(!controller.view_model().can_undo);
 
-        controller
+        let update = controller
             .dispatch(EditorAction::Command(EditorCommand::RenameDocument(
                 "Updated".to_owned(),
             )))
             .unwrap();
 
-        let view_model = controller.view_model();
+        assert!(update.event.is_some());
+        let view_model = update.view_model;
         assert_eq!(view_model.document_name, "Updated");
         assert!(view_model.dirty);
         assert!(view_model.can_undo);
@@ -199,8 +217,10 @@ mod tests {
                 "Updated".to_owned(),
             )))
             .unwrap();
-        controller.dispatch(EditorAction::Undo).unwrap();
+        let update = controller.dispatch(EditorAction::Undo).unwrap();
 
+        assert!(update.event.is_some());
+        assert_eq!(update.view_model.document_name, "Untitled");
         assert_eq!(controller.document().name(), "Untitled");
         assert!(controller.view_model().can_redo);
     }
