@@ -123,7 +123,11 @@ fn run(
             }
         }
 
-        let command = if in_flight || dirty || backend.pending_thumbnails != 0 {
+        let command = if in_flight
+            || dirty
+            || backend.pending_thumbnails != 0
+            || !backend.thumbnail_queue.is_empty()
+        {
             match commands.recv_timeout(Duration::from_millis(1)) {
                 Ok(command) => Some(command),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
