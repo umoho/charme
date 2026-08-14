@@ -178,7 +178,7 @@ impl Dispatcher for CharmeApp {
                     Message::Brightness(value) => window.set_brightness(value),
                     Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
                     Message::Zoom(delta) => window.zoom(delta),
-                    Message::LoadPmx(path) => window.load_pmx(path),
+                    Message::LoadPmx(path) => window.import_pmx(path),
                     Message::ChooseShader => window.choose_shader(),
                     Message::InspectShader(path) => window.inspect_shader(path),
                     Message::ShaderInspected { path, result } => {

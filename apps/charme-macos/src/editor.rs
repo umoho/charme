@@ -9,7 +9,7 @@ use std::{
     cell::RefCell,
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr,
     sync::OnceLock,
 };
@@ -32,8 +32,8 @@ use cacao::{
     view::View,
 };
 use charme_core::{
-    EditorCommand, EditorSession, MaterialId, MaterialInstance, ParameterValue, ResourcePath,
-    ShaderSource as DocumentShaderSource,
+    CharacterSource, EditorCommand, EditorSession, MaterialId, MaterialInstance, ParameterValue,
+    ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
 use core_graphics::geometry::{CGPoint, CGRect};
@@ -378,6 +378,40 @@ impl EditorWindow {
                 self.show_error(&error);
             }
         }
+    }
+
+    pub(crate) fn import_pmx(&self, path: PathBuf) {
+        let resource = {
+            let session = self.session.borrow();
+            pmx_resource_path(session.project_path(), &path)
+        };
+        let resource = match resource {
+            Ok(resource) => resource,
+            Err(error) => {
+                eprintln!("Failed to store PMX path {}: {error}", path.display());
+                self.show_error(&localization::format(
+                    Key::PmxLoadFailed,
+                    &[("path", &path.display())],
+                ));
+                return;
+            }
+        };
+        if let Err(error) = self
+            .session
+            .borrow_mut()
+            .apply(EditorCommand::SetCharacter(Some(CharacterSource::pmx(
+                resource,
+            ))))
+        {
+            eprintln!("Failed to update the project character: {error}");
+            self.show_error(&localization::format(
+                Key::PmxLoadFailed,
+                &[("path", &path.display())],
+            ));
+            return;
+        }
+        App::<CharmeApp, Message>::dispatch_main(Message::RefreshMenus);
+        self.load_pmx(path);
     }
 
     pub(crate) fn load_pmx(&self, path: PathBuf) {
@@ -977,6 +1011,16 @@ impl WindowDelegate for EditorWindow {
     }
 }
 
+fn pmx_resource_path(
+    project_path: Option<&Path>,
+    path: &Path,
+) -> Result<ResourcePath, ResourcePathError> {
+    match project_path.and_then(Path::parent) {
+        Some(project_directory) => ResourcePath::from_path(project_directory, path),
+        None => ResourcePath::absolute(path.to_path_buf()),
+    }
+}
+
 fn default_dock_layout() -> (DockTree, BTreeMap<NodeId, DockDivider>) {
     let mut builder = DockTreeBuilder::new();
     let hierarchy = builder
@@ -1113,4 +1157,39 @@ fn editor_separator_color() -> Color {
         Theme::Light => Color::rgb(170, 170, 170),
         Theme::Dark => Color::rgb(8, 8, 8),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stores_imported_pmx_relative_to_an_existing_project() {
+        let resource = pmx_resource_path(
+            Some(Path::new("/projects/hero/hero.charme")),
+            Path::new("/projects/hero/models/hero.pmx"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resource,
+            ResourcePath::ProjectRelative(PathBuf::from("models/hero.pmx"))
+        );
+    }
+
+    #[test]
+    fn stores_external_or_unsaved_pmx_as_an_absolute_path() {
+        let external = pmx_resource_path(
+            Some(Path::new("/projects/hero/hero.charme")),
+            Path::new("/models/hero.pmx"),
+        )
+        .unwrap();
+        let unsaved = pmx_resource_path(None, Path::new("/models/hero.pmx")).unwrap();
+
+        assert_eq!(
+            external,
+            ResourcePath::Absolute(PathBuf::from("/models/hero.pmx"))
+        );
+        assert_eq!(external, unsaved);
+    }
 }
