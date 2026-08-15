@@ -1391,6 +1391,7 @@ impl EditorWindow {
         let ratio = (drag.start_first_extent + delta) / drag.available_extent;
         if self.tree.set_split_ratio(drag.node, ratio).is_ok() {
             self.layout_dock();
+            self.sync_size();
         }
     }
 
