@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use cacao::{
     appkit::App,
-    foundation::{NO, NSArray, YES, id, nil},
+    foundation::{BOOL, NO, NSArray, NSUInteger, YES, id, nil},
     objc::{
         class,
         declare::ClassDecl,
@@ -21,6 +21,11 @@ const DOWN_X_IVAR: &str = "charmeOrbitDownX";
 const DOWN_Y_IVAR: &str = "charmeOrbitDownY";
 const DID_DRAG_IVAR: &str = "charmeOrbitDidDrag";
 const CLICK_DRAG_THRESHOLD: f64 = 3.0;
+const SCROLL_ORBIT_SENSITIVITY: f32 = 0.0035;
+const SCROLL_ZOOM_SENSITIVITY: f32 = 0.035;
+const MAGNIFICATION_ZOOM_SENSITIVITY: f32 = 1.0;
+const CONTROL_MODIFIER_FLAG: NSUInteger = 1 << 18;
+const COMMAND_MODIFIER_FLAG: NSUInteger = 1 << 20;
 
 pub(crate) struct OrbitInputView {
     pub(crate) view: View,
@@ -91,6 +96,10 @@ fn input_class() -> *const Class {
             scroll_wheel as extern "C" fn(&Object, Sel, id),
         );
         declaration.add_method(
+            sel!(magnifyWithEvent:),
+            magnify_with_event as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
             sel!(acceptsFirstMouse:),
             accepts_first_mouse as extern "C" fn(&Object, Sel, id) -> bool,
         );
@@ -144,10 +153,103 @@ extern "C" fn mouse_up(view: &Object, _: Sel, event: id) {
 }
 
 extern "C" fn scroll_wheel(_: &Object, _: Sel, event: id) {
+    let delta_x: f64 = unsafe { msg_send![event, scrollingDeltaX] };
     let delta_y: f64 = unsafe { msg_send![event, scrollingDeltaY] };
-    App::<CharmeApp, Message>::dispatch_main(Message::Zoom(-(delta_y as f32) * 0.035));
+    let has_precise_deltas: BOOL = unsafe { msg_send![event, hasPreciseScrollingDeltas] };
+    let modifier_flags: NSUInteger = unsafe { msg_send![event, modifierFlags] };
+
+    let Some(action) = scroll_action(delta_x, delta_y, has_precise_deltas == YES, modifier_flags)
+    else {
+        return;
+    };
+
+    match action {
+        ScrollAction::Orbit { delta_x, delta_y } => {
+            App::<CharmeApp, Message>::dispatch_main(Message::Orbit { delta_x, delta_y });
+        }
+        ScrollAction::Zoom(delta) => {
+            App::<CharmeApp, Message>::dispatch_main(Message::Zoom(delta));
+        }
+    }
+}
+
+extern "C" fn magnify_with_event(_: &Object, _: Sel, event: id) {
+    let magnification: f64 = unsafe { msg_send![event, magnification] };
+    if magnification == 0.0 {
+        return;
+    }
+    App::<CharmeApp, Message>::dispatch_main(Message::Zoom(
+        -(magnification as f32) * MAGNIFICATION_ZOOM_SENSITIVITY,
+    ));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ScrollAction {
+    Orbit { delta_x: f32, delta_y: f32 },
+    Zoom(f32),
+}
+
+fn scroll_action(
+    delta_x: f64,
+    delta_y: f64,
+    has_precise_deltas: bool,
+    modifier_flags: NSUInteger,
+) -> Option<ScrollAction> {
+    if delta_x == 0.0 && delta_y == 0.0 {
+        return None;
+    }
+
+    let zoom_modifier = modifier_flags & (CONTROL_MODIFIER_FLAG | COMMAND_MODIFIER_FLAG) != 0;
+    if has_precise_deltas && !zoom_modifier {
+        Some(ScrollAction::Orbit {
+            delta_x: -(delta_x as f32) * SCROLL_ORBIT_SENSITIVITY,
+            delta_y: -(delta_y as f32) * SCROLL_ORBIT_SENSITIVITY,
+        })
+    } else {
+        Some(ScrollAction::Zoom(
+            -(delta_y as f32) * SCROLL_ZOOM_SENSITIVITY,
+        ))
+    }
 }
 
 extern "C" fn accepts_first_mouse(_: &Object, _: Sel, _: id) -> bool {
     YES
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn precise_unmodified_scroll_orbits_on_both_axes() {
+        let action = scroll_action(12.0, -6.0, true, 0);
+        let Some(ScrollAction::Orbit { delta_x, delta_y }) = action else {
+            panic!("precise scroll should orbit without a zoom modifier");
+        };
+        assert!((delta_x + 0.042).abs() < 1e-6);
+        assert!((delta_y - 0.021).abs() < 1e-6);
+    }
+
+    #[test]
+    fn command_scroll_zoom_takes_priority_over_precise_orbit() {
+        let action = scroll_action(12.0, -6.0, true, COMMAND_MODIFIER_FLAG);
+        let Some(ScrollAction::Zoom(delta)) = action else {
+            panic!("command scroll should zoom");
+        };
+        assert!((delta - 0.21).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ordinary_wheel_scroll_keeps_zoom_behavior() {
+        let action = scroll_action(12.0, 2.0, false, 0);
+        let Some(ScrollAction::Zoom(delta)) = action else {
+            panic!("ordinary wheel scroll should zoom");
+        };
+        assert!((delta + 0.07).abs() < 1e-6);
+    }
+
+    #[test]
+    fn zero_scroll_is_ignored() {
+        assert_eq!(scroll_action(0.0, 0.0, true, 0), None);
+    }
 }

@@ -74,7 +74,7 @@
 "Unchanged" = "Unchanged";
 "UnsavedChanges" = "Unsaved Changes";
 "RecentProjectTitle" = "{name} · {path}";
-"FrameStatus" = "Frame {sequence} · {width}×{height}px · Drag to rotate · Scroll to zoom";
+"FrameStatus" = "Frame {sequence} · {width}×{height}px · Drag to rotate · Trackpad scroll to orbit · Pinch or ⌘/Ctrl-scroll to zoom";
 "LoadingPmx" = "Loading…\n{path}";
 "ShaderErrorDetails" = "{path}\n\n{error}";
 "ShaderSummary" = "{file_name}\n{parameter_blocks} parameter blocks · {diagnostics} diagnostics";

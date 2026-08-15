@@ -74,7 +74,7 @@
 "Unchanged" = "未更改";
 "UnsavedChanges" = "未保存更改";
 "RecentProjectTitle" = "{name} · {path}";
-"FrameStatus" = "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 滚动缩放";
+"FrameStatus" = "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 双指滚动旋转 · 捏合或⌘/Ctrl滚动缩放";
 "LoadingPmx" = "加载中…\n{path}";
 "ShaderErrorDetails" = "{path}\n\n{error}";
 "ShaderSummary" = "{file_name}\n{parameter_blocks}个参数块 · {diagnostics}个诊断";
