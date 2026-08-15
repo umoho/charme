@@ -47,6 +47,7 @@ impl ParameterBuffer {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParameterValue {
+    Bool(bool),
     F32(f32),
     I32(i32),
     U32(u32),
@@ -111,6 +112,9 @@ fn write_value(
     value: ParameterValue,
 ) -> Result<(), ParameterWriteError> {
     let encoded = match (&field.ty, value) {
+        (ParameterType::Scalar(ScalarType::Bool), ParameterValue::Bool(value)) => {
+            if value { 1u32 } else { 0u32 }.to_le_bytes().to_vec()
+        }
         (ParameterType::Scalar(ScalarType::F32), ParameterValue::F32(value)) => {
             value.to_le_bytes().to_vec()
         }
@@ -197,6 +201,7 @@ fn encode_vector<T: Copy, const WIDTH: usize>(
 impl ParameterValue {
     fn kind_name(&self) -> &'static str {
         match self {
+            Self::Bool(_) => "bool",
             Self::F32(_) => "f32",
             Self::I32(_) => "i32",
             Self::U32(_) => "u32",

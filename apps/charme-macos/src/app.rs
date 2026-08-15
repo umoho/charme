@@ -17,6 +17,7 @@ use cacao::{
     objc::{msg_send, sel, sel_impl},
 };
 use charme_application::{ApplicationEvent, EditorAction, EditorController};
+use charme_core::ParameterValue;
 use url::Url;
 
 #[cfg(feature = "debug-ui")]
@@ -25,7 +26,6 @@ use crate::debug::DebugState;
 use crate::{
     editor::{EditorWindow, HierarchyItemId},
     localization::{self, Key},
-    shader_inspection::ParameterControlKind,
     startup::StartupWindow,
 };
 
@@ -50,20 +50,13 @@ pub(crate) enum Message {
     Undo,
     Redo,
     MenuContextChanged(MenuContext),
-    Orbit {
-        delta_x: f32,
-        delta_y: f32,
-    },
+    Orbit { delta_x: f32, delta_y: f32 },
     Zoom(f32),
     ChoosePmx,
     LoadPmx(PathBuf),
     ChooseShader,
     InspectShader(PathBuf),
-    ParameterChanged {
-        key: String,
-        value: f64,
-        kind: ParameterControlKind,
-    },
+    ParameterChanged { key: String, value: ParameterValue },
     HierarchySelectionChanged(HierarchyItemId),
     Application(ApplicationEvent),
 }
@@ -187,8 +180,8 @@ impl Dispatcher for CharmeApp {
                     Message::LoadPmx(path) => window.import_pmx(path),
                     Message::ChooseShader => window.choose_shader(),
                     Message::InspectShader(path) => window.inspect_shader(path),
-                    Message::ParameterChanged { key, value, kind } => {
-                        window.set_parameter_value(&key, value, kind);
+                    Message::ParameterChanged { key, value } => {
+                        window.set_parameter_value(&key, value);
                     }
                     Message::HierarchySelectionChanged(item) => {
                         window.select_hierarchy_item(item);

@@ -56,7 +56,7 @@ use crate::{
     app::{CharmeApp, MenuContext, Message},
     localization::{self, Key},
     preview::RenderBridge,
-    shader_inspection::{self, ParameterControlKind, ShaderInspection},
+    shader_inspection::{self, ShaderInspection},
     ui::{label, panel},
 };
 
@@ -726,20 +726,15 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn set_parameter_value(&self, key: &str, value: f64, kind: ParameterControlKind) {
+    pub(crate) fn set_parameter_value(&self, key: &str, parameter: ParameterValue) {
         if let Some(control) = self
             .parameter_controls
             .borrow()
             .iter()
             .find(|control| control.key() == key)
         {
-            control.set_value(value, kind);
+            control.set_value(&parameter);
         }
-        let parameter = match kind {
-            ParameterControlKind::Float => ParameterValue::F32(value as f32),
-            ParameterControlKind::SignedInteger => ParameterValue::I32(value as i32),
-            ParameterControlKind::UnsignedInteger => ParameterValue::U32(value.max(0.0) as u32),
-        };
         let active_material = *self.active_material.borrow();
         let updated = active_material.and_then(|material| {
             self.dispatch_action(EditorAction::Command(EditorCommand::SetMaterialParameter {
@@ -755,9 +750,9 @@ impl EditorWindow {
                 self.bridge.borrow().as_ref(),
             )
         {
-            bridge.set_material_parameter(slot_id, key.to_owned(), parameter);
+            bridge.set_material_parameter(slot_id, key.to_owned(), parameter.clone());
         }
-        let formatted_value = format!("{value:.3}");
+        let formatted_value = format_parameter_value(&parameter);
         self.status.set_text(localization::format(
             if updated.is_some() {
                 Key::ParameterUpdated
@@ -1484,6 +1479,23 @@ impl WindowDelegate for EditorWindow {
 
     fn will_close(&self) {
         self.bridge.borrow_mut().take();
+    }
+}
+
+fn format_parameter_value(value: &ParameterValue) -> String {
+    match value {
+        ParameterValue::Bool(value) => value.to_string(),
+        ParameterValue::I32(value) => value.to_string(),
+        ParameterValue::U32(value) => value.to_string(),
+        ParameterValue::F32(value) => format!("{value:.3}"),
+        ParameterValue::Vec2(values) => format!("[{:.3}, {:.3}]", values[0], values[1]),
+        ParameterValue::Vec3(values) => {
+            format!("[{:.3}, {:.3}, {:.3}]", values[0], values[1], values[2])
+        }
+        ParameterValue::Vec4(values) => format!(
+            "[{:.3}, {:.3}, {:.3}, {:.3}]",
+            values[0], values[1], values[2], values[3]
+        ),
     }
 }
 

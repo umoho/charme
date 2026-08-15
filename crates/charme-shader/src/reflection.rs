@@ -125,6 +125,7 @@ pub enum ParameterType {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarType {
+    Bool,
     F32,
     I32,
     U32,
@@ -437,6 +438,7 @@ fn parameter_type(inner: &TypeInner) -> ParameterType {
 
 fn scalar_type(kind: ScalarKind, width: u8) -> Option<ScalarType> {
     match (kind, width) {
+        (ScalarKind::Bool, 1 | 4) => Some(ScalarType::Bool),
         (ScalarKind::Float, 4) => Some(ScalarType::F32),
         (ScalarKind::Sint, 4) => Some(ScalarType::I32),
         (ScalarKind::Uint, 4) => Some(ScalarType::U32),

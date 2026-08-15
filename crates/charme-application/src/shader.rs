@@ -17,6 +17,16 @@ pub enum ParameterControlKind {
     SignedInteger,
     /// A rounded non-negative unsigned integer slider.
     UnsignedInteger,
+    /// A boolean checkbox.
+    Boolean,
+    /// A two-component vector editor.
+    Vector2,
+    /// A three-component vector editor.
+    Vector3,
+    /// A four-component vector editor.
+    Vector4,
+    /// A four-component color well.
+    Color,
 }
 
 /// Presentation metadata for one reflected shader parameter.
@@ -30,8 +40,10 @@ pub struct ParameterControlSpec {
     pub minimum: f64,
     /// Maximum control value.
     pub maximum: f64,
-    /// Initial control value.
+    /// Initial first-component value, retained for scalar controls.
     pub initial: f64,
+    /// Initial values for vector and color controls.
+    pub initial_values: Vec<f64>,
     /// Native control family.
     pub kind: ParameterControlKind,
 }
@@ -91,12 +103,24 @@ fn build_inspection(path: PathBuf, interface: &ShaderInterface) -> ShaderInspect
                     _ => None,
                 })
                 .unwrap_or_else(|| field.name.clone());
+            let kind = if kind == ParameterControlKind::Vector4
+                && metadata.is_some_and(|metadata| {
+                    matches!(
+                        metadata.values.get("ui.color"),
+                        Some(MetadataValue::Bool(true))
+                    )
+                }) {
+                ParameterControlKind::Color
+            } else {
+                kind
+            };
             controls.push(ParameterControlSpec {
                 key: format!("{}.{}", block.name, field.path.join(".")),
                 label,
                 minimum,
                 maximum,
                 initial,
+                initial_values: default_initial_values(kind, initial),
                 kind,
             });
         }
@@ -133,29 +157,61 @@ pub fn controls_for_material(
         .cloned()
         .map(|mut control| {
             if let Some(value) = parameters.get(&control.key)
-                && let Some(number) = parameter_number(value)
+                && let Some(values) = parameter_values(value, control.kind)
             {
-                control.initial = number.clamp(control.minimum, control.maximum);
+                control.initial = values[0].clamp(control.minimum, control.maximum);
+                control.initial_values = values
+                    .into_iter()
+                    .map(|value| value.clamp(control.minimum, control.maximum))
+                    .collect();
             }
             control
         })
         .collect()
 }
 
-fn parameter_number(value: &ParameterValue) -> Option<f64> {
-    match value {
-        ParameterValue::F32(value) => Some(*value as f64),
-        ParameterValue::I32(value) => Some(*value as f64),
-        ParameterValue::U32(value) => Some(*value as f64),
-        ParameterValue::Bool(_)
-        | ParameterValue::Vec2(_)
-        | ParameterValue::Vec3(_)
-        | ParameterValue::Vec4(_) => None,
+fn parameter_values(value: &ParameterValue, kind: ParameterControlKind) -> Option<Vec<f64>> {
+    match (kind, value) {
+        (ParameterControlKind::Float, ParameterValue::F32(value)) => Some(vec![*value as f64]),
+        (ParameterControlKind::SignedInteger, ParameterValue::I32(value)) => {
+            Some(vec![*value as f64])
+        }
+        (ParameterControlKind::UnsignedInteger, ParameterValue::U32(value)) => {
+            Some(vec![*value as f64])
+        }
+        (ParameterControlKind::Boolean, ParameterValue::Bool(value)) => {
+            Some(vec![if *value { 1.0 } else { 0.0 }])
+        }
+        (ParameterControlKind::Vector2, ParameterValue::Vec2(values)) => {
+            Some(values.iter().map(|value| *value as f64).collect())
+        }
+        (ParameterControlKind::Vector3, ParameterValue::Vec3(values)) => {
+            Some(values.iter().map(|value| *value as f64).collect())
+        }
+        (
+            ParameterControlKind::Vector4 | ParameterControlKind::Color,
+            ParameterValue::Vec4(values),
+        ) => Some(values.iter().map(|value| *value as f64).collect()),
+        _ => None,
+    }
+}
+
+fn default_initial_values(kind: ParameterControlKind, initial: f64) -> Vec<f64> {
+    match kind {
+        ParameterControlKind::Boolean => vec![0.0],
+        ParameterControlKind::Vector2 => vec![initial; 2],
+        ParameterControlKind::Vector3 => vec![initial; 3],
+        ParameterControlKind::Vector4 => vec![initial; 4],
+        ParameterControlKind::Color => vec![1.0; 4],
+        ParameterControlKind::Float
+        | ParameterControlKind::SignedInteger
+        | ParameterControlKind::UnsignedInteger => vec![initial],
     }
 }
 
 fn control_kind(parameter_type: &ParameterType) -> Option<(ParameterControlKind, f64, f64)> {
     match parameter_type {
+        ParameterType::Scalar(ScalarType::Bool) => Some((ParameterControlKind::Boolean, 0.0, 1.0)),
         ParameterType::Scalar(ScalarType::F32) => Some((ParameterControlKind::Float, 0.0, 1.0)),
         ParameterType::Scalar(ScalarType::I32) => {
             Some((ParameterControlKind::SignedInteger, -100.0, 100.0))
@@ -163,6 +219,18 @@ fn control_kind(parameter_type: &ParameterType) -> Option<(ParameterControlKind,
         ParameterType::Scalar(ScalarType::U32) => {
             Some((ParameterControlKind::UnsignedInteger, 0.0, 100.0))
         }
+        ParameterType::Vector {
+            scalar: ScalarType::F32,
+            length: 2,
+        } => Some((ParameterControlKind::Vector2, -1.0, 1.0)),
+        ParameterType::Vector {
+            scalar: ScalarType::F32,
+            length: 3,
+        } => Some((ParameterControlKind::Vector3, -1.0, 1.0)),
+        ParameterType::Vector {
+            scalar: ScalarType::F32,
+            length: 4,
+        } => Some((ParameterControlKind::Vector4, 0.0, 1.0)),
         ParameterType::Vector { .. } | ParameterType::Unsupported { .. } => None,
     }
 }
@@ -187,10 +255,11 @@ mod tests {
             inspect_shader_source(PathBuf::from("built-in.wgsl"), BUILT_IN_SHADER).unwrap();
 
         assert_eq!(inspection.parameter_block_count, 1);
-        assert_eq!(inspection.controls.len(), 4);
+        assert_eq!(inspection.controls.len(), 5);
         assert_eq!(inspection.controls[0].label, "Roughness");
         assert_eq!(inspection.controls[0].initial, 0.45);
-        assert_eq!(inspection.non_scalar_field_count, 1);
+        assert_eq!(inspection.non_scalar_field_count, 0);
+        assert_eq!(inspection.controls[4].kind, ParameterControlKind::Color);
     }
 
     #[test]
