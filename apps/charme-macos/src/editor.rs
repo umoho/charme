@@ -61,7 +61,7 @@ use crate::{
 };
 
 const DOCK_DIVIDER_THICKNESS: f64 = 2.0;
-const EDITOR_CONTENT_TOP_INSET: f64 = 52.0;
+const EDITOR_CONTENT_TOP_INSET: f64 = 35.0;
 const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
