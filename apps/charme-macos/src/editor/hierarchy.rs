@@ -40,4 +40,12 @@ impl HierarchyView {
     pub(crate) fn set_material_thumbnail(&self, slot_id: MaterialSlotId, image: &Image) {
         self.native.set_thumbnail(slot_id, image);
     }
+
+    pub(crate) fn select_item(&self, item: HierarchyItemId) {
+        self.native.select_item(item);
+    }
+
+    pub(crate) fn clear_selection(&self) {
+        self.native.clear_selection();
+    }
 }

@@ -52,6 +52,7 @@ pub(crate) enum Message {
     MenuContextChanged(MenuContext),
     Orbit { delta_x: f32, delta_y: f32 },
     NavigationGizmoMouseDown { x: f64, y: f64 },
+    ViewportClicked { x: f64, y: f64 },
     Zoom(f32),
     ChoosePmx,
     LoadPmx(PathBuf),
@@ -180,6 +181,7 @@ impl Dispatcher for CharmeApp {
                     Message::NavigationGizmoMouseDown { x, y } => {
                         window.navigation_gizmo_mouse_down(x, y);
                     }
+                    Message::ViewportClicked { x, y } => window.viewport_clicked(x, y),
                     Message::Zoom(delta) => window.zoom(delta),
                     Message::LoadPmx(path) => window.import_pmx(path),
                     Message::ChooseShader => window.choose_shader(),

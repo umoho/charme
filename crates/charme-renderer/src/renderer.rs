@@ -54,6 +54,15 @@ pub enum RendererNotification {
         /// A human-readable validation error.
         message: String,
     },
+    /// A viewport picking request completed.
+    ViewportPickResult {
+        /// The PMX scene that was queried.
+        path: PathBuf,
+        /// The stable material slot hit by the viewport ray, if any.
+        slot_id: Option<MaterialSlotId>,
+        /// The zero-based PMX primitive hit by the viewport ray, if any.
+        primitive_index: Option<usize>,
+    },
 }
 
 /// A windowless renderer that produces CPU image frames on demand.
@@ -175,6 +184,26 @@ impl Renderer {
     /// Restores the camera framing for the current preview scene.
     pub fn reset_camera(&self) -> Result<(), RendererError> {
         self.send(Command::ResetCamera)
+    }
+
+    /// Sets the material slot whose primitive should receive the selection outline.
+    ///
+    /// Passing `None` clears the renderer-side outline. Selection is transient
+    /// viewport state and is not written to the editor document.
+    pub fn set_selected_material_slot(
+        &self,
+        slot_id: Option<MaterialSlotId>,
+    ) -> Result<(), RendererError> {
+        self.send(Command::SetSelectedMaterialSlot(slot_id))
+    }
+
+    /// Performs a non-blocking viewport pick.
+    ///
+    /// Coordinates are in physical output pixels with a top-left origin. The
+    /// result is delivered through [`RendererNotification::ViewportPickResult`].
+    pub fn pick_viewport(&self, x: f32, y: f32) -> Result<(), RendererError> {
+        validate_viewport_position(x, y)?;
+        self.send(Command::PickViewport { x, y })
     }
 
     /// Loads a PMX model from an arbitrary file-system path.
@@ -386,6 +415,15 @@ fn validate_camera_delta(first: f32, second: f32, message: &str) -> Result<(), R
     Ok(())
 }
 
+fn validate_viewport_position(x: f32, y: f32) -> Result<(), RendererError> {
+    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+        return Err(RendererError::InvalidConfiguration {
+            message: "viewport coordinates must be finite and non-negative".to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_background(background: BackgroundColor) -> Result<(), RendererError> {
     if !background.is_valid() {
         return Err(RendererError::InvalidConfiguration {
@@ -433,5 +471,17 @@ mod tests {
             validate_camera_delta(f32::NAN, 0.0, "orbit deltas must be finite"),
             Err(error)
         );
+    }
+
+    #[test]
+    fn rejects_invalid_viewport_positions_before_sending_them() {
+        assert!(matches!(
+            validate_viewport_position(-1.0, 0.0),
+            Err(RendererError::InvalidConfiguration { .. })
+        ));
+        assert!(matches!(
+            validate_viewport_position(0.0, f32::INFINITY),
+            Err(RendererError::InvalidConfiguration { .. })
+        ));
     }
 }

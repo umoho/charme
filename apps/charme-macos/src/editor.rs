@@ -513,6 +513,9 @@ impl EditorWindow {
         self.set_source_visible(false);
         self.set_parameter_section_visible(false);
         self.active_inspector_slot.replace(None);
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            bridge.set_selected_material_slot(None);
+        }
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
         self.inspector_heading
@@ -535,6 +538,9 @@ impl EditorWindow {
         self.set_source_visible(false);
         self.set_parameter_section_visible(false);
         self.active_inspector_slot.replace(None);
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            bridge.set_selected_material_slot(None);
+        }
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
         self.inspector_heading
@@ -931,6 +937,21 @@ impl EditorWindow {
                     Err(error) => eprintln!("Failed to create material thumbnail: {error}"),
                 }
             }
+            RendererNotification::ViewportPickResult { path, slot_id, .. } => {
+                let scene_matches = self
+                    .loaded_scene
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|scene| scene.path() == path);
+                if !scene_matches {
+                    return;
+                }
+                if let Some(slot_id) = slot_id {
+                    self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
+                } else {
+                    self.clear_selection();
+                }
+            }
             RendererNotification::MaterialParameterRejected { path, message } => {
                 eprintln!("Renderer rejected parameter {path}: {message}");
                 self.show_error(&localization::format(
@@ -1034,9 +1055,13 @@ impl EditorWindow {
             return;
         };
 
+        self.hierarchy.select_item(item);
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
                 self.active_inspector_slot.replace(None);
+                if let Some(bridge) = self.bridge.borrow().as_ref() {
+                    bridge.set_selected_material_slot(None);
+                }
                 self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
                 self.set_source_visible(false);
@@ -1053,6 +1078,9 @@ impl EditorWindow {
             }
             HierarchyItemId::Materials => {
                 self.active_inspector_slot.replace(None);
+                if let Some(bridge) = self.bridge.borrow().as_ref() {
+                    bridge.set_selected_material_slot(None);
+                }
                 self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
                 self.set_source_visible(false);
@@ -1115,6 +1143,7 @@ impl EditorWindow {
                 self.set_parameter_section_visible(control_count != 0 && has_parameter_section);
                 self.set_inspector_preview_loading();
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
+                    bridge.set_selected_material_slot(Some(slot_id));
                     bridge.request_material_inspector_preview(slot_id);
                 }
                 self.inspector_heading.set_text(slot.name());
@@ -1202,6 +1231,41 @@ impl EditorWindow {
     pub(crate) fn navigation_gizmo_mouse_down(&self, x: f64, y: f64) {
         if let Some((delta_yaw, delta_pitch)) = self.navigation_gizmo.orbit_delta_at(x, y) {
             self.orbit(delta_yaw, delta_pitch);
+        }
+    }
+
+    pub(crate) fn viewport_clicked(&self, x: f64, y: f64) {
+        let (width, height, scale) = self.viewport.objc.get(|view| unsafe {
+            let bounds: CGRect = msg_send![view, bounds];
+            let window: id = msg_send![view, window];
+            let scale: f64 = if window.is_null() {
+                1.0
+            } else {
+                msg_send![window, backingScaleFactor]
+            };
+            (bounds.size.width, bounds.size.height, scale)
+        });
+        let x = x.clamp(0.0, width) * scale;
+        let y = (height - y).clamp(0.0, height) * scale;
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            bridge.pick_viewport(x as f32, y as f32);
+        }
+    }
+
+    pub(crate) fn clear_selection(&self) {
+        self.active_inspector_slot.replace(None);
+        self.active_material.replace(None);
+        self.parameter_controls.borrow_mut().clear();
+        self.set_inspector_preview_visible(false);
+        self.set_source_visible(false);
+        self.set_parameter_section_visible(false);
+        self.inspector_heading
+            .set_text(localization::text(Key::Inspector));
+        self.inspector_body
+            .set_text(localization::text(Key::InspectorBody));
+        self.hierarchy.clear_selection();
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            bridge.set_selected_material_slot(None);
         }
     }
 

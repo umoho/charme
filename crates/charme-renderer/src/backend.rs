@@ -9,18 +9,20 @@ use std::{
 
 use bevy::{
     DefaultPlugins,
-    app::{App, PluginGroup, PluginsState},
+    app::{App, PluginGroup, PluginsState, PostUpdate},
     asset::{Assets, RenderAssetUsages},
     camera::{
         Camera, Camera3d, ClearColorConfig, Projection, RenderTarget, visibility::RenderLayers,
     },
     core_pipeline::tonemapping::Tonemapping,
+    ecs::schedule::IntoScheduleConfigs,
+    gizmos::prelude::{DefaultGizmoConfigGroup, GizmoConfigStore, Gizmos},
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::VertexAttributeValues,
     prelude::{
-        Color, Commands, Cuboid, DirectionalLight, Entity, Mesh, Mesh3d, MeshBuilder,
-        MeshMaterial3d, Meshable, On, Plane3d, Quat, Sphere, StandardMaterial, Transform, Vec2,
-        Vec3,
+        Color, Commands, Component, Cuboid, DirectionalLight, Entity, GlobalTransform, Mesh,
+        Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat, Res, Sphere,
+        StandardMaterial, Transform, Vec2, Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
@@ -28,6 +30,7 @@ use bevy::{
         pipelined_rendering::PipelinedRenderingPlugin,
         render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     },
+    transform::TransformSystems,
 };
 
 use charme_bevy::{CharmeMaterial, CharmeMaterialPlugin, ParameterError};
@@ -36,7 +39,7 @@ use charme_core::{MaterialSlotId, ParameterValue};
 use crate::{
     BackgroundColor, Frame, OutputSize, PixelFormat, RendererConfig, RendererError,
     renderer::RendererNotification,
-    scene::{SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene},
+    scene::{SelectionGeometry, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene},
 };
 
 pub(crate) enum Command {
@@ -56,6 +59,11 @@ pub(crate) enum Command {
         slot_id: Option<MaterialSlotId>,
         path: String,
         value: ParameterValue,
+    },
+    SetSelectedMaterialSlot(Option<MaterialSlotId>),
+    PickViewport {
+        x: f32,
+        y: f32,
     },
     RequestMaterialInspectorPreview {
         slot_id: Option<MaterialSlotId>,
@@ -194,6 +202,12 @@ fn run(
                 } => {
                     dirty |= backend.set_material_parameter(slot_id, path, value);
                 }
+                Command::SetSelectedMaterialSlot(slot_id) => {
+                    dirty |= backend.set_selected_material_slot(slot_id);
+                }
+                Command::PickViewport { x, y } => {
+                    backend.pick_viewport(x, y)?;
+                }
                 Command::Redraw => dirty = true,
                 Command::RequestMaterialInspectorPreview {
                     slot_id,
@@ -239,6 +253,12 @@ fn run(
                     value,
                 }) => {
                     dirty |= backend.set_material_parameter(slot_id, path, value);
+                }
+                Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
+                    dirty |= backend.set_selected_material_slot(slot_id);
+                }
+                Ok(Command::PickViewport { x, y }) => {
+                    backend.pick_viewport(x, y)?;
                 }
                 Ok(Command::Redraw) => dirty = true,
                 Ok(Command::RequestMaterialInspectorPreview {
@@ -338,12 +358,22 @@ impl Backend {
                 .disable::<PipelinedRenderingPlugin>(),
         );
         app.add_plugins(CharmeMaterialPlugin);
+        app.init_resource::<SelectionGeometry>().add_systems(
+            PostUpdate,
+            draw_selected_primitive_gizmo.after(TransformSystems::Propagate),
+        );
 
         while app.plugins_state() == PluginsState::Adding {
             thread::yield_now();
         }
         app.finish();
         app.cleanup();
+
+        if let Some(mut configs) = app.world_mut().get_resource_mut::<GizmoConfigStore>() {
+            let (config, _) = configs.config_mut::<DefaultGizmoConfigGroup>();
+            config.depth_bias = -0.1;
+            config.line.width = 2.5;
+        }
 
         if app.get_sub_app(RenderApp).is_none() {
             return Err(RendererError::DeviceUnavailable);
@@ -464,6 +494,56 @@ impl Backend {
         self.update_camera_transform()
     }
 
+    fn set_selected_material_slot(&mut self, slot_id: Option<MaterialSlotId>) -> bool {
+        let changed = self
+            .app
+            .world_mut()
+            .resource_mut::<SelectionGeometry>()
+            .set_selected_slot(slot_id);
+        if changed {
+            // Gizmos are materialized in Bevy's Last schedule. Run one update
+            // before scheduling the readback so the first frame after a
+            // selection change contains the newly generated outline asset.
+            self.app.update();
+        }
+        changed
+    }
+
+    fn pick_viewport(&mut self, x: f32, y: f32) -> Result<(), RendererError> {
+        // Camera projection and GlobalTransform are updated by Bevy during the
+        // app update. Picking can arrive immediately after a resize or orbit
+        // command, so make sure the ray uses the latest camera state.
+        self.app.update();
+
+        let (path, picked) = {
+            let world = self.app.world();
+            let path = world.resource::<SelectionGeometry>().scene_path.clone();
+            let picked = world
+                .get::<Camera>(self.camera)
+                .zip(world.get::<GlobalTransform>(self.camera))
+                .and_then(|(camera, transform)| {
+                    camera
+                        .viewport_to_world(transform, Vec2::new(x, y))
+                        .ok()
+                        .and_then(|ray| world.resource::<SelectionGeometry>().pick(ray))
+                });
+            (path, picked)
+        };
+
+        let Some(path) = path else {
+            return Ok(());
+        };
+        self.events
+            .send(WorkerEvent::Notification(
+                RendererNotification::ViewportPickResult {
+                    path,
+                    slot_id: picked.map(|picked| picked.slot_id),
+                    primitive_index: picked.map(|picked| picked.primitive_index),
+                },
+            ))
+            .map_err(|_| RendererError::WorkerStopped)
+    }
+
     fn load_pmx(
         &mut self,
         path: PathBuf,
@@ -493,6 +573,9 @@ impl Backend {
             scene.despawn(&mut self.app);
         }
         let scene_path = prepared.info.path().to_path_buf();
+        self.app
+            .world_mut()
+            .insert_resource(SelectionGeometry::from_prepared(&prepared));
         self.pmx_scene = Some(spawn_pmx_scene(&mut self.app, &prepared));
         let (bounds_min, bounds_max) = prepared.normalized_bounds();
         self.orbit = OrbitState::framing(bounds_min, bounds_max);
@@ -1087,6 +1170,57 @@ impl OrbitState {
     }
 }
 
+#[derive(Component)]
+struct MainPreviewCamera;
+
+const SELECTION_GIZMO_COLOR: Color = Color::srgba(1.0, 0.42, 0.02, 1.0);
+
+fn draw_selected_primitive_gizmo(
+    selection: Res<SelectionGeometry>,
+    cameras: bevy::prelude::Query<&GlobalTransform, bevy::prelude::With<MainPreviewCamera>>,
+    mut gizmos: Gizmos,
+) {
+    let Some(camera_transform) = cameras.iter().next() else {
+        return;
+    };
+    let camera_position = camera_transform.translation();
+    let Some(selected_slot) = selection.selected_slot() else {
+        return;
+    };
+    for primitive in selection
+        .primitives
+        .iter()
+        .filter(|primitive| primitive.slot_id == selected_slot)
+    {
+        for edge in &primitive.edges {
+            let draw_edge = if edge.faces.len() == 1 {
+                true
+            } else {
+                let mut has_front_face = false;
+                let mut has_back_face = false;
+                for &face_index in &edge.faces {
+                    let Some(face) = primitive.faces.get(face_index) else {
+                        continue;
+                    };
+                    if face.normal == Vec3::ZERO {
+                        continue;
+                    }
+                    if face.normal.dot(camera_position - face.center) > 0.0 {
+                        has_front_face = true;
+                    } else {
+                        has_back_face = true;
+                    }
+                }
+                has_front_face && has_back_face
+            };
+
+            if draw_edge {
+                gizmos.line(edge.start, edge.end, SELECTION_GIZMO_COLOR);
+            }
+        }
+    }
+}
+
 fn spawn_scene(
     app: &mut App,
     target: bevy::prelude::Handle<Image>,
@@ -1149,6 +1283,7 @@ fn spawn_scene(
 
     let camera = world
         .spawn((
+            MainPreviewCamera,
             Camera3d::default(),
             Tonemapping::None,
             RenderTarget::Image(target.into()),

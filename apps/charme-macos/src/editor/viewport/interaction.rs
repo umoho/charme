@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use cacao::{
     appkit::App,
-    foundation::{NO, NSArray, YES, id},
+    foundation::{NO, NSArray, YES, id, nil},
     objc::{
         class,
         declare::ClassDecl,
@@ -13,8 +13,14 @@ use cacao::{
     utils::properties::ObjcProperty,
     view::View,
 };
+use core_graphics::geometry::CGPoint;
 
 use crate::app::{CharmeApp, Message};
+
+const DOWN_X_IVAR: &str = "charmeOrbitDownX";
+const DOWN_Y_IVAR: &str = "charmeOrbitDownY";
+const DID_DRAG_IVAR: &str = "charmeOrbitDidDrag";
+const CLICK_DRAG_THRESHOLD: f64 = 3.0;
 
 pub(crate) struct OrbitInputView {
     pub(crate) view: View,
@@ -68,14 +74,18 @@ fn input_class() -> *const Class {
         let superclass = class!(NSView);
         let mut declaration = ClassDecl::new("CharmeOrbitInputView", superclass)
             .expect("orbit input class should only be registered once");
+        declaration.add_ivar::<f64>(DOWN_X_IVAR);
+        declaration.add_ivar::<f64>(DOWN_Y_IVAR);
+        declaration.add_ivar::<usize>(DID_DRAG_IVAR);
         declaration.add_method(
             sel!(mouseDown:),
-            mouse_down as extern "C" fn(&Object, Sel, id),
+            mouse_down as extern "C" fn(&mut Object, Sel, id),
         );
         declaration.add_method(
             sel!(mouseDragged:),
-            mouse_dragged as extern "C" fn(&Object, Sel, id),
+            mouse_dragged as extern "C" fn(&mut Object, Sel, id),
         );
+        declaration.add_method(sel!(mouseUp:), mouse_up as extern "C" fn(&Object, Sel, id));
         declaration.add_method(
             sel!(scrollWheel:),
             scroll_wheel as extern "C" fn(&Object, Sel, id),
@@ -88,14 +98,48 @@ fn input_class() -> *const Class {
     }) as *const Class
 }
 
-extern "C" fn mouse_down(_: &Object, _: Sel, _: id) {}
+extern "C" fn mouse_down(view: &mut Object, _: Sel, event: id) {
+    let window_point: CGPoint = unsafe { msg_send![event, locationInWindow] };
+    let point: CGPoint = unsafe { msg_send![view, convertPoint: window_point fromView: nil] };
+    unsafe {
+        view.set_ivar(DOWN_X_IVAR, point.x);
+        view.set_ivar(DOWN_Y_IVAR, point.y);
+        view.set_ivar(DID_DRAG_IVAR, 0usize);
+    }
+}
 
-extern "C" fn mouse_dragged(_: &Object, _: Sel, event: id) {
+extern "C" fn mouse_dragged(view: &mut Object, _: Sel, event: id) {
+    let window_point: CGPoint = unsafe { msg_send![event, locationInWindow] };
+    let point: CGPoint = unsafe { msg_send![view, convertPoint: window_point fromView: nil] };
+    unsafe {
+        let down_x = *view.get_ivar::<f64>(DOWN_X_IVAR);
+        let down_y = *view.get_ivar::<f64>(DOWN_Y_IVAR);
+        if (point.x - down_x).powi(2) + (point.y - down_y).powi(2)
+            > CLICK_DRAG_THRESHOLD * CLICK_DRAG_THRESHOLD
+        {
+            view.set_ivar(DID_DRAG_IVAR, 1usize);
+        }
+    }
+
     let delta_x: f64 = unsafe { msg_send![event, deltaX] };
     let delta_y: f64 = unsafe { msg_send![event, deltaY] };
     App::<CharmeApp, Message>::dispatch_main(Message::Orbit {
         delta_x: -(delta_x as f32) * 0.01,
         delta_y: -(delta_y as f32) * 0.01,
+    });
+}
+
+extern "C" fn mouse_up(view: &Object, _: Sel, event: id) {
+    let did_drag = unsafe { *view.get_ivar::<usize>(DID_DRAG_IVAR) != 0 };
+    if did_drag {
+        return;
+    }
+
+    let window_point: CGPoint = unsafe { msg_send![event, locationInWindow] };
+    let point: CGPoint = unsafe { msg_send![view, convertPoint: window_point fromView: nil] };
+    App::<CharmeApp, Message>::dispatch_main(Message::ViewportClicked {
+        x: point.x,
+        y: point.y,
     });
 }
 

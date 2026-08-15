@@ -167,6 +167,46 @@ impl NativeHierarchyView {
         }
     }
 
+    pub(super) fn select_item(&self, item_id: super::model::HierarchyItemId) {
+        let item = {
+            let state = self.state.borrow();
+            state
+                .snapshot
+                .nodes
+                .iter()
+                .enumerate()
+                .find(|(_, node)| node.id == item_id)
+                .map(|(index, _)| state.item(index))
+        };
+        let Some(item) = item else {
+            return;
+        };
+
+        let outline = self.outline.get(|outline| outline as *const Object as id);
+        unsafe {
+            let row: NSInteger = msg_send![outline, rowForItem: item];
+            let selected_row: NSInteger = msg_send![outline, selectedRow];
+            if row < 0 || row == selected_row {
+                return;
+            }
+            let indexes: id = msg_send![class!(NSIndexSet), indexSetWithIndex: row as usize];
+            let _: () = msg_send![outline,
+                selectRowIndexes: indexes
+                byExtendingSelection: NO
+            ];
+        }
+    }
+
+    pub(super) fn clear_selection(&self) {
+        let outline = self.outline.get(|outline| outline as *const Object as id);
+        unsafe {
+            let selected_row: NSInteger = msg_send![outline, selectedRow];
+            if selected_row >= 0 {
+                let _: () = msg_send![outline, deselectAll: nil];
+            }
+        }
+    }
+
     fn reload_and_expand(&self) {
         let outline = self.outline.get(|outline| outline as *const Object as id);
         unsafe {

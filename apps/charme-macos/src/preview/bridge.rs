@@ -34,6 +34,11 @@ enum Command {
         path: String,
         value: ParameterValue,
     },
+    SetSelectedMaterialSlot(Option<MaterialSlotId>),
+    PickViewport {
+        x: f32,
+        y: f32,
+    },
     RequestMaterialInspectorPreview {
         slot_id: MaterialSlotId,
     },
@@ -110,6 +115,18 @@ impl RenderBridge {
                                 if let Err(error) =
                                     renderer.set_material_parameter_for_slot(slot_id, path, value)
                                 {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
+                                if let Err(error) = renderer.set_selected_material_slot(slot_id) {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::PickViewport { x, y }) => {
+                                if let Err(error) = renderer.pick_viewport(x, y) {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -219,6 +236,16 @@ impl RenderBridge {
         let _ = self
             .commands
             .send(Command::RequestMaterialInspectorPreview { slot_id });
+    }
+
+    pub(crate) fn set_selected_material_slot(&self, slot_id: Option<MaterialSlotId>) {
+        let _ = self
+            .commands
+            .send(Command::SetSelectedMaterialSlot(slot_id));
+    }
+
+    pub(crate) fn pick_viewport(&self, x: f32, y: f32) {
+        let _ = self.commands.send(Command::PickViewport { x, y });
     }
 
     pub(crate) fn request_redraw(&self) {

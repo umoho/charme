@@ -93,7 +93,7 @@
 - [x] 加载失败时保留当前场景。
 - [x] 替换 PMX 场景时清理对应 mesh、material 和 image assets。
 - [x] 将 StandardMaterial 预览替换为 `charme-bevy` 材质（首版固定参数 ABI）。
-- [ ] 支持选择和高亮 material slot。
+- [x] 支持选择和高亮 material slot。
 - [x] 支持从 UI 更新固定材质参数并立即重绘；纹理仍待接入。
 - [x] 增加材质球与材质缩略图 render session（首版加载后异步生成全部槽位）。
 - [ ] 增加灯光、背景和环境 preset。

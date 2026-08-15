@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
 };
@@ -6,9 +7,10 @@ use std::{
 use bevy::{
     asset::RenderAssetUsages,
     image::{CompressedImageFormats, ImageSampler, ImageType},
+    math::Ray3d,
     prelude::{
         AlphaMode, App, Assets, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
-        Transform, Vec3,
+        Resource, Transform, Vec3,
     },
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
@@ -125,6 +127,233 @@ impl PreparedPmxScene {
         let translation = Vec3::new(-center.x, -self.bounds_min.y, -center.z);
         (self.bounds_min + translation, self.bounds_max + translation)
     }
+}
+
+/// CPU geometry retained for viewport picking and selected-primitive outlines.
+#[derive(Resource, Default)]
+pub(crate) struct SelectionGeometry {
+    pub(crate) scene_path: Option<PathBuf>,
+    pub(crate) primitives: Vec<PrimitiveSelectionGeometry>,
+    selected_slot: Option<MaterialSlotId>,
+}
+
+pub(crate) struct PrimitiveSelectionGeometry {
+    pub(crate) primitive_index: usize,
+    pub(crate) slot_id: MaterialSlotId,
+    pub(crate) faces: Vec<SelectionFace>,
+    pub(crate) edges: Vec<SelectionEdge>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SelectionFace {
+    pub(crate) vertices: [Vec3; 3],
+    pub(crate) normal: Vec3,
+    pub(crate) center: Vec3,
+}
+
+pub(crate) struct SelectionEdge {
+    pub(crate) start: Vec3,
+    pub(crate) end: Vec3,
+    pub(crate) faces: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PickedPrimitive {
+    pub(crate) primitive_index: usize,
+    pub(crate) slot_id: MaterialSlotId,
+    pub(crate) distance: f32,
+}
+
+impl SelectionGeometry {
+    pub(crate) fn from_prepared(prepared: &PreparedPmxScene) -> Self {
+        let center = (prepared.bounds_min + prepared.bounds_max) * 0.5;
+        let translation = Vec3::new(-center.x, -prepared.bounds_min.y, -center.z);
+        let positions = &prepared.model.geometry().positions;
+        let slots = prepared.info.material_slots();
+        let primitives = prepared
+            .model
+            .primitives()
+            .iter()
+            .enumerate()
+            .filter_map(|(primitive_index, primitive)| {
+                let slot_id = slots
+                    .get(primitive.material_index)
+                    .map(PmxMaterialSlot::id)?;
+                let index_end = primitive.index_start.checked_add(primitive.index_count)?;
+                let indices = prepared
+                    .model
+                    .geometry()
+                    .indices
+                    .get(primitive.index_start..index_end)?;
+                let faces = indices
+                    .chunks_exact(3)
+                    .filter_map(|triangle| {
+                        let first = positions.get(triangle[0] as usize)?;
+                        let second = positions.get(triangle[1] as usize)?;
+                        let third = positions.get(triangle[2] as usize)?;
+                        Some(selection_face(
+                            Vec3::from(*first) + translation,
+                            Vec3::from(*second) + translation,
+                            Vec3::from(*third) + translation,
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                if faces.is_empty() {
+                    return None;
+                }
+                let edges = selection_edges(&faces);
+                Some(PrimitiveSelectionGeometry {
+                    primitive_index,
+                    slot_id,
+                    faces,
+                    edges,
+                })
+            })
+            .collect();
+
+        Self {
+            scene_path: Some(prepared.info.path().to_path_buf()),
+            primitives,
+            selected_slot: None,
+        }
+    }
+
+    pub(crate) fn set_selected_slot(&mut self, slot_id: Option<MaterialSlotId>) -> bool {
+        let selected_slot = slot_id.filter(|slot_id| {
+            self.primitives
+                .iter()
+                .any(|primitive| primitive.slot_id == *slot_id)
+        });
+        if self.selected_slot == selected_slot {
+            return false;
+        }
+        self.selected_slot = selected_slot;
+        true
+    }
+
+    pub(crate) fn selected_slot(&self) -> Option<MaterialSlotId> {
+        self.selected_slot
+    }
+
+    pub(crate) fn pick(&self, ray: Ray3d) -> Option<PickedPrimitive> {
+        let direction = *ray.direction;
+        let mut closest = None;
+        for primitive in &self.primitives {
+            for face in &primitive.faces {
+                let Some(distance) =
+                    ray_triangle_intersection(ray.origin, direction, face.vertices)
+                else {
+                    continue;
+                };
+                if closest
+                    .as_ref()
+                    .is_none_or(|hit: &PickedPrimitive| distance < hit.distance)
+                {
+                    closest = Some(PickedPrimitive {
+                        primitive_index: primitive.primitive_index,
+                        slot_id: primitive.slot_id,
+                        distance,
+                    });
+                }
+            }
+        }
+        closest
+    }
+}
+
+fn selection_face(first: Vec3, second: Vec3, third: Vec3) -> SelectionFace {
+    let raw_normal = (second - first).cross(third - first);
+    let normal = if raw_normal.length_squared() > f32::EPSILON {
+        raw_normal.normalize()
+    } else {
+        Vec3::ZERO
+    };
+    SelectionFace {
+        vertices: [first, second, third],
+        normal,
+        center: (first + second + third) / 3.0,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct PositionKey([u32; 3]);
+
+impl From<Vec3> for PositionKey {
+    fn from(value: Vec3) -> Self {
+        Self([value.x.to_bits(), value.y.to_bits(), value.z.to_bits()])
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct EdgeKey(PositionKey, PositionKey);
+
+struct EdgeAccumulator {
+    start: Vec3,
+    end: Vec3,
+    faces: Vec<usize>,
+}
+
+fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
+    let mut edges = HashMap::<EdgeKey, EdgeAccumulator>::new();
+    for (face_index, face) in faces.iter().enumerate() {
+        for (start, end) in [
+            (face.vertices[0], face.vertices[1]),
+            (face.vertices[1], face.vertices[2]),
+            (face.vertices[2], face.vertices[0]),
+        ] {
+            let start_key = PositionKey::from(start);
+            let end_key = PositionKey::from(end);
+            let (key, start, end) = if start_key <= end_key {
+                (EdgeKey(start_key, end_key), start, end)
+            } else {
+                (EdgeKey(end_key, start_key), end, start)
+            };
+            let edge = edges.entry(key).or_insert_with(|| EdgeAccumulator {
+                start,
+                end,
+                faces: Vec::new(),
+            });
+            if !edge.faces.contains(&face_index) {
+                edge.faces.push(face_index);
+            }
+        }
+    }
+
+    edges
+        .into_values()
+        .map(|edge| SelectionEdge {
+            start: edge.start,
+            end: edge.end,
+            faces: edge.faces,
+        })
+        .collect()
+}
+
+fn ray_triangle_intersection(origin: Vec3, direction: Vec3, vertices: [Vec3; 3]) -> Option<f32> {
+    const EPSILON: f32 = 1e-6;
+    let edge_one = vertices[1] - vertices[0];
+    let edge_two = vertices[2] - vertices[0];
+    let perpendicular = direction.cross(edge_two);
+    let determinant = edge_one.dot(perpendicular);
+    if determinant.abs() < EPSILON {
+        return None;
+    }
+
+    let inverse_determinant = determinant.recip();
+    let origin_offset = origin - vertices[0];
+    let u = inverse_determinant * origin_offset.dot(perpendicular);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+
+    let cross = origin_offset.cross(edge_one);
+    let v = inverse_determinant * direction.dot(cross);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+
+    let distance = inverse_determinant * edge_two.dot(cross);
+    (distance > EPSILON).then_some(distance)
 }
 
 struct DecodedTexture {
@@ -479,4 +708,80 @@ fn placeholder_texture() -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::math::{Dir3, Ray3d};
+
+    #[test]
+    fn coplanar_triangle_diagonals_are_not_silhouette_boundaries() {
+        let faces = vec![
+            selection_face(
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(1.0, -1.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+            ),
+            selection_face(
+                Vec3::new(-1.0, -1.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(-1.0, 1.0, 0.0),
+            ),
+        ];
+        let edges = selection_edges(&faces);
+
+        assert_eq!(edges.len(), 5);
+        assert_eq!(edges.iter().filter(|edge| edge.faces.len() == 2).count(), 1);
+    }
+
+    #[test]
+    fn picking_returns_the_nearest_primitive() {
+        let slot = MaterialSlotId::new();
+        let faces = vec![selection_face(
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )];
+        let geometry = SelectionGeometry {
+            scene_path: Some(PathBuf::from("model.pmx")),
+            primitives: vec![PrimitiveSelectionGeometry {
+                primitive_index: 3,
+                slot_id: slot,
+                edges: selection_edges(&faces),
+                faces,
+            }],
+            selected_slot: None,
+        };
+        let ray = Ray3d::new(
+            Vec3::new(0.0, 0.0, 2.0),
+            Dir3::new(Vec3::NEG_Z).expect("negative Z is a valid direction"),
+        );
+
+        let picked = geometry.pick(ray).expect("ray should hit the triangle");
+        assert_eq!(picked.primitive_index, 3);
+        assert_eq!(picked.slot_id, slot);
+        assert!((picked.distance - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn selected_slot_is_limited_to_loaded_primitives() {
+        let slot = MaterialSlotId::new();
+        let geometry = SelectionGeometry {
+            scene_path: None,
+            primitives: vec![PrimitiveSelectionGeometry {
+                primitive_index: 0,
+                slot_id: slot,
+                faces: Vec::new(),
+                edges: Vec::new(),
+            }],
+            selected_slot: None,
+        };
+        let mut geometry = geometry;
+
+        assert!(geometry.set_selected_slot(Some(slot)));
+        assert_eq!(geometry.selected_slot(), Some(slot));
+        assert!(geometry.set_selected_slot(None));
+        assert_eq!(geometry.selected_slot(), None);
+    }
 }

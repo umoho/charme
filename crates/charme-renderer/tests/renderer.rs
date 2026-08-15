@@ -109,10 +109,30 @@ fn renders_resizes_and_loads_pmx() {
     assert_eq!(info.material_slots()[0].name(), "Body");
     let slot_id = info.material_slots()[0].id();
     assert!(info.warnings().is_empty());
+
+    renderer
+        .pick_viewport(32.5, 24.0)
+        .expect("viewport picking should be accepted");
+    let picked = wait_for_notification(&mut renderer);
+    assert!(matches!(
+        picked,
+        RendererNotification::ViewportPickResult {
+            slot_id: Some(picked_slot),
+            primitive_index: Some(0),
+            ..
+        } if picked_slot == slot_id
+    ));
+
     renderer
         .set_material_parameter_for_slot(slot_id, "material.roughness", ParameterValue::F32(0.2))
         .expect("targeted material parameter should be accepted");
     let pmx_frame = wait_for_frame(&mut renderer);
+
+    renderer
+        .set_selected_material_slot(Some(slot_id))
+        .expect("material selection should be accepted");
+    let outlined = wait_for_frame(&mut renderer);
+    assert_ne!(outlined.pixels(), pmx_frame.pixels());
     assert!(pmx_frame.sequence() > reset.sequence());
     let thumbnail = wait_for_material_thumbnail(&mut renderer);
     let RendererNotification::MaterialThumbnailReady {

@@ -505,6 +505,16 @@ extern "C" fn mouse_down_cannot_move_window(_: &Object, _: Sel) -> bool {
     NO
 }
 
+fn shortest_angle_delta(target: f32, current: f32) -> f32 {
+    let mut delta = (target - current) % TAU as f32;
+    if delta > PI as f32 {
+        delta -= TAU as f32;
+    } else if delta < -(PI as f32) {
+        delta += TAU as f32;
+    }
+    delta
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,14 +550,4 @@ mod tests {
         assert!(front.alpha > back.alpha);
         assert!(front.radius - back.radius < 2.0);
     }
-}
-
-fn shortest_angle_delta(target: f32, current: f32) -> f32 {
-    let mut delta = (target - current) % TAU as f32;
-    if delta > PI as f32 {
-        delta -= TAU as f32;
-    } else if delta < -(PI as f32) {
-        delta += TAU as f32;
-    }
-    delta
 }
