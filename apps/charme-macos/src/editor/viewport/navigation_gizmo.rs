@@ -220,6 +220,10 @@ impl NavigationGizmo {
 fn axis_label(text: &str, color: Color) -> Label {
     let label = label(text, 12.0, true, color);
     label.set_text_alignment(TextAlign::Center);
+    label.objc.with_mut(|object| unsafe {
+        let cell: id = msg_send![object, cell];
+        let _: () = msg_send![cell, setVerticalAlignment: 1isize];
+    });
     label.set_background_color(Color::Clear);
     label.set_translates_autoresizing_mask_into_constraints(true);
     label
@@ -238,14 +242,30 @@ fn draw_gizmo(orientation: CameraOrientation) -> Image {
 }
 
 fn draw_axes(context: &CGContextRef, orientation: CameraOrientation) {
-    let axes = projected_axes(orientation);
+    let mut axes = projected_axes(orientation);
+    axes.sort_by(|left, right| {
+        left.depth
+            .partial_cmp(&right.depth)
+            .unwrap_or(Ordering::Equal)
+    });
 
     context.set_line_cap(CGLineCap::CGLineCapRound);
     context.set_line_width(2.0);
 
+    // The origin marker sits behind the spokes. The nearest spoke is drawn
+    // last, allowing it to occlude the marker like the Blender gizmo.
+    context.set_rgb_fill_color(0.08, 0.09, 0.11, 0.92);
+    context.fill_ellipse_in_rect(circle_rect(
+        Point {
+            x: GIZMO_CENTER,
+            y: GIZMO_CENTER,
+        },
+        3.0,
+    ));
+
     // Draw the spokes first. Endpoint markers are drawn separately below so
     // that the six individual endpoints can be depth-sorted.
-    for axis in axes {
+    for axis in axes.iter().copied() {
         let (red, green, blue) = axis_color(axis.index);
         let positive_style = endpoint_style(axis.depth);
         context.set_rgb_stroke_color(red, green, blue, positive_style.alpha);
@@ -279,15 +299,6 @@ fn draw_axes(context: &CGContextRef, orientation: CameraOrientation) {
             context.stroke_ellipse_in_rect(circle_rect(endpoint.point, endpoint.style.radius));
         }
     }
-
-    context.set_rgb_fill_color(0.08, 0.09, 0.11, 0.92);
-    context.fill_ellipse_in_rect(circle_rect(
-        Point {
-            x: GIZMO_CENTER,
-            y: GIZMO_CENTER,
-        },
-        3.0,
-    ));
 }
 
 fn projected_axes(orientation: CameraOrientation) -> [ProjectedAxis; 3] {
