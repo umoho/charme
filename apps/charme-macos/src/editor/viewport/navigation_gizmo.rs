@@ -40,6 +40,7 @@ const ENDPOINT_RADIUS_VARIATION: f64 = 1.2;
 const NEGATIVE_ENDPOINT_BASE_RADIUS: f64 = 5.5;
 const NEGATIVE_ENDPOINT_RADIUS_VARIATION: f64 = 1.2;
 const LABEL_SIZE: f64 = 20.0;
+const LABEL_VERTICAL_OFFSET: f64 = 1.5;
 const LABEL_INSET: f64 = 2.0;
 const PITCH_LIMIT: f32 = 1.45;
 
@@ -207,7 +208,7 @@ impl NavigationGizmo {
             label.set_text_color(Color::rgba(22, 24, 29, (style.alpha * 255.0) as u8));
             let x = (endpoint.x - LABEL_SIZE * 0.5)
                 .clamp(LABEL_INSET, GIZMO_SIZE - LABEL_SIZE - LABEL_INSET);
-            let y = (endpoint.y - LABEL_SIZE * 0.5)
+            let y = (endpoint.y - LABEL_SIZE * 0.5 + LABEL_VERTICAL_OFFSET)
                 .clamp(LABEL_INSET, GIZMO_SIZE - LABEL_SIZE - LABEL_INSET);
             label.set_frame(CGRect::new(
                 &CGPoint::new(x, y),
@@ -220,10 +221,6 @@ impl NavigationGizmo {
 fn axis_label(text: &str, color: Color) -> Label {
     let label = label(text, 12.0, true, color);
     label.set_text_alignment(TextAlign::Center);
-    label.objc.with_mut(|object| unsafe {
-        let cell: id = msg_send![object, cell];
-        let _: () = msg_send![cell, setVerticalAlignment: 1isize];
-    });
     label.set_background_color(Color::Clear);
     label.set_translates_autoresizing_mask_into_constraints(true);
     label
