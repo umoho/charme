@@ -34,8 +34,8 @@ use crate::{
 
 const GIZMO_SIZE: f64 = 128.0;
 const GIZMO_CENTER: f64 = GIZMO_SIZE * 0.5;
-const AXIS_RADIUS: f64 = 37.0;
-const ENDPOINT_BASE_RADIUS: f64 = 4.0;
+const AXIS_RADIUS: f64 = 30.0;
+const ENDPOINT_BASE_RADIUS: f64 = 5.5;
 const ENDPOINT_RADIUS_VARIATION: f64 = 1.2;
 const NEGATIVE_ENDPOINT_BASE_RADIUS: f64 = 5.5;
 const NEGATIVE_ENDPOINT_RADIUS_VARIATION: f64 = 1.2;
@@ -104,9 +104,10 @@ impl NavigationGizmo {
         let image_view = ImageView::new();
         image_view.set_background_color(Color::Clear);
 
-        let x_label = axis_label("X", Color::rgb(238, 55, 75));
-        let y_label = axis_label("Y", Color::rgb(118, 194, 39));
-        let z_label = axis_label("Z", Color::rgb(48, 132, 224));
+        let label_color = Color::rgb(22, 24, 29);
+        let x_label = axis_label("X", label_color.clone());
+        let y_label = axis_label("Y", label_color.clone());
+        let z_label = axis_label("Z", label_color);
         view.add_subview(&image_view);
         for label in [&x_label, &y_label, &z_label] {
             view.add_subview(label);
@@ -203,13 +204,7 @@ impl NavigationGizmo {
             let projected = projected_axes(orientation)[axis];
             let endpoint = projected.positive;
             let style = endpoint_style(projected.depth);
-            let (red, green, blue) = axis_color(axis);
-            label.set_text_color(Color::rgba(
-                (red * 255.0) as u8,
-                (green * 255.0) as u8,
-                (blue * 255.0) as u8,
-                (style.alpha * 255.0) as u8,
-            ));
+            label.set_text_color(Color::rgba(22, 24, 29, (style.alpha * 255.0) as u8));
             let x = (endpoint.x - LABEL_SIZE * 0.5)
                 .clamp(LABEL_INSET, GIZMO_SIZE - LABEL_SIZE - LABEL_INSET);
             let y = (endpoint.y - LABEL_SIZE * 0.5)
@@ -246,7 +241,7 @@ fn draw_axes(context: &CGContextRef, orientation: CameraOrientation) {
     let axes = projected_axes(orientation);
 
     context.set_line_cap(CGLineCap::CGLineCapRound);
-    context.set_line_width(2.5);
+    context.set_line_width(2.0);
 
     // Draw the spokes first. Endpoint markers are drawn separately below so
     // that the six individual endpoints can be depth-sorted.
