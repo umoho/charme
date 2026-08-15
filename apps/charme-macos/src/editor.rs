@@ -22,9 +22,10 @@ use cacao::{
         toolbar::{ItemIdentifier, Toolbar, ToolbarDelegate, ToolbarItem},
         window::{TitleVisibility, Window, WindowDelegate},
     },
+    button::Button,
     color::{Color, Theme},
     filesystem::FileSelectPanel,
-    foundation::{BOOL, NO, YES, id},
+    foundation::{BOOL, NO, NSString, YES, id},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     objc::{class, msg_send, sel, sel_impl},
@@ -41,7 +42,7 @@ use charme_core::{
     ParameterValue, ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
-use core_graphics::geometry::{CGPoint, CGRect};
+use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 
 use self::{
     docking::{
@@ -66,6 +67,10 @@ const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
+const TOOLBAR_IMPORT_ITEM: &str = "com.umoho.charme.toolbar.import-pmx";
+const TOOLBAR_VIEW_MODE_ITEM: &str = "com.umoho.charme.toolbar.view-mode";
+const TOOLBAR_VIEW_MODE_WIDTH: f64 = 300.0;
+const TOOLBAR_VIEW_MODE_HEIGHT: f64 = 24.0;
 
 struct DockDividerTarget {
     owner: *mut EditorWindow,
@@ -169,7 +174,94 @@ struct DividerDrag {
     available_extent: f64,
 }
 
-struct EditorToolbar;
+struct ToolbarSegmentedView {
+    container: View,
+    control: id,
+}
+
+impl ToolbarSegmentedView {
+    fn new(labels: &[&str]) -> Self {
+        let origin = CGPoint::new(0.0, 0.0);
+        let size = CGSize::new(TOOLBAR_VIEW_MODE_WIDTH, TOOLBAR_VIEW_MODE_HEIGHT);
+        let frame = CGRect::new(&origin, &size);
+        let container = View::new();
+        container.set_translates_autoresizing_mask_into_constraints(true);
+        container.set_frame(frame);
+
+        let control = unsafe {
+            let control: id = msg_send![class!(NSSegmentedControl), alloc];
+            let control: id = msg_send![control, initWithFrame: frame];
+            let _: () = msg_send![control, setTranslatesAutoresizingMaskIntoConstraints: YES];
+            let _: () = msg_send![control, setSegmentCount: labels.len() as isize];
+            let segment_width = TOOLBAR_VIEW_MODE_WIDTH / labels.len() as f64;
+            for (index, label) in labels.iter().enumerate() {
+                let label = NSString::new(label);
+                let _: () = msg_send![control, setLabel: &*label forSegment: index];
+                let _: () = msg_send![control, setWidth: segment_width forSegment: index];
+            }
+            let _: () = msg_send![control, setSelected: YES forSegment: 0usize];
+            let _: () = msg_send![control, setTrackingMode: 0isize];
+            let _: () = msg_send![control, setControlSize: 1isize];
+            control
+        };
+        container.objc.with_mut(|parent| unsafe {
+            let _: () = msg_send![parent, addSubview: control];
+        });
+
+        Self { container, control }
+    }
+}
+
+impl Drop for ToolbarSegmentedView {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.control, removeFromSuperview];
+            let _: () = msg_send![self.control, release];
+        }
+    }
+}
+
+fn attach_toolbar_view(item: &ToolbarItem, view: &View) {
+    view.objc.with_mut(|view| unsafe {
+        let _: () = msg_send![&*item.objc, setView: view];
+    });
+}
+
+struct EditorToolbar {
+    import_item: ToolbarItem,
+    view_mode_item: ToolbarItem,
+    _view_modes: ToolbarSegmentedView,
+}
+
+impl EditorToolbar {
+    fn new() -> Self {
+        let mut import_button = Button::new(localization::text(Key::ToolbarImportPmx));
+        import_button.set_action(|| {
+            App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
+        });
+        let mut import_item = ToolbarItem::new(TOOLBAR_IMPORT_ITEM);
+        import_item.set_button(import_button);
+        import_item.set_title(localization::text(Key::ToolbarImportPmx));
+
+        let view_modes = ToolbarSegmentedView::new(&[
+            localization::text(Key::ToolbarModePreview),
+            localization::text(Key::ToolbarModeWireframe),
+            localization::text(Key::ToolbarModeNormals),
+            localization::text(Key::ToolbarModeUv),
+        ]);
+        let mut view_mode_item = ToolbarItem::new(TOOLBAR_VIEW_MODE_ITEM);
+        view_mode_item.set_title(localization::text(Key::ToolbarModePreview));
+        view_mode_item.set_min_size(TOOLBAR_VIEW_MODE_WIDTH, TOOLBAR_VIEW_MODE_HEIGHT);
+        view_mode_item.set_max_size(TOOLBAR_VIEW_MODE_WIDTH, TOOLBAR_VIEW_MODE_HEIGHT);
+        attach_toolbar_view(&view_mode_item, &view_modes.container);
+
+        Self {
+            import_item,
+            view_mode_item,
+            _view_modes: view_modes,
+        }
+    }
+}
 
 impl ToolbarDelegate for EditorToolbar {
     const NAME: &'static str = "CharmeEditorToolbar";
@@ -179,15 +271,24 @@ impl ToolbarDelegate for EditorToolbar {
     }
 
     fn allowed_item_identifiers(&self) -> Vec<ItemIdentifier> {
-        vec![ItemIdentifier::Space]
+        vec![
+            ItemIdentifier::Custom(TOOLBAR_IMPORT_ITEM),
+            ItemIdentifier::FlexibleSpace,
+            ItemIdentifier::Custom(TOOLBAR_VIEW_MODE_ITEM),
+            ItemIdentifier::FlexibleSpace,
+        ]
     }
 
     fn default_item_identifiers(&self) -> Vec<ItemIdentifier> {
-        vec![ItemIdentifier::Space]
+        self.allowed_item_identifiers()
     }
 
-    fn item_for(&self, _: &str) -> &ToolbarItem {
-        unreachable!("the empty Charme toolbar has no items")
+    fn item_for(&self, identifier: &str) -> &ToolbarItem {
+        match identifier {
+            TOOLBAR_IMPORT_ITEM => &self.import_item,
+            TOOLBAR_VIEW_MODE_ITEM => &self.view_mode_item,
+            _ => unreachable!("unknown Charme toolbar item: {identifier}"),
+        }
     }
 }
 
@@ -234,7 +335,7 @@ pub(crate) struct EditorWindow {
 
 impl EditorWindow {
     pub(crate) fn new() -> Self {
-        let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar);
+        let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar::new());
         let toolbar_divider = panel(editor_separator_color());
         toolbar_divider.set_translates_autoresizing_mask_into_constraints(true);
         let content = panel(Color::MacOSWindowBackgroundColor);

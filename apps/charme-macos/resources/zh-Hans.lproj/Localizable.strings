@@ -58,6 +58,11 @@
 "RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "导入…";
 "ImportPmxMenu" = "PMX…";
+"ToolbarImportPmx" = "导入 PMX";
+"ToolbarModePreview" = "预览";
+"ToolbarModeWireframe" = "线框";
+"ToolbarModeNormals" = "法线";
+"ToolbarModeUv" = "UV";
 "SaveProjectMenu" = "保存";
 "SaveAsProjectMenu" = "另存为…";
 "InspectShaderMenu" = "检查WGSLShader…";

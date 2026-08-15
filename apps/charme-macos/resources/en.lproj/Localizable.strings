@@ -58,6 +58,11 @@
 "RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "Import…";
 "ImportPmxMenu" = "PMX…";
+"ToolbarImportPmx" = "Import PMX";
+"ToolbarModePreview" = "Preview";
+"ToolbarModeWireframe" = "Wireframe";
+"ToolbarModeNormals" = "Normals";
+"ToolbarModeUv" = "UV";
 "SaveProjectMenu" = "Save";
 "SaveAsProjectMenu" = "Save As…";
 "InspectShaderMenu" = "Inspect WGSL Shader…";
