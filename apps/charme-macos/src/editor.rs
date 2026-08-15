@@ -172,6 +172,7 @@ struct DividerDrag {
 
 struct ProjectTitlebar {
     _view: View,
+    _stack: View,
     title: Label,
     status: Label,
     controller: id,
@@ -182,47 +183,47 @@ impl ProjectTitlebar {
         let view = panel(Color::Clear);
         view.set_translates_autoresizing_mask_into_constraints(true);
         let origin = CGPoint::new(0.0, 0.0);
-        let size = CGSize::new(220.0, 28.0);
+        let size = CGSize::new(220.0, 24.0);
         view.set_frame(CGRect::new(&origin, &size));
 
         let title = label(
             localization::text(Key::UntitledProject),
-            12.0,
+            11.0,
             true,
             Color::Label,
         );
         title.set_max_number_of_lines(1);
         let status = label(
             localization::text(Key::Unchanged),
-            9.0,
+            8.0,
             false,
             Color::LabelSecondary,
         );
         status.set_max_number_of_lines(1);
-        view.add_subview(&title);
-        view.add_subview(&status);
+        let stack = View::new();
+        view.add_subview(&stack);
+        stack.add_subview(&title);
+        stack.add_subview(&status);
         LayoutConstraint::activate(&[
-            title.top.constraint_equal_to(&view.top).offset(1.0),
-            title
+            stack
                 .leading
                 .constraint_equal_to(&view.leading)
                 .offset(PROJECT_TITLEBAR_HORIZONTAL_INSET),
-            title
+            stack
                 .trailing
                 .constraint_equal_to(&view.trailing)
                 .offset(-PROJECT_TITLEBAR_HORIZONTAL_INSET),
-            title.height.constraint_equal_to_constant(15.0),
+            stack.center_y.constraint_equal_to(&view.center_y),
+            stack.height.constraint_equal_to_constant(22.0),
+            title.top.constraint_equal_to(&stack.top),
+            title.leading.constraint_equal_to(&stack.leading),
+            title.trailing.constraint_equal_to(&stack.trailing),
+            title.height.constraint_equal_to_constant(13.0),
             status.top.constraint_equal_to(&title.bottom),
-            status
-                .leading
-                .constraint_equal_to(&view.leading)
-                .offset(PROJECT_TITLEBAR_HORIZONTAL_INSET),
-            status
-                .trailing
-                .constraint_equal_to(&view.trailing)
-                .offset(-PROJECT_TITLEBAR_HORIZONTAL_INSET),
-            status.height.constraint_equal_to_constant(11.0),
-            status.bottom.constraint_equal_to(&view.bottom).offset(-1.0),
+            status.leading.constraint_equal_to(&stack.leading),
+            status.trailing.constraint_equal_to(&stack.trailing),
+            status.height.constraint_equal_to_constant(9.0),
+            status.bottom.constraint_equal_to(&stack.bottom),
         ]);
 
         let controller = unsafe {
@@ -237,6 +238,7 @@ impl ProjectTitlebar {
 
         Self {
             _view: view,
+            _stack: stack,
             title,
             status,
             controller,
