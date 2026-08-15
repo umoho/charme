@@ -9,6 +9,7 @@
 
 use bevy::{
     asset::{Asset, Handle, load_internal_asset, uuid_handle},
+    image::Image,
     math::Vec4,
     pbr::{Material, MaterialPlugin},
     prelude::AlphaMode,
@@ -196,6 +197,11 @@ pub struct CharmeMaterial {
     /// Values uploaded to the fixed material uniform buffer.
     #[uniform(0)]
     pub parameters: CharmeMaterialParams,
+    /// Optional PMX diffuse/base-color texture.
+    #[texture(1)]
+    #[sampler(2)]
+    #[dependency]
+    pub base_color_texture: Option<Handle<Image>>,
     /// Alpha behavior for this material.
     pub alpha_mode: AlphaMode,
 }
@@ -204,6 +210,7 @@ impl Default for CharmeMaterial {
     fn default() -> Self {
         Self {
             parameters: CharmeMaterialParams::default(),
+            base_color_texture: None,
             alpha_mode: AlphaMode::Opaque,
         }
     }

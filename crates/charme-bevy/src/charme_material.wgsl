@@ -11,6 +11,10 @@ struct CharmeMaterialParams {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0)
 var<uniform> material: CharmeMaterialParams;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1)
+var base_color_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2)
+var base_color_sampler: sampler;
 
 fn safe_normalize(value: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
     let magnitude = length(value);
@@ -70,7 +74,10 @@ fn main_directional_shadow(input: VertexOutput, normal: vec3<f32>) -> f32 {
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     let controls = material.lanes[0];
-    let base_tint = material.lanes[1];
+    var base_tint = material.lanes[1];
+#ifdef VERTEX_UVS_A
+    base_tint *= textureSample(base_color_texture, base_color_sampler, input.uv);
+#endif
     let roughness = clamp(controls.x, 0.0, 1.0);
     let rim_strength = clamp(controls.y, 0.0, 2.0);
     let highlight_strength = clamp(controls.z * 0.12, 0.0, 1.0);

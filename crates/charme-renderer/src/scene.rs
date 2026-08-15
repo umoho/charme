@@ -658,14 +658,24 @@ fn load_texture(source: &PmxSource, path: &PmxResolvedPath) -> Result<DecodedTex
 
 fn material_for_record(
     record: &PmxMaterialRecord,
-    _textures: &[Handle<Image>],
-    _texture_has_alpha: &[bool],
+    textures: &[Handle<Image>],
+    texture_has_alpha: &[bool],
 ) -> CharmeMaterial {
     let [red, green, blue, alpha] = record.material.diffuse;
+    let texture_index =
+        (record.material.texture_index >= 0).then_some(record.material.texture_index as usize);
+    let base_color_texture = texture_index.and_then(|index| textures.get(index).cloned());
+    let has_texture_alpha = texture_index
+        .and_then(|index| texture_has_alpha.get(index).copied())
+        .unwrap_or(false);
+
     CharmeMaterial {
         parameters: CharmeMaterialParams::with_tint([red, green, blue, alpha]),
+        base_color_texture,
         alpha_mode: if alpha < 0.999 {
             AlphaMode::Blend
+        } else if has_texture_alpha {
+            AlphaMode::AlphaToCoverage
         } else {
             AlphaMode::Opaque
         },

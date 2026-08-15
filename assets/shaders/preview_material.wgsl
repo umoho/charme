@@ -22,10 +22,15 @@ struct PreviewMaterialParams {
 /// %{ reflect.parameters; ui.label = "角色预览材质"; }
 @group(2) @binding(0)
 var<uniform> material: PreviewMaterialParams;
+@group(2) @binding(1)
+var base_color_texture: texture_2d<f32>;
+@group(2) @binding(2)
+var base_color_sampler: sampler;
 
 struct PreviewFragmentInput {
     @location(0) normal: vec3<f32>,
     @location(1) view_direction: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 }
 
 fn safe_normalize(value: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
@@ -62,8 +67,10 @@ fn preview_lighting(normal: vec3<f32>, view_direction: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fragment(input: PreviewFragmentInput) -> @location(0) vec4<f32> {
+    let base_tint = material.base_tint
+        * textureSample(base_color_texture, base_color_sampler, input.uv);
     return vec4<f32>(
-        material.base_tint.rgb * preview_lighting(input.normal, input.view_direction),
-        material.base_tint.a,
+        base_tint.rgb * preview_lighting(input.normal, input.view_direction),
+        base_tint.a,
     );
 }
