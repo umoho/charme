@@ -35,8 +35,10 @@ use crate::{
 const GIZMO_SIZE: f64 = 128.0;
 const GIZMO_CENTER: f64 = GIZMO_SIZE * 0.5;
 const AXIS_RADIUS: f64 = 37.0;
-const ENDPOINT_RADIUS: f64 = 5.0;
-const NEGATIVE_ENDPOINT_RADIUS: f64 = 7.0;
+const ENDPOINT_BASE_RADIUS: f64 = 4.0;
+const ENDPOINT_RADIUS_VARIATION: f64 = 1.2;
+const NEGATIVE_ENDPOINT_BASE_RADIUS: f64 = 5.5;
+const NEGATIVE_ENDPOINT_RADIUS_VARIATION: f64 = 1.2;
 const LABEL_SIZE: f64 = 20.0;
 const LABEL_INSET: f64 = 2.0;
 const PITCH_LIMIT: f32 = 1.45;
@@ -68,6 +70,12 @@ struct ProjectedAxis {
     positive: Point,
     negative: Point,
     depth: f64,
+}
+
+#[derive(Clone, Copy)]
+struct EndpointStyle {
+    radius: f64,
+    alpha: f64,
 }
 
 pub(crate) struct NavigationGizmo {
@@ -159,10 +167,11 @@ impl NavigationGizmo {
         for axis in projected {
             for (endpoint, positive) in [(axis.positive, true), (axis.negative, false)] {
                 let distance = squared_distance(point, endpoint);
+                let depth = if positive { axis.depth } else { -axis.depth };
                 let hit_radius = if positive {
                     LABEL_SIZE * 0.65
                 } else {
-                    NEGATIVE_ENDPOINT_RADIUS * 1.8
+                    negative_endpoint_style(depth).radius * 1.8
                 };
                 if distance > hit_radius * hit_radius {
                     continue;
@@ -182,7 +191,16 @@ impl NavigationGizmo {
             (&self.y_label, 1usize),
             (&self.z_label, 2usize),
         ] {
-            let endpoint = projected_axes(orientation)[axis].positive;
+            let projected = projected_axes(orientation)[axis];
+            let endpoint = projected.positive;
+            let style = endpoint_style(projected.depth);
+            let (red, green, blue) = axis_color(axis);
+            label.set_text_color(Color::rgba(
+                (red * 255.0) as u8,
+                (green * 255.0) as u8,
+                (blue * 255.0) as u8,
+                (style.alpha * 255.0) as u8,
+            ));
             let x = (endpoint.x - LABEL_SIZE * 0.5)
                 .clamp(LABEL_INSET, GIZMO_SIZE - LABEL_SIZE - LABEL_INSET);
             let y = (endpoint.y - LABEL_SIZE * 0.5)
@@ -229,18 +247,19 @@ fn draw_axes(context: &CGContextRef, orientation: CameraOrientation) {
 
     for axis in axes {
         let (red, green, blue) = axis_color(axis.index);
-        let alpha = if axis.depth < 0.0 { 0.95 } else { 0.42 };
-        context.set_rgb_stroke_color(red, green, blue, alpha);
+        let positive_style = endpoint_style(axis.depth);
+        let negative_style = negative_endpoint_style(-axis.depth);
+        context.set_rgb_stroke_color(red, green, blue, positive_style.alpha);
         context.begin_path();
         context.move_to_point(GIZMO_CENTER, GIZMO_CENTER);
         context.add_line_to_point(axis.positive.x, axis.positive.y);
         context.stroke_path();
 
-        context.set_rgb_stroke_color(red, green, blue, alpha * 0.85);
-        context.stroke_ellipse_in_rect(circle_rect(axis.negative, NEGATIVE_ENDPOINT_RADIUS));
+        context.set_rgb_stroke_color(red, green, blue, negative_style.alpha * 0.85);
+        context.stroke_ellipse_in_rect(circle_rect(axis.negative, negative_style.radius));
 
-        context.set_rgb_fill_color(red, green, blue, alpha);
-        context.fill_ellipse_in_rect(circle_rect(axis.positive, ENDPOINT_RADIUS));
+        context.set_rgb_fill_color(red, green, blue, positive_style.alpha);
+        context.fill_ellipse_in_rect(circle_rect(axis.positive, positive_style.radius));
     }
 
     context.set_rgb_fill_color(0.08, 0.09, 0.11, 0.92);
@@ -324,6 +343,27 @@ fn squared_distance(first: Point, second: Point) -> f64 {
     let dx = first.x - second.x;
     let dy = first.y - second.y;
     dx * dx + dy * dy
+}
+
+fn endpoint_style(depth: f64) -> EndpointStyle {
+    // The renderer looks down the negative camera Z axis. A negative endpoint
+    // depth is therefore closer to the viewer. Keep the effect deliberately
+    // restrained, like Blender's orientation gizmo.
+    let frontness = (-depth).clamp(-1.0, 1.0);
+    let normalized = (frontness + 1.0) * 0.5;
+    EndpointStyle {
+        radius: ENDPOINT_BASE_RADIUS + ENDPOINT_RADIUS_VARIATION * normalized,
+        alpha: 0.28 + 0.64 * normalized,
+    }
+}
+
+fn negative_endpoint_style(depth: f64) -> EndpointStyle {
+    let frontness = (-depth).clamp(-1.0, 1.0);
+    let normalized = (frontness + 1.0) * 0.5;
+    EndpointStyle {
+        radius: NEGATIVE_ENDPOINT_BASE_RADIUS + NEGATIVE_ENDPOINT_RADIUS_VARIATION * normalized,
+        alpha: 0.20 + 0.52 * normalized,
+    }
 }
 
 fn circle_rect(center: Point, radius: f64) -> CGRect {
@@ -445,6 +485,15 @@ mod tests {
     #[test]
     fn angle_delta_uses_the_shortest_path() {
         assert!((shortest_angle_delta(PI as f32, -PI as f32 + 0.1) + 0.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn front_endpoints_are_subtly_larger_and_brighter() {
+        let front = endpoint_style(-1.0);
+        let back = endpoint_style(1.0);
+        assert!(front.radius > back.radius);
+        assert!(front.alpha > back.alpha);
+        assert!(front.radius - back.radius < 2.0);
     }
 }
 
