@@ -50,7 +50,7 @@ use self::{
     },
     hierarchy::HierarchyView,
     inspector::{ParameterControl, PropertyRow},
-    viewport::{OrbitInputView, make_image},
+    viewport::{NavigationGizmo, OrbitInputView, make_image},
 };
 use crate::{
     app::{CharmeApp, MenuContext, Message},
@@ -306,6 +306,7 @@ pub(crate) struct EditorWindow {
     inspector_label: Label,
     image_view: ImageView,
     orbit_input: OrbitInputView,
+    navigation_gizmo: NavigationGizmo,
     status: Label,
     hierarchy_label: Label,
     hierarchy: HierarchyView,
@@ -348,6 +349,7 @@ impl EditorWindow {
         let image_view = ImageView::new();
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
+        let navigation_gizmo = NavigationGizmo::new();
         let hierarchy_label = label(
             localization::text(Key::Hierarchy),
             11.0,
@@ -469,6 +471,7 @@ impl EditorWindow {
             inspector_label,
             image_view,
             orbit_input,
+            navigation_gizmo,
             status,
             hierarchy_label,
             hierarchy,
@@ -940,6 +943,7 @@ impl EditorWindow {
     }
 
     fn show_scene_info(&self, info: &PmxSceneInfo) {
+        self.navigation_gizmo.reset();
         self.install_pmx_material_bindings(info);
         self.reflected_inspection
             .replace(inspect_preview_shader().ok());
@@ -1189,8 +1193,15 @@ impl EditorWindow {
     }
 
     pub(crate) fn orbit(&self, delta_x: f32, delta_y: f32) {
+        self.navigation_gizmo.orbit(delta_x, delta_y);
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             bridge.orbit(delta_x, delta_y);
+        }
+    }
+
+    pub(crate) fn navigation_gizmo_mouse_down(&self, x: f64, y: f64) {
+        if let Some((delta_yaw, delta_pitch)) = self.navigation_gizmo.orbit_delta_at(x, y) {
+            self.orbit(delta_yaw, delta_pitch);
         }
     }
 
@@ -1360,6 +1371,7 @@ impl WindowDelegate for EditorWindow {
         self.viewport.add_subview(&self.image_view);
         self.viewport.add_subview(&self.orbit_input.view);
         self.viewport.add_subview(&self.status);
+        self.viewport.add_subview(&self.navigation_gizmo.view);
         self.sidebar.add_subview(&self.hierarchy_label);
         self.sidebar.add_subview(self.hierarchy.view());
         self.inspector.add_subview(&self.inspector_label);
@@ -1433,6 +1445,24 @@ impl WindowDelegate for EditorWindow {
                 .bottom
                 .constraint_equal_to(&self.viewport.bottom)
                 .offset(-12.0),
+            self.navigation_gizmo
+                .view
+                .top
+                .constraint_equal_to(&self.viewport.top)
+                .offset(12.0),
+            self.navigation_gizmo
+                .view
+                .trailing
+                .constraint_equal_to(&self.viewport.trailing)
+                .offset(-12.0),
+            self.navigation_gizmo
+                .view
+                .width
+                .constraint_equal_to_constant(128.0),
+            self.navigation_gizmo
+                .view
+                .height
+                .constraint_equal_to_constant(128.0),
             self.hierarchy_label
                 .top
                 .constraint_equal_to(&self.sidebar.top)
