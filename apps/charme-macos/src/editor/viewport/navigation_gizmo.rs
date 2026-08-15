@@ -78,6 +78,15 @@ struct EndpointStyle {
     alpha: f64,
 }
 
+#[derive(Clone, Copy)]
+struct EndpointMarker {
+    index: usize,
+    point: Point,
+    depth: f64,
+    style: EndpointStyle,
+    filled: bool,
+}
+
 pub(crate) struct NavigationGizmo {
     pub(crate) view: View,
     image_view: ImageView,
@@ -234,32 +243,46 @@ fn draw_gizmo(orientation: CameraOrientation) -> Image {
 }
 
 fn draw_axes(context: &CGContextRef, orientation: CameraOrientation) {
-    let mut axes = projected_axes(orientation);
-    axes.sort_by(|left, right| {
-        right
-            .depth
-            .partial_cmp(&left.depth)
-            .unwrap_or(Ordering::Equal)
-    });
+    let axes = projected_axes(orientation);
 
     context.set_line_cap(CGLineCap::CGLineCapRound);
     context.set_line_width(2.5);
 
+    // Draw the spokes first. Endpoint markers are drawn separately below so
+    // that the six individual endpoints can be depth-sorted.
     for axis in axes {
         let (red, green, blue) = axis_color(axis.index);
         let positive_style = endpoint_style(axis.depth);
-        let negative_style = negative_endpoint_style(-axis.depth);
         context.set_rgb_stroke_color(red, green, blue, positive_style.alpha);
         context.begin_path();
         context.move_to_point(GIZMO_CENTER, GIZMO_CENTER);
         context.add_line_to_point(axis.positive.x, axis.positive.y);
         context.stroke_path();
+    }
 
-        context.set_rgb_stroke_color(red, green, blue, negative_style.alpha * 0.85);
-        context.stroke_ellipse_in_rect(circle_rect(axis.negative, negative_style.radius));
+    let mut endpoints = [
+        endpoint_marker(axes[0], true),
+        endpoint_marker(axes[0], false),
+        endpoint_marker(axes[1], true),
+        endpoint_marker(axes[1], false),
+        endpoint_marker(axes[2], true),
+        endpoint_marker(axes[2], false),
+    ];
+    endpoints.sort_by(|left, right| {
+        left.depth
+            .partial_cmp(&right.depth)
+            .unwrap_or(Ordering::Equal)
+    });
 
-        context.set_rgb_fill_color(red, green, blue, positive_style.alpha);
-        context.fill_ellipse_in_rect(circle_rect(axis.positive, positive_style.radius));
+    for endpoint in endpoints {
+        let (red, green, blue) = axis_color(endpoint.index);
+        if endpoint.filled {
+            context.set_rgb_fill_color(red, green, blue, endpoint.style.alpha);
+            context.fill_ellipse_in_rect(circle_rect(endpoint.point, endpoint.style.radius));
+        } else {
+            context.set_rgb_stroke_color(red, green, blue, endpoint.style.alpha);
+            context.stroke_ellipse_in_rect(circle_rect(endpoint.point, endpoint.style.radius));
+        }
     }
 
     context.set_rgb_fill_color(0.08, 0.09, 0.11, 0.92);
@@ -345,11 +368,30 @@ fn squared_distance(first: Point, second: Point) -> f64 {
     dx * dx + dy * dy
 }
 
+fn endpoint_marker(axis: ProjectedAxis, positive: bool) -> EndpointMarker {
+    let depth = if positive { axis.depth } else { -axis.depth };
+    EndpointMarker {
+        index: axis.index,
+        point: if positive {
+            axis.positive
+        } else {
+            axis.negative
+        },
+        depth,
+        style: if positive {
+            endpoint_style(depth)
+        } else {
+            negative_endpoint_style(depth)
+        },
+        filled: positive,
+    }
+}
+
 fn endpoint_style(depth: f64) -> EndpointStyle {
-    // The renderer looks down the negative camera Z axis. A negative endpoint
-    // depth is therefore closer to the viewer. Keep the effect deliberately
+    // The orbit basis uses +Z from the target toward the camera, so a positive
+    // camera-space depth is closer to the viewer. Keep the effect deliberately
     // restrained, like Blender's orientation gizmo.
-    let frontness = (-depth).clamp(-1.0, 1.0);
+    let frontness = depth.clamp(-1.0, 1.0);
     let normalized = (frontness + 1.0) * 0.5;
     EndpointStyle {
         radius: ENDPOINT_BASE_RADIUS + ENDPOINT_RADIUS_VARIATION * normalized,
@@ -358,7 +400,7 @@ fn endpoint_style(depth: f64) -> EndpointStyle {
 }
 
 fn negative_endpoint_style(depth: f64) -> EndpointStyle {
-    let frontness = (-depth).clamp(-1.0, 1.0);
+    let frontness = depth.clamp(-1.0, 1.0);
     let normalized = (frontness + 1.0) * 0.5;
     EndpointStyle {
         radius: NEGATIVE_ENDPOINT_BASE_RADIUS + NEGATIVE_ENDPOINT_RADIUS_VARIATION * normalized,
@@ -489,8 +531,8 @@ mod tests {
 
     #[test]
     fn front_endpoints_are_subtly_larger_and_brighter() {
-        let front = endpoint_style(-1.0);
-        let back = endpoint_style(1.0);
+        let front = endpoint_style(1.0);
+        let back = endpoint_style(-1.0);
         assert!(front.radius > back.radius);
         assert!(front.alpha > back.alpha);
         assert!(front.radius - back.radius < 2.0);
