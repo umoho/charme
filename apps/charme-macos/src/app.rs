@@ -370,7 +370,7 @@ impl CharmeApp {
     fn ensure_editor(&self) {
         if self.editor.borrow().is_none() {
             let mut config = WindowConfig::default();
-            config.set_toolbar_style(WindowToolbarStyle::UnifiedCompact);
+            config.set_toolbar_style(WindowToolbarStyle::Unified);
             config.set_initial_dimensions(80.0, 80.0, 1280.0, 800.0);
             let window = Window::with(config, EditorWindow::new());
             window.show();

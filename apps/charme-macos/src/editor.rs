@@ -61,7 +61,7 @@ use crate::{
 };
 
 const DOCK_DIVIDER_THICKNESS: f64 = 2.0;
-const EDITOR_CONTENT_TOP_INSET: f64 = 35.0;
+const EDITOR_CONTENT_TOP_INSET: f64 = 52.0;
 const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const PROJECT_TITLEBAR_HORIZONTAL_INSET: f64 = 8.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
@@ -183,19 +183,19 @@ impl ProjectTitlebar {
         let view = panel(Color::Clear);
         view.set_translates_autoresizing_mask_into_constraints(true);
         let origin = CGPoint::new(0.0, 0.0);
-        let size = CGSize::new(220.0, 24.0);
+        let size = CGSize::new(220.0, 32.0);
         view.set_frame(CGRect::new(&origin, &size));
 
         let title = label(
             localization::text(Key::UntitledProject),
-            11.0,
+            13.0,
             true,
             Color::Label,
         );
         title.set_max_number_of_lines(1);
         let status = label(
             localization::text(Key::Unchanged),
-            8.0,
+            10.0,
             false,
             Color::LabelSecondary,
         );
@@ -214,15 +214,15 @@ impl ProjectTitlebar {
                 .constraint_equal_to(&view.trailing)
                 .offset(-PROJECT_TITLEBAR_HORIZONTAL_INSET),
             stack.center_y.constraint_equal_to(&view.center_y),
-            stack.height.constraint_equal_to_constant(22.0),
+            stack.height.constraint_equal_to_constant(27.0),
             title.top.constraint_equal_to(&stack.top),
             title.leading.constraint_equal_to(&stack.leading),
             title.trailing.constraint_equal_to(&stack.trailing),
-            title.height.constraint_equal_to_constant(13.0),
+            title.height.constraint_equal_to_constant(16.0),
             status.top.constraint_equal_to(&title.bottom),
             status.leading.constraint_equal_to(&stack.leading),
             status.trailing.constraint_equal_to(&stack.trailing),
-            status.height.constraint_equal_to_constant(9.0),
+            status.height.constraint_equal_to_constant(11.0),
             status.bottom.constraint_equal_to(&stack.bottom),
         ]);
 
