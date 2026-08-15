@@ -58,11 +58,6 @@
 "RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "导入…";
 "ImportPmxMenu" = "PMX…";
-"ToolbarImportPmx" = "导入 PMX";
-"ToolbarModePreview" = "预览";
-"ToolbarModeWireframe" = "线框";
-"ToolbarModeNormals" = "法线";
-"ToolbarModeUv" = "UV";
 "SaveProjectMenu" = "保存";
 "SaveAsProjectMenu" = "另存为…";
 "InspectShaderMenu" = "检查WGSLShader…";
@@ -76,6 +71,8 @@
 "OpenProjectFailed" = "无法打开项目。";
 "UntitledCharacter" = "未命名角色";
 "UntitledProject" = "未命名项目";
+"Unchanged" = "未更改";
+"UnsavedChanges" = "未保存更改";
 "RecentProjectTitle" = "{name} · {path}";
 "FrameStatus" = "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 滚动缩放";
 "LoadingPmx" = "加载中…\n{path}";

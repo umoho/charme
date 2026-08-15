@@ -58,11 +58,6 @@
 "RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "Import…";
 "ImportPmxMenu" = "PMX…";
-"ToolbarImportPmx" = "Import PMX";
-"ToolbarModePreview" = "Preview";
-"ToolbarModeWireframe" = "Wireframe";
-"ToolbarModeNormals" = "Normals";
-"ToolbarModeUv" = "UV";
 "SaveProjectMenu" = "Save";
 "SaveAsProjectMenu" = "Save As…";
 "InspectShaderMenu" = "Inspect WGSL Shader…";
@@ -76,6 +71,8 @@
 "OpenProjectFailed" = "Could not open the project.";
 "UntitledCharacter" = "Untitled Character";
 "UntitledProject" = "Untitled Project";
+"Unchanged" = "Unchanged";
+"UnsavedChanges" = "Unsaved Changes";
 "RecentProjectTitle" = "{name} · {path}";
 "FrameStatus" = "Frame {sequence} · {width}×{height}px · Drag to rotate · Scroll to zoom";
 "LoadingPmx" = "Loading…\n{path}";

@@ -22,10 +22,9 @@ use cacao::{
         toolbar::{ItemIdentifier, Toolbar, ToolbarDelegate, ToolbarItem},
         window::{TitleVisibility, Window, WindowDelegate},
     },
-    button::Button,
     color::{Color, Theme},
     filesystem::FileSelectPanel,
-    foundation::{BOOL, NO, NSString, YES, id},
+    foundation::{BOOL, NO, YES, id},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     objc::{class, msg_send, sel, sel_impl},
@@ -64,13 +63,10 @@ use crate::{
 const DOCK_DIVIDER_THICKNESS: f64 = 2.0;
 const EDITOR_CONTENT_TOP_INSET: f64 = 35.0;
 const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
+const PROJECT_TITLEBAR_HORIZONTAL_INSET: f64 = 8.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
-const TOOLBAR_IMPORT_ITEM: &str = "com.umoho.charme.toolbar.import-pmx";
-const TOOLBAR_VIEW_MODE_ITEM: &str = "com.umoho.charme.toolbar.view-mode";
-const TOOLBAR_VIEW_MODE_WIDTH: f64 = 300.0;
-const TOOLBAR_VIEW_MODE_HEIGHT: f64 = 24.0;
 
 struct DockDividerTarget {
     owner: *mut EditorWindow,
@@ -174,94 +170,105 @@ struct DividerDrag {
     available_extent: f64,
 }
 
-struct ToolbarSegmentedView {
-    container: View,
-    control: id,
+struct ProjectTitlebar {
+    _view: View,
+    title: Label,
+    status: Label,
+    controller: id,
 }
 
-impl ToolbarSegmentedView {
-    fn new(labels: &[&str]) -> Self {
-        let origin = CGPoint::new(0.0, 0.0);
-        let size = CGSize::new(TOOLBAR_VIEW_MODE_WIDTH, TOOLBAR_VIEW_MODE_HEIGHT);
-        let frame = CGRect::new(&origin, &size);
-        let container = View::new();
-        container.set_translates_autoresizing_mask_into_constraints(true);
-        container.set_frame(frame);
-
-        let control = unsafe {
-            let control: id = msg_send![class!(NSSegmentedControl), alloc];
-            let control: id = msg_send![control, initWithFrame: frame];
-            let _: () = msg_send![control, setTranslatesAutoresizingMaskIntoConstraints: YES];
-            let _: () = msg_send![control, setSegmentCount: labels.len() as isize];
-            let segment_width = TOOLBAR_VIEW_MODE_WIDTH / labels.len() as f64;
-            for (index, label) in labels.iter().enumerate() {
-                let label = NSString::new(label);
-                let _: () = msg_send![control, setLabel: &*label forSegment: index];
-                let _: () = msg_send![control, setWidth: segment_width forSegment: index];
-            }
-            let _: () = msg_send![control, setSelected: YES forSegment: 0usize];
-            let _: () = msg_send![control, setTrackingMode: 0isize];
-            let _: () = msg_send![control, setControlSize: 1isize];
-            control
-        };
-        container.objc.with_mut(|parent| unsafe {
-            let _: () = msg_send![parent, addSubview: control];
-        });
-
-        Self { container, control }
-    }
-}
-
-impl Drop for ToolbarSegmentedView {
-    fn drop(&mut self) {
-        unsafe {
-            let _: () = msg_send![self.control, removeFromSuperview];
-            let _: () = msg_send![self.control, release];
-        }
-    }
-}
-
-fn attach_toolbar_view(item: &ToolbarItem, view: &View) {
-    view.objc.with_mut(|view| unsafe {
-        let _: () = msg_send![&*item.objc, setView: view];
-    });
-}
-
-struct EditorToolbar {
-    import_item: ToolbarItem,
-    view_mode_item: ToolbarItem,
-    _view_modes: ToolbarSegmentedView,
-}
-
-impl EditorToolbar {
+impl ProjectTitlebar {
     fn new() -> Self {
-        let mut import_button = Button::new(localization::text(Key::ToolbarImportPmx));
-        import_button.set_action(|| {
-            App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
-        });
-        let mut import_item = ToolbarItem::new(TOOLBAR_IMPORT_ITEM);
-        import_item.set_button(import_button);
-        import_item.set_title(localization::text(Key::ToolbarImportPmx));
+        let view = panel(Color::Clear);
+        view.set_translates_autoresizing_mask_into_constraints(true);
+        let origin = CGPoint::new(0.0, 0.0);
+        let size = CGSize::new(220.0, 28.0);
+        view.set_frame(CGRect::new(&origin, &size));
 
-        let view_modes = ToolbarSegmentedView::new(&[
-            localization::text(Key::ToolbarModePreview),
-            localization::text(Key::ToolbarModeWireframe),
-            localization::text(Key::ToolbarModeNormals),
-            localization::text(Key::ToolbarModeUv),
+        let title = label(
+            localization::text(Key::UntitledProject),
+            12.0,
+            true,
+            Color::Label,
+        );
+        title.set_max_number_of_lines(1);
+        let status = label(
+            localization::text(Key::Unchanged),
+            9.0,
+            false,
+            Color::LabelSecondary,
+        );
+        status.set_max_number_of_lines(1);
+        view.add_subview(&title);
+        view.add_subview(&status);
+        LayoutConstraint::activate(&[
+            title.top.constraint_equal_to(&view.top).offset(1.0),
+            title
+                .leading
+                .constraint_equal_to(&view.leading)
+                .offset(PROJECT_TITLEBAR_HORIZONTAL_INSET),
+            title
+                .trailing
+                .constraint_equal_to(&view.trailing)
+                .offset(-PROJECT_TITLEBAR_HORIZONTAL_INSET),
+            title.height.constraint_equal_to_constant(15.0),
+            status.top.constraint_equal_to(&title.bottom),
+            status
+                .leading
+                .constraint_equal_to(&view.leading)
+                .offset(PROJECT_TITLEBAR_HORIZONTAL_INSET),
+            status
+                .trailing
+                .constraint_equal_to(&view.trailing)
+                .offset(-PROJECT_TITLEBAR_HORIZONTAL_INSET),
+            status.height.constraint_equal_to_constant(11.0),
+            status.bottom.constraint_equal_to(&view.bottom).offset(-1.0),
         ]);
-        let mut view_mode_item = ToolbarItem::new(TOOLBAR_VIEW_MODE_ITEM);
-        view_mode_item.set_title(localization::text(Key::ToolbarModePreview));
-        view_mode_item.set_min_size(TOOLBAR_VIEW_MODE_WIDTH, TOOLBAR_VIEW_MODE_HEIGHT);
-        view_mode_item.set_max_size(TOOLBAR_VIEW_MODE_WIDTH, TOOLBAR_VIEW_MODE_HEIGHT);
-        attach_toolbar_view(&view_mode_item, &view_modes.container);
+
+        let controller = unsafe {
+            let controller: id = msg_send![class!(NSTitlebarAccessoryViewController), new];
+            view.objc.with_mut(|view| {
+                let _: () = msg_send![controller, setView: view];
+            });
+            // NSLayoutAttributeLeft keeps the accessory adjacent to the native traffic lights.
+            let _: () = msg_send![controller, setLayoutAttribute: 1isize];
+            controller
+        };
 
         Self {
-            import_item,
-            view_mode_item,
-            _view_modes: view_modes,
+            _view: view,
+            title,
+            status,
+            controller,
+        }
+    }
+
+    fn install<T>(&self, window: &Window<T>) {
+        unsafe {
+            let _: () =
+                msg_send![&*window.objc, addTitlebarAccessoryViewController: self.controller];
+        }
+    }
+
+    fn set_document(&self, name: &str, dirty: bool) {
+        self.title.set_text(name);
+        self.status.set_text(localization::text(if dirty {
+            Key::UnsavedChanges
+        } else {
+            Key::Unchanged
+        }));
+    }
+}
+
+impl Drop for ProjectTitlebar {
+    fn drop(&mut self) {
+        unsafe {
+            let _: () = msg_send![self.controller, release];
         }
     }
 }
+
+struct EditorToolbar;
 
 impl ToolbarDelegate for EditorToolbar {
     const NAME: &'static str = "CharmeEditorToolbar";
@@ -271,29 +278,21 @@ impl ToolbarDelegate for EditorToolbar {
     }
 
     fn allowed_item_identifiers(&self) -> Vec<ItemIdentifier> {
-        vec![
-            ItemIdentifier::Custom(TOOLBAR_IMPORT_ITEM),
-            ItemIdentifier::FlexibleSpace,
-            ItemIdentifier::Custom(TOOLBAR_VIEW_MODE_ITEM),
-            ItemIdentifier::FlexibleSpace,
-        ]
+        vec![ItemIdentifier::Space]
     }
 
     fn default_item_identifiers(&self) -> Vec<ItemIdentifier> {
-        self.allowed_item_identifiers()
+        vec![ItemIdentifier::Space]
     }
 
-    fn item_for(&self, identifier: &str) -> &ToolbarItem {
-        match identifier {
-            TOOLBAR_IMPORT_ITEM => &self.import_item,
-            TOOLBAR_VIEW_MODE_ITEM => &self.view_mode_item,
-            _ => unreachable!("unknown Charme toolbar item: {identifier}"),
-        }
+    fn item_for(&self, _: &str) -> &ToolbarItem {
+        unreachable!("the empty Charme toolbar has no items")
     }
 }
 
 pub(crate) struct EditorWindow {
     toolbar: Toolbar<EditorToolbar>,
+    titlebar: ProjectTitlebar,
     toolbar_divider: View,
     content: View,
     tree: DockTree,
@@ -335,7 +334,8 @@ pub(crate) struct EditorWindow {
 
 impl EditorWindow {
     pub(crate) fn new() -> Self {
-        let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar::new());
+        let toolbar = Toolbar::new("com.umoho.charme.editor", EditorToolbar);
+        let titlebar = ProjectTitlebar::new();
         let toolbar_divider = panel(editor_separator_color());
         toolbar_divider.set_translates_autoresizing_mask_into_constraints(true);
         let content = panel(Color::MacOSWindowBackgroundColor);
@@ -455,6 +455,7 @@ impl EditorWindow {
 
         Self {
             toolbar,
+            titlebar,
             toolbar_divider,
             content,
             tree,
@@ -558,8 +559,11 @@ impl EditorWindow {
     }
 
     fn publish_view_model(&self) {
+        let view_model = self.controller.borrow().view_model();
+        self.titlebar
+            .set_document(&view_model.document_name, view_model.dirty);
         let update = charme_application::EditorUpdate {
-            view_model: self.controller.borrow().view_model(),
+            view_model,
             event: None,
         };
         App::<CharmeApp, Message>::dispatch_main(Message::Application(
@@ -572,6 +576,8 @@ impl EditorWindow {
         action: EditorAction,
     ) -> Result<charme_application::EditorUpdate, charme_application::EditorControllerError> {
         let update = self.controller.borrow_mut().dispatch(action)?;
+        self.titlebar
+            .set_document(&update.view_model.document_name, update.view_model.dirty);
         App::<CharmeApp, Message>::dispatch_main(Message::Application(
             charme_application::ApplicationEvent::EditorUpdated(update.clone()),
         ));
@@ -1331,6 +1337,7 @@ impl WindowDelegate for EditorWindow {
         window.set_titlebar_separator_style(0);
         window.set_toolbar(&self.toolbar);
         window.set_shows_toolbar_button(false);
+        self.titlebar.install(&window);
         window.set_content_view(&self.content);
         window.set_minimum_content_size(900.0, 560.0);
 
