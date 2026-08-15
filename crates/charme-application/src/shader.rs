@@ -256,7 +256,7 @@ mod tests {
 
         assert_eq!(inspection.parameter_block_count, 1);
         assert_eq!(inspection.controls.len(), 5);
-        assert_eq!(inspection.controls[0].label, "Roughness");
+        assert_eq!(inspection.controls[0].label, "粗糙度");
         assert_eq!(inspection.controls[0].initial, 0.45);
         assert_eq!(inspection.non_scalar_field_count, 0);
         assert_eq!(inspection.controls[4].kind, ParameterControlKind::Color);

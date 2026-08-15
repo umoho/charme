@@ -29,8 +29,9 @@ pub const CHARME_PARAMETER_BYTES: usize = CHARME_PARAMETER_LANES * 16;
 /// The fixed, GPU-compatible parameter block used by Charme materials.
 ///
 /// The first two lanes are currently assigned as follows:
-/// `lane 0 = roughness, rim strength, outline width, toon bands (bit cast)`;
-/// `lane 1 = base tint`. Remaining lanes are reserved for future ABI fields.
+/// `lane 0 = roughness, rim strength, highlight strength (legacy outline-width slot),
+/// toon bands (bit cast)`; `lane 1 = base tint`. Remaining lanes are reserved for
+/// future ABI fields.
 #[derive(Clone, Copy, Debug, ShaderType)]
 pub struct CharmeMaterialParams {
     /// Fixed-size lanes reserved for material parameters.
@@ -105,6 +106,8 @@ impl CharmeMaterialParams {
         match (field, value) {
             ("roughness", ParameterValue::F32(value)) => self.lanes[0][0] = checked(*value)?,
             ("rim_strength", ParameterValue::F32(value)) => self.lanes[0][1] = checked(*value)?,
+            // The third lane remains addressable as `outline_width` for document
+            // compatibility, but currently controls the Blinn-Phong highlight.
             ("outline_width", ParameterValue::F32(value)) => self.lanes[0][2] = checked(*value)?,
             ("toon_bands", ParameterValue::U32(value)) => self.lanes[0][3] = f32::from_bits(*value),
             ("base_tint", ParameterValue::Vec4(value)) => {

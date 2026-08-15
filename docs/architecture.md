@@ -46,8 +46,9 @@ Owns the fixed Charme shader ABI and the reusable Bevy material integration.
 This is the package intended to be embedded in Bevy applications that consume
 Charme output. The first ABI uses Bevy material bind group 3, binding 0, with a
 256-byte (16 `vec4`) uniform block. The first five semantic fields occupy
-roughness, rim strength, outline width, toon bands, and base tint slots; the
-remaining lanes are reserved for compatible additions. `CharmeMaterialPlugin`
+roughness, rim strength, highlight strength (the legacy outline-width slot),
+toon bands, and base tint slots; the remaining lanes are reserved for
+compatible additions. `CharmeMaterialPlugin`
 embeds the runtime shader so consumers do not need Charme's editor assets.
 
 ### `charme-renderer`

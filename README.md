@@ -42,7 +42,8 @@ Implemented foundations:
 Inspector scalar edits are recorded in the core document model and now flow
 through the renderer into Charme's reusable Bevy material ABI. The first fixed
 ABI uses a 16-lane uniform block (256 bytes); its roughness, rim strength,
-outline width, toon bands, and base tint controls visibly update the viewport.
+highlight strength (using the legacy outline-width slot), toon bands, and
+base tint controls visibly update the viewport.
 Unsupported parameter paths are rejected without replacing the last valid
 material and are reported as renderer notifications.
 
