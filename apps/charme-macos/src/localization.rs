@@ -112,6 +112,7 @@ localization_keys!(
     ParameterUpdated,
     ParameterWaiting,
     PmxLoadFailed,
+    PmxLoadFailedDetails,
     ParameterRejected,
     SceneSummary,
     MaterialSlotListItem,

@@ -25,6 +25,7 @@ use crate::debug::DebugState;
 
 use crate::{
     editor::{EditorWindow, HierarchyItemId},
+    loading::PmxLoadingSheet,
     localization::{self, Key},
     startup::StartupWindow,
 };
@@ -56,6 +57,9 @@ pub(crate) enum Message {
     Zoom(f32),
     ChoosePmx,
     LoadPmx(PathBuf),
+    PmxLoadStarted(PathBuf),
+    PmxLoadFinished,
+    PmxLoadFailed { path: PathBuf, message: String },
     ChooseShader,
     InspectShader(PathBuf),
     ParameterChanged { key: String, value: ParameterValue },
@@ -66,6 +70,7 @@ pub(crate) enum Message {
 pub(crate) struct CharmeApp {
     startup: Window<StartupWindow>,
     editor: RefCell<Option<Window<EditorWindow>>>,
+    pmx_loading: RefCell<Option<Window<PmxLoadingSheet>>>,
     menu_context: Cell<MenuContext>,
     #[cfg(feature = "debug-ui")]
     debug_state: DebugState,
@@ -84,6 +89,7 @@ impl CharmeApp {
         Self {
             startup: Window::with(config, StartupWindow::new()),
             editor: RefCell::new(None),
+            pmx_loading: RefCell::new(None),
             menu_context: Cell::new(MenuContext::Startup),
             #[cfg(feature = "debug-ui")]
             debug_state: DebugState::Startup,
@@ -149,6 +155,9 @@ impl Dispatcher for CharmeApp {
                 self.refresh_menus();
             }
             Message::ChoosePmx => self.choose_pmx(),
+            Message::PmxLoadStarted(path) => self.show_pmx_loading(path),
+            Message::PmxLoadFinished => self.finish_pmx_loading(),
+            Message::PmxLoadFailed { path, message } => self.show_pmx_load_error(path, message),
             Message::Application(ApplicationEvent::EditorUpdated(update)) => {
                 update_menu_state(
                     self.menu_context.get(),
@@ -174,7 +183,10 @@ impl Dispatcher for CharmeApp {
                         ApplicationEvent::Renderer(notification) => {
                             window.handle_renderer_notification(notification);
                         }
-                        ApplicationEvent::Failed(error) => window.show_error(&error),
+                        ApplicationEvent::Failed(error) => {
+                            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
+                            window.show_error(&error);
+                        }
                         _ => {}
                     },
                     Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
@@ -201,7 +213,10 @@ impl Dispatcher for CharmeApp {
                     | Message::Undo
                     | Message::Redo
                     | Message::MenuContextChanged(_)
-                    | Message::ChoosePmx => unreachable!(),
+                    | Message::ChoosePmx
+                    | Message::PmxLoadStarted(_)
+                    | Message::PmxLoadFinished
+                    | Message::PmxLoadFailed { .. } => unreachable!(),
                 }
             }
         }
@@ -361,7 +376,7 @@ impl CharmeApp {
         self.with_editor(|editor| {
             editor.install_controller(controller);
             if let Some(character) = character {
-                editor.load_pmx(character);
+                editor.load_pmx(character, None);
             }
         });
         remember_project(&path);
@@ -401,6 +416,50 @@ impl CharmeApp {
             .and_then(|window| window.delegate.as_deref())
             .expect("editor window should exist");
         action(window);
+    }
+
+    fn show_pmx_loading(&self, path: PathBuf) {
+        self.finish_pmx_loading();
+
+        let editor_windows = self.editor.borrow();
+        let Some(editor_window) = editor_windows.as_ref() else {
+            return;
+        };
+        let sheet = PmxLoadingSheet::window(&path);
+        editor_window.begin_sheet(&sheet, || {});
+        drop(editor_windows);
+        self.pmx_loading.replace(Some(sheet));
+    }
+
+    fn finish_pmx_loading(&self) {
+        let editor_windows = self.editor.borrow();
+        let loading = self.pmx_loading.borrow();
+        if let (Some(editor_window), Some(sheet)) = (editor_windows.as_ref(), loading.as_ref()) {
+            editor_window.end_sheet(sheet);
+            sheet.close();
+        }
+        drop(loading);
+        drop(editor_windows);
+        self.pmx_loading.borrow_mut().take();
+    }
+
+    fn show_pmx_load_error(&self, path: PathBuf, message: String) {
+        self.finish_pmx_loading();
+        let short_error = localization::format(Key::PmxLoadFailed, &[("path", &path.display())]);
+        {
+            let editor_windows = self.editor.borrow();
+            if let Some(editor) = editor_windows
+                .as_ref()
+                .and_then(|window| window.delegate.as_ref())
+            {
+                editor.show_error(&short_error);
+            }
+        }
+        let details = localization::format(
+            Key::PmxLoadFailedDetails,
+            &[("path", &path.display()), ("error", &message)],
+        );
+        Alert::new(localization::text(Key::AppName), &details).show();
     }
 
     fn show_startup_error(&self, error: &str) {

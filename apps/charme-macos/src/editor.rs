@@ -295,6 +295,7 @@ impl ToolbarDelegate for EditorToolbar {
 struct PendingPmxLoad {
     epoch: u64,
     path: PathBuf,
+    character: Option<CharacterSource>,
 }
 
 #[derive(Default)]
@@ -304,11 +305,12 @@ struct PmxLoadTracker {
 }
 
 impl PmxLoadTracker {
-    fn begin(&mut self, path: PathBuf) {
+    fn begin(&mut self, path: PathBuf, character: Option<CharacterSource>) {
         self.advance_epoch();
         self.pending.push_back(PendingPmxLoad {
             epoch: self.current_epoch,
             path,
+            character,
         });
     }
 
@@ -316,11 +318,9 @@ impl PmxLoadTracker {
         self.advance_epoch();
     }
 
-    fn complete(&mut self, path: &Path) -> bool {
-        let Some(request) = self.pending.pop_front() else {
-            return false;
-        };
-        request.epoch == self.current_epoch && request.path == path
+    fn complete(&mut self, path: &Path) -> Option<PendingPmxLoad> {
+        let request = self.pending.pop_front()?;
+        (request.epoch == self.current_epoch && request.path == path).then_some(request)
     }
 
     fn advance_epoch(&mut self) {
@@ -558,6 +558,7 @@ impl EditorWindow {
 
     fn reset_project_views(&self) {
         self.pmx_loads.borrow_mut().invalidate();
+        App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.reflected_inspection.replace(None);
@@ -699,24 +700,10 @@ impl EditorWindow {
                 return;
             }
         };
-        if let Err(error) = self.dispatch_action(EditorAction::Command(
-            EditorCommand::SetCharacter(Some(CharacterSource::pmx(resource))),
-        )) {
-            eprintln!("Failed to update the project character: {error}");
-            self.show_error(&localization::format(
-                Key::PmxLoadFailed,
-                &[("path", &path.display())],
-            ));
-            return;
-        }
-        self.load_pmx(path);
+        self.load_pmx(path, Some(CharacterSource::pmx(resource)));
     }
 
-    pub(crate) fn load_pmx(&self, path: PathBuf) {
-        self.status.set_text(localization::format(
-            Key::LoadingPmx,
-            &[("path", &path.display())],
-        ));
+    pub(crate) fn load_pmx(&self, path: PathBuf, character: Option<CharacterSource>) {
         let existing_slot_ids = self
             .controller
             .borrow()
@@ -726,7 +713,8 @@ impl EditorWindow {
             .map(|slot| (slot.source_index(), slot.id()))
             .collect();
         if let Some(bridge) = self.bridge.borrow().as_ref() {
-            self.pmx_loads.borrow_mut().begin(path.clone());
+            self.pmx_loads.borrow_mut().begin(path.clone(), character);
+            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted(path.clone()));
             bridge.load_pmx(path, existing_slot_ids);
         }
     }
@@ -917,9 +905,18 @@ impl EditorWindow {
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
             RendererNotification::PmxLoaded(info) => {
-                if self.pmx_loads.borrow_mut().complete(info.path()) {
-                    self.show_scene_info(&info);
+                let Some(request) = self.pmx_loads.borrow_mut().complete(info.path()) else {
+                    return;
+                };
+                if let Some(character) = request.character
+                    && let Err(error) = self.dispatch_action(EditorAction::Command(
+                        EditorCommand::SetCharacter(Some(character)),
+                    ))
+                {
+                    eprintln!("Failed to commit the loaded character: {error}");
                 }
+                self.show_scene_info(&info);
+                App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
             }
             RendererNotification::MaterialInspectorPreviewReady {
                 path,
@@ -949,12 +946,12 @@ impl EditorWindow {
                 }
             }
             RendererNotification::PmxLoadFailed { path, message } => {
-                if self.pmx_loads.borrow_mut().complete(&path) {
+                if self.pmx_loads.borrow_mut().complete(&path).is_some() {
                     eprintln!("Failed to load PMX {}: {message}", path.display());
-                    self.show_error(&localization::format(
-                        Key::PmxLoadFailed,
-                        &[("path", &path.display())],
-                    ));
+                    App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
+                        path,
+                        message,
+                    });
                 }
             }
             RendererNotification::MaterialThumbnailReady {
@@ -1923,20 +1920,20 @@ mod tests {
     #[test]
     fn pmx_load_tracker_rejects_results_invalidated_by_a_new_project() {
         let mut tracker = PmxLoadTracker::default();
-        tracker.begin(PathBuf::from("old.pmx"));
+        tracker.begin(PathBuf::from("old.pmx"), None);
         tracker.invalidate();
 
-        assert!(!tracker.complete(Path::new("old.pmx")));
+        assert!(tracker.complete(Path::new("old.pmx")).is_none());
     }
 
     #[test]
     fn pmx_load_tracker_accepts_only_the_latest_requested_load() {
         let mut tracker = PmxLoadTracker::default();
-        tracker.begin(PathBuf::from("old.pmx"));
-        tracker.begin(PathBuf::from("new.pmx"));
+        tracker.begin(PathBuf::from("old.pmx"), None);
+        tracker.begin(PathBuf::from("new.pmx"), None);
 
-        assert!(!tracker.complete(Path::new("old.pmx")));
-        assert!(tracker.complete(Path::new("new.pmx")));
+        assert!(tracker.complete(Path::new("old.pmx")).is_none());
+        assert!(tracker.complete(Path::new("new.pmx")).is_some());
     }
 
     #[test]

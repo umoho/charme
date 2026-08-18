@@ -83,6 +83,7 @@
 "ParameterUpdated" = "{key} = {value} · Document modified · Preview updated";
 "ParameterWaiting" = "{key} = {value} · Waiting for preview binding";
 "PmxLoadFailed" = "Could not load\n{path}";
+"PmxLoadFailedDetails" = "Could not load\n{path}\n\n{error}";
 "ParameterRejected" = "Parameter {path} was rejected.";
 "SceneSummary" = "{name}\n\n{vertices} vertices · {indices} indices";
 "MaterialSlotListItem" = "{index}  {name}";

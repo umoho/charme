@@ -83,6 +83,7 @@
 "ParameterUpdated" = "{key} = {value} · 文档已修改 · 预览已更新";
 "ParameterWaiting" = "{key} = {value} · 等待预览绑定";
 "PmxLoadFailed" = "无法加载\n{path}";
+"PmxLoadFailedDetails" = "无法加载\n{path}\n\n{error}";
 "ParameterRejected" = "参数{path}被拒绝。";
 "SceneSummary" = "{name}\n\n{vertices}个顶点 · {indices}个索引";
 "MaterialSlotListItem" = "{index}  {name}";

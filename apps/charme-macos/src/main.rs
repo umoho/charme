@@ -7,6 +7,8 @@ mod debug;
 #[cfg(target_os = "macos")]
 mod editor;
 #[cfg(target_os = "macos")]
+mod loading;
+#[cfg(target_os = "macos")]
 mod localization;
 #[cfg(target_os = "macos")]
 mod preview;
