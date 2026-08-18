@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Mutex, mpsc},
     thread::JoinHandle,
 };
@@ -8,7 +8,8 @@ use std::{
 use charme_core::{MaterialSlotId, ParameterValue};
 
 use crate::{
-    BackgroundColor, Frame, OutputSize, PmxSceneInfo, RendererConfig, RendererError,
+    BackgroundColor, Frame, OutputSize, PmxLoadRequest, PmxSceneInfo, PmxSourceIdentity,
+    RendererConfig, RendererError,
     backend::{self, Command, WorkerEvent},
 };
 
@@ -20,19 +21,15 @@ pub enum RendererNotification {
     PmxLoaded(PmxSceneInfo),
     /// A PMX model could not be loaded; the previous scene remains active.
     PmxLoadFailed {
-        /// The path that was requested.
-        path: PathBuf,
-        /// The selected PMX entry inside the source ZIP archive, if any.
-        archive_entry: Option<String>,
+        /// The source identity that was requested.
+        source: PmxSourceIdentity,
         /// A human-readable import error.
         message: String,
     },
     /// A rendered material-slot thumbnail is ready for the native UI.
     MaterialThumbnailReady {
         /// The PMX scene that owns the thumbnail.
-        path: PathBuf,
-        /// The selected PMX entry inside the source ZIP archive, if any.
-        archive_entry: Option<String>,
+        source: PmxSourceIdentity,
         /// Stable identifier of the PMX material slot.
         slot_id: MaterialSlotId,
         /// The zero-based PMX material-slot index, retained for thumbnail layout.
@@ -43,9 +40,7 @@ pub enum RendererNotification {
     /// A larger material preview with a floor is ready for the Inspector.
     MaterialInspectorPreviewReady {
         /// The PMX scene that owns the preview.
-        path: PathBuf,
-        /// The selected PMX entry inside the source ZIP archive, if any.
-        archive_entry: Option<String>,
+        source: PmxSourceIdentity,
         /// Stable identifier of the PMX material slot.
         slot_id: MaterialSlotId,
         /// The zero-based PMX material-slot index, retained for preview layout.
@@ -63,9 +58,7 @@ pub enum RendererNotification {
     /// A viewport picking request completed.
     ViewportPickResult {
         /// The PMX scene that was queried.
-        path: PathBuf,
-        /// The selected PMX entry inside the source ZIP archive, if any.
-        archive_entry: Option<String>,
+        source: PmxSourceIdentity,
         /// The stable material slot hit by the viewport ray, if any.
         slot_id: Option<MaterialSlotId>,
         /// The zero-based PMX primitive hit by the viewport ray, if any.
@@ -214,12 +207,17 @@ impl Renderer {
         self.send(Command::PickViewport { x, y })
     }
 
-    /// Loads a PMX model from an arbitrary file-system path or a ZIP model package.
+    /// Enqueues a PMX loading request.
     ///
     /// Loading happens on the renderer worker. Completion or failure is
     /// reported through [`Renderer::try_recv_notification`]. Material thumbnails
     /// are read through [`Renderer::try_recv_material_thumbnail`]. A failed load
     /// does not replace the currently displayed scene.
+    pub fn load_pmx_request(&self, request: PmxLoadRequest) -> Result<(), RendererError> {
+        self.send(Command::LoadPmx(request))
+    }
+
+    /// Loads a PMX model from an arbitrary file-system path or a ZIP model package.
     pub fn load_pmx(&self, path: impl AsRef<Path>) -> Result<(), RendererError> {
         self.load_pmx_with_slot_ids(path, Vec::new())
     }
@@ -230,7 +228,11 @@ impl Renderer {
         path: impl AsRef<Path>,
         existing_slot_ids: Vec<(u32, MaterialSlotId)>,
     ) -> Result<(), RendererError> {
-        self.load_pmx_with_source(path, None, existing_slot_ids)
+        self.load_pmx_request(PmxLoadRequest::from_path(
+            path.as_ref().to_path_buf(),
+            None,
+            existing_slot_ids,
+        ))
     }
 
     /// Loads a PMX model from a disk file or a selected entry inside a ZIP archive.
@@ -243,11 +245,11 @@ impl Renderer {
         archive_entry: Option<String>,
         existing_slot_ids: Vec<(u32, MaterialSlotId)>,
     ) -> Result<(), RendererError> {
-        self.send(Command::LoadPmx {
-            path: path.as_ref().to_path_buf(),
+        self.load_pmx_request(PmxLoadRequest::from_path(
+            path.as_ref().to_path_buf(),
             archive_entry,
             existing_slot_ids,
-        })
+        ))
     }
 
     /// Removes the current PMX scene and requests an empty preview frame.

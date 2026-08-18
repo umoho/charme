@@ -18,6 +18,7 @@ use cacao::{
 };
 use charme_application::{ApplicationEvent, EditorAction, EditorController};
 use charme_core::ParameterValue;
+use charme_renderer::PmxSourceIdentity;
 use url::Url;
 
 #[cfg(feature = "debug-ui")]
@@ -67,13 +68,11 @@ pub(crate) enum Message {
     ChoosePmx,
     LoadPmx(PathBuf),
     PmxLoadStarted {
-        path: PathBuf,
-        archive_entry: Option<String>,
+        source: PmxSourceIdentity,
     },
     PmxLoadFinished,
     PmxLoadFailed {
-        path: PathBuf,
-        archive_entry: Option<String>,
+        source: PmxSourceIdentity,
         message: String,
     },
     ChooseShader,
@@ -174,16 +173,9 @@ impl Dispatcher for CharmeApp {
                 self.refresh_menus();
             }
             Message::ChoosePmx => self.choose_pmx(),
-            Message::PmxLoadStarted {
-                path,
-                archive_entry,
-            } => self.show_pmx_loading(path, archive_entry),
+            Message::PmxLoadStarted { source } => self.show_pmx_loading(source),
             Message::PmxLoadFinished => self.finish_pmx_loading(),
-            Message::PmxLoadFailed {
-                path,
-                archive_entry,
-                message,
-            } => self.show_pmx_load_error(path, archive_entry, message),
+            Message::PmxLoadFailed { source, message } => self.show_pmx_load_error(source, message),
             Message::Application(ApplicationEvent::EditorUpdated(update)) => {
                 update_menu_state(
                     self.menu_context.get(),
@@ -447,14 +439,14 @@ impl CharmeApp {
         action(window);
     }
 
-    fn show_pmx_loading(&self, path: PathBuf, archive_entry: Option<String>) {
+    fn show_pmx_loading(&self, source: PmxSourceIdentity) {
         self.finish_pmx_loading();
 
         let editor_windows = self.editor.borrow();
         let Some(editor_window) = editor_windows.as_ref() else {
             return;
         };
-        let sheet = PmxLoadingSheet::window(&path, archive_entry.as_deref());
+        let sheet = PmxLoadingSheet::window(&source);
         editor_window.begin_sheet(&sheet, || {});
         drop(editor_windows);
         self.pmx_loading.replace(Some(sheet));
@@ -472,9 +464,9 @@ impl CharmeApp {
         self.pmx_loading.borrow_mut().take();
     }
 
-    fn show_pmx_load_error(&self, path: PathBuf, archive_entry: Option<String>, message: String) {
+    fn show_pmx_load_error(&self, identity: PmxSourceIdentity, message: String) {
         self.finish_pmx_loading();
-        let source = display_pmx_source(&path, archive_entry.as_deref());
+        let source = display_pmx_source(&identity);
         let short_error = localization::format(Key::PmxLoadFailed, &[("path", &source)]);
         {
             let editor_windows = self.editor.borrow();

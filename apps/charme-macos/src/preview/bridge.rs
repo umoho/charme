@@ -1,5 +1,4 @@
 use std::{
-    path::PathBuf,
     sync::mpsc::{self, Sender, TryRecvError},
     thread::{self, JoinHandle},
     time::Duration,
@@ -8,7 +7,9 @@ use std::{
 use cacao::appkit::App;
 use charme_application::ApplicationEvent;
 use charme_core::{MaterialSlotId, ParameterValue};
-use charme_renderer::{BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig};
+use charme_renderer::{
+    BackgroundColor, OutputSize, PixelFormat, PmxLoadRequest, Renderer, RendererConfig,
+};
 
 use crate::{
     app::{CharmeApp, Message},
@@ -25,11 +26,7 @@ enum Command {
         delta_y: f32,
     },
     Zoom(f32),
-    LoadPmx {
-        path: PathBuf,
-        archive_entry: Option<String>,
-        existing_slot_ids: Vec<(u32, MaterialSlotId)>,
-    },
+    LoadPmx(PmxLoadRequest),
     ClearPmx,
     SetMaterialParameter {
         slot_id: MaterialSlotId,
@@ -98,16 +95,8 @@ impl RenderBridge {
                                     break 'running;
                                 }
                             }
-                            Ok(Command::LoadPmx {
-                                path,
-                                archive_entry,
-                                existing_slot_ids,
-                            }) => {
-                                if let Err(error) = renderer.load_pmx_with_source(
-                                    path,
-                                    archive_entry,
-                                    existing_slot_ids,
-                                ) {
+                            Ok(Command::LoadPmx(request)) => {
+                                if let Err(error) = renderer.load_pmx_request(request) {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -223,17 +212,8 @@ impl RenderBridge {
         let _ = self.commands.send(Command::Zoom(delta));
     }
 
-    pub(crate) fn load_pmx(
-        &self,
-        path: PathBuf,
-        archive_entry: Option<String>,
-        existing_slot_ids: Vec<(u32, MaterialSlotId)>,
-    ) {
-        let _ = self.commands.send(Command::LoadPmx {
-            path,
-            archive_entry,
-            existing_slot_ids,
-        });
+    pub(crate) fn load_pmx(&self, request: PmxLoadRequest) {
+        let _ = self.commands.send(Command::LoadPmx(request));
     }
 
     pub(crate) fn clear_pmx(&self) {

@@ -13,6 +13,7 @@ mod error;
 mod frame;
 mod renderer;
 mod scene;
+mod source;
 
 pub use archive::discover_pmx_archive_entries;
 pub use config::{BackgroundColor, OutputSize, PixelFormat, RendererConfig};
@@ -20,3 +21,4 @@ pub use error::RendererError;
 pub use frame::Frame;
 pub use renderer::{Renderer, RendererNotification};
 pub use scene::{PmxMaterialSlot, PmxSceneInfo};
+pub use source::{PmxLoadRequest, PmxSourceIdentity};

@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    io,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, io, path::Path};
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -14,16 +10,11 @@ use bevy::{
     },
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
-use bevy_pmx::{
-    Pmx, PmxImportContext, PmxMaterialRecord, PmxResolvedPath, PmxSource, PmxSourceLocation,
-    import_pmx, parse_pmx,
-};
+use bevy_pmx::{Pmx, PmxImportContext, PmxMaterialRecord, PmxResolvedPath, import_pmx, parse_pmx};
 use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 use charme_core::MaterialSlotId;
 
-use crate::archive::{
-    archive_root, discover_pmx_archive_entries, is_zip_path, normalize_archive_entry,
-};
+use crate::source::{PmxInputSource, PmxSourceIdentity, ResolvedPmxLoadRequest};
 
 /// A PMX material slot exposed to the editor UI.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,8 +68,7 @@ impl PmxMaterialSlot {
 /// UI-facing summary of a loaded PMX scene.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxSceneInfo {
-    path: PathBuf,
-    archive_entry: Option<String>,
+    source: PmxSourceIdentity,
     name: String,
     vertex_count: usize,
     index_count: usize,
@@ -87,14 +77,19 @@ pub struct PmxSceneInfo {
 }
 
 impl PmxSceneInfo {
+    /// Returns the complete runtime identity of the loaded PMX source.
+    pub fn source_identity(&self) -> &PmxSourceIdentity {
+        &self.source
+    }
+
     /// Returns the source PMX path or containing ZIP archive path.
     pub fn path(&self) -> &Path {
-        &self.path
+        self.source.path()
     }
 
     /// Returns the selected PMX entry inside the source ZIP archive, if any.
     pub fn archive_entry(&self) -> Option<&str> {
-        self.archive_entry.as_deref()
+        self.source.archive_entry()
     }
 
     /// Returns the model name, falling back to the selected PMX entry or source file name.
@@ -142,8 +137,7 @@ impl PreparedPmxScene {
 /// CPU geometry retained for viewport picking and selected-primitive outlines.
 #[derive(Resource, Default)]
 pub(crate) struct SelectionGeometry {
-    pub(crate) scene_path: Option<PathBuf>,
-    pub(crate) scene_archive_entry: Option<String>,
+    pub(crate) scene_source: Option<PmxSourceIdentity>,
     pub(crate) primitives: Vec<PrimitiveSelectionGeometry>,
     selected_slot: Option<MaterialSlotId>,
 }
@@ -223,8 +217,7 @@ impl SelectionGeometry {
             .collect();
 
         Self {
-            scene_path: Some(prepared.info.path().to_path_buf()),
-            scene_archive_entry: prepared.info.archive_entry().map(str::to_owned),
+            scene_source: Some(prepared.info.source_identity().clone()),
             primitives,
             selected_slot: None,
         }
@@ -374,29 +367,35 @@ struct DecodedTexture {
 }
 
 pub(crate) fn prepare_pmx_scene(
-    path: &Path,
-    archive_entry: Option<&str>,
-    existing_slot_ids: &[(u32, MaterialSlotId)],
+    request: &ResolvedPmxLoadRequest,
 ) -> Result<PreparedPmxScene, String> {
-    let (source, location, archive_entry) = source_for_pmx(path, archive_entry)?;
-    let bytes = source.read_bytes(&location).map_err(|error| {
+    let source = request.source.as_ref();
+    let bytes = source.read_pmx_bytes().map_err(|error| {
         format!(
-            "failed to read PMX file {} (resolved to {location}): {error}",
-            path.display()
+            "failed to read PMX file {} (resolved to {}): {error}",
+            source.identity().path().display(),
+            source.pmx_location()
         )
     })?;
     let document = parse_pmx(&bytes).map_err(|error| error.to_string())?;
-    let model = import_pmx(document, &PmxImportContext::with_source(source.clone())).model;
+    let model = import_pmx(
+        document,
+        &PmxImportContext::with_source(source.bevy_source().clone()),
+    )
+    .model;
 
-    let (bounds_min, bounds_max) = bounds_for_model(&model)
-        .ok_or_else(|| format!("{} contains no vertices", path.display()))?;
-    let (textures, warnings) = load_textures(&source, model.texture_paths());
+    let (bounds_min, bounds_max) = bounds_for_model(&model).ok_or_else(|| {
+        format!(
+            "{} contains no vertices",
+            source.identity().path().display()
+        )
+    })?;
+    let (textures, warnings) = load_textures(source, model.texture_paths());
     let info = scene_info(
-        path,
-        archive_entry.as_deref(),
+        source.identity(),
         &model,
         warnings,
-        existing_slot_ids,
+        &request.existing_slot_ids,
     );
 
     Ok(PreparedPmxScene {
@@ -406,51 +405,6 @@ pub(crate) fn prepare_pmx_scene(
         bounds_min,
         bounds_max,
     })
-}
-
-fn source_for_pmx(
-    path: &Path,
-    archive_entry: Option<&str>,
-) -> Result<(PmxSource, PmxSourceLocation, Option<String>), String> {
-    if !is_zip_path(path) {
-        let source = PmxSource::folder(path.parent().unwrap_or_else(|| Path::new(".")));
-        return Ok((source, PmxSourceLocation::disk(path.to_path_buf()), None));
-    }
-
-    let entries = discover_pmx_archive_entries(path)?;
-    let entry = match archive_entry {
-        Some(entry) => normalize_archive_entry(entry)
-            .filter(|entry| entries.iter().any(|candidate| candidate == entry))
-            .ok_or_else(|| {
-                format!(
-                    "ZIP archive {} does not contain PMX entry '{}', or the entry path is invalid",
-                    path.display(),
-                    entry
-                )
-            })?,
-        None => match entries.as_slice() {
-            [entry] => entry.clone(),
-            [] => {
-                return Err(format!(
-                    "ZIP archive {} does not contain a PMX file",
-                    path.display()
-                ));
-            }
-            _ => {
-                return Err(format!(
-                    "ZIP archive {} contains multiple PMX files; choose one from the archive",
-                    path.display()
-                ));
-            }
-        },
-    };
-    let source = PmxSource::zip_with_encoding(
-        path.to_path_buf(),
-        archive_root(&entry),
-        bevy_pmx::ZipNameEncoding::Auto,
-    );
-    let location = PmxSourceLocation::zip(path.to_path_buf(), entry.clone());
-    Ok((source, location, Some(entry)))
 }
 
 pub(crate) struct SpawnedPmxScene {
@@ -603,8 +557,7 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
 }
 
 fn scene_info(
-    path: &Path,
-    archive_entry: Option<&str>,
+    source: &PmxSourceIdentity,
     model: &Pmx,
     warnings: Vec<String>,
     existing_slot_ids: &[(u32, MaterialSlotId)],
@@ -620,9 +573,10 @@ fn scene_info(
                 })
         })
         .or_else(|| {
-            archive_entry
+            source
+                .archive_entry()
                 .map(Path::new)
-                .or(Some(path))
+                .or_else(|| Some(source.path()))
                 .and_then(Path::file_stem)
                 .and_then(|value| value.to_str())
                 .map(str::to_owned)
@@ -653,8 +607,7 @@ fn scene_info(
         .collect();
 
     PmxSceneInfo {
-        path: path.to_path_buf(),
-        archive_entry: archive_entry.map(str::to_owned),
+        source: source.clone(),
         name,
         vertex_count: model.geometry().positions.len(),
         index_count: model.geometry().indices.len(),
@@ -671,7 +624,7 @@ fn texture_path(model: &Pmx, index: i32) -> Option<String> {
 }
 
 fn load_textures(
-    source: &PmxSource,
+    source: &dyn PmxInputSource,
     paths: &[PmxResolvedPath],
 ) -> (Vec<DecodedTexture>, Vec<String>) {
     let mut textures = Vec::with_capacity(paths.len());
@@ -697,9 +650,12 @@ fn load_textures(
     (textures, warnings)
 }
 
-fn load_texture(source: &PmxSource, path: &PmxResolvedPath) -> Result<DecodedTexture, io::Error> {
+fn load_texture(
+    source: &dyn PmxInputSource,
+    path: &PmxResolvedPath,
+) -> Result<DecodedTexture, io::Error> {
     let location = path.location();
-    let bytes = source.read_bytes(location).map_err(|error| {
+    let bytes = source.read_texture_bytes(path).map_err(|error| {
         io::Error::other(format!(
             "failed to read {} through the PMX source: {error}",
             path.original
@@ -822,8 +778,7 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
         )];
         let geometry = SelectionGeometry {
-            scene_path: Some(PathBuf::from("model.pmx")),
-            scene_archive_entry: None,
+            scene_source: Some(PmxSourceIdentity::file("model.pmx")),
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 3,
                 slot_id: slot,
@@ -847,8 +802,7 @@ mod tests {
     fn selected_slot_is_limited_to_loaded_primitives() {
         let slot = MaterialSlotId::new();
         let geometry = SelectionGeometry {
-            scene_path: None,
-            scene_archive_entry: None,
+            scene_source: None,
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 0,
                 slot_id: slot,

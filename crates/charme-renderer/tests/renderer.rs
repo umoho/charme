@@ -139,7 +139,7 @@ fn renders_resizes_and_loads_pmx() {
     assert!(pmx_frame.sequence() > reset.sequence());
     let thumbnail = wait_for_material_thumbnail(&mut renderer);
     let RendererNotification::MaterialThumbnailReady {
-        path,
+        source,
         slot_index,
         frame,
         ..
@@ -147,7 +147,8 @@ fn renders_resizes_and_loads_pmx() {
     else {
         panic!("expected a material thumbnail notification");
     };
-    assert_eq!(path, pmx_path);
+    assert_eq!(source.path(), pmx_path.as_path());
+    assert_eq!(source.archive_entry(), None);
     assert_eq!(slot_index, 0);
     assert_eq!(frame.size(), OutputSize::new(64, 64));
     assert_eq!(frame.pixel_format(), PixelFormat::Bgra8Srgb);
@@ -157,7 +158,7 @@ fn renders_resizes_and_loads_pmx() {
         .expect("inspector preview should be accepted");
     let inspector_preview = wait_for_notification(&mut renderer);
     let RendererNotification::MaterialInspectorPreviewReady {
-        path,
+        source,
         slot_index,
         frame,
         ..
@@ -165,7 +166,8 @@ fn renders_resizes_and_loads_pmx() {
     else {
         panic!("expected an inspector material preview notification");
     };
-    assert_eq!(path, pmx_path);
+    assert_eq!(source.path(), pmx_path.as_path());
+    assert_eq!(source.archive_entry(), None);
     assert_eq!(slot_index, 0);
     assert_eq!(frame.size(), OutputSize::new(256, 256));
     assert_eq!(frame.pixel_format(), PixelFormat::Bgra8Srgb);
@@ -192,7 +194,17 @@ fn renders_resizes_and_loads_pmx() {
     let failed = wait_for_notification(&mut renderer);
     assert!(matches!(
         failed,
-        RendererNotification::PmxLoadFailed { path, .. } if path == missing
+        RendererNotification::PmxLoadFailed { source, .. }
+            if source.path() == missing.as_path()
+    ));
+
+    renderer
+        .pick_viewport(32.5, 24.0)
+        .expect("picking should still query the previous scene after failure");
+    assert!(matches!(
+        wait_for_notification(&mut renderer),
+        RendererNotification::ViewportPickResult { source, .. }
+            if source.path() == pmx_path.as_path() && source.archive_entry().is_none()
     ));
 
     let zip_path = write_minimal_pmx_zip();

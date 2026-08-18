@@ -41,7 +41,8 @@ use charme_core::{
     ParameterValue, ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{
-    Frame, OutputSize, PmxSceneInfo, RendererNotification, discover_pmx_archive_entries,
+    Frame, OutputSize, PmxLoadRequest, PmxSceneInfo, PmxSourceIdentity, RendererNotification,
+    discover_pmx_archive_entries,
 };
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 
@@ -296,8 +297,7 @@ impl ToolbarDelegate for EditorToolbar {
 
 struct PendingPmxLoad {
     epoch: u64,
-    path: PathBuf,
-    archive_entry: Option<String>,
+    source: PmxSourceIdentity,
     character: Option<CharacterSource>,
 }
 
@@ -308,34 +308,31 @@ struct PmxLoadTracker {
 }
 
 impl PmxLoadTracker {
-    fn begin(
-        &mut self,
-        path: PathBuf,
-        archive_entry: Option<String>,
-        character: Option<CharacterSource>,
-    ) {
+    fn begin(&mut self, source: PmxSourceIdentity, character: Option<CharacterSource>) {
         self.advance_epoch();
+        self.pending.clear();
         self.pending.push_back(PendingPmxLoad {
             epoch: self.current_epoch,
-            path,
-            archive_entry,
+            source,
             character,
         });
     }
 
     fn invalidate(&mut self) {
         self.advance_epoch();
+        self.pending.clear();
     }
 
-    fn complete(&mut self, path: &Path, archive_entry: Option<&str>) -> Option<PendingPmxLoad> {
-        let request = self.pending.pop_front()?;
-        (request.epoch == self.current_epoch
-            && request.path == path
-            && request
-                .archive_entry
-                .as_deref()
-                .is_none_or(|expected| Some(expected) == archive_entry))
-        .then_some(request)
+    fn complete(&mut self, source: &PmxSourceIdentity) -> Option<PendingPmxLoad> {
+        let index = self.pending.iter().position(|request| {
+            request.epoch == self.current_epoch
+                && request.source.path() == source.path()
+                && request
+                    .source
+                    .archive_entry()
+                    .is_none_or(|expected| Some(expected) == source.archive_entry())
+        })?;
+        self.pending.remove(index)
     }
 
     fn advance_epoch(&mut self) {
@@ -705,8 +702,7 @@ impl EditorWindow {
                 Ok(entries) => entries,
                 Err(message) => {
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
-                        path,
-                        archive_entry: None,
+                        source: PmxSourceIdentity::file(path),
                         message,
                     });
                     return;
@@ -715,8 +711,7 @@ impl EditorWindow {
             let archive_entry = match entries.as_slice() {
                 [] => {
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
-                        path,
-                        archive_entry: None,
+                        source: PmxSourceIdentity::file(path),
                         message: localization::text(Key::PmxArchiveContainsNoModel).to_owned(),
                     });
                     return;
@@ -776,15 +771,12 @@ impl EditorWindow {
             .as_ref()
             .and_then(CharacterSource::archive_entry)
             .map(str::to_owned);
+        let request = PmxLoadRequest::from_path(path, archive_entry, existing_slot_ids);
         if let Some(bridge) = self.bridge.borrow().as_ref() {
-            self.pmx_loads
-                .borrow_mut()
-                .begin(path.clone(), archive_entry.clone(), character);
-            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted {
-                path: path.clone(),
-                archive_entry: archive_entry.clone(),
-            });
-            bridge.load_pmx(path, archive_entry, existing_slot_ids);
+            let source = request.source_identity();
+            self.pmx_loads.borrow_mut().begin(source.clone(), character);
+            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted { source });
+            bridge.load_pmx(request);
         }
     }
 
@@ -974,10 +966,7 @@ impl EditorWindow {
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
             RendererNotification::PmxLoaded(info) => {
-                let Some(request) = self
-                    .pmx_loads
-                    .borrow_mut()
-                    .complete(info.path(), info.archive_entry())
+                let Some(request) = self.pmx_loads.borrow_mut().complete(info.source_identity())
                 else {
                     return;
                 };
@@ -995,8 +984,7 @@ impl EditorWindow {
                 App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
             }
             RendererNotification::MaterialInspectorPreviewReady {
-                path,
-                archive_entry,
+                source,
                 slot_id,
                 frame,
                 ..
@@ -1005,7 +993,7 @@ impl EditorWindow {
                     .active_inspector_slot
                     .borrow()
                     .is_some_and(|active| active == slot_id);
-                let scene_matches = self.scene_matches(&path, archive_entry.as_deref());
+                let scene_matches = self.scene_matches(&source);
                 if !scene_matches || !slot_matches {
                     return;
                 }
@@ -1021,38 +1009,27 @@ impl EditorWindow {
                     ),
                 }
             }
-            RendererNotification::PmxLoadFailed {
-                path,
-                archive_entry,
-                message,
-            } => {
-                if self
-                    .pmx_loads
-                    .borrow_mut()
-                    .complete(&path, archive_entry.as_deref())
-                    .is_some()
-                {
+            RendererNotification::PmxLoadFailed { source, message } => {
+                if self.pmx_loads.borrow_mut().complete(&source).is_some() {
                     tracing::error!(
-                        path = %path.display(),
-                        archive_entry = ?archive_entry,
+                        path = %source.path().display(),
+                        archive_entry = ?source.archive_entry(),
                         error = %message,
                         "Failed to load PMX"
                     );
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
-                        path,
-                        archive_entry,
+                        source,
                         message,
                     });
                 }
             }
             RendererNotification::MaterialThumbnailReady {
-                path,
-                archive_entry,
+                source,
                 slot_id,
                 frame,
                 ..
             } => {
-                let scene_matches = self.scene_matches(&path, archive_entry.as_deref());
+                let scene_matches = self.scene_matches(&source);
                 if !scene_matches {
                     return;
                 }
@@ -1065,12 +1042,9 @@ impl EditorWindow {
                 }
             }
             RendererNotification::ViewportPickResult {
-                path,
-                archive_entry,
-                slot_id,
-                ..
+                source, slot_id, ..
             } => {
-                let scene_matches = self.scene_matches(&path, archive_entry.as_deref());
+                let scene_matches = self.scene_matches(&source);
                 if !scene_matches {
                     return;
                 }
@@ -1095,11 +1069,11 @@ impl EditorWindow {
         }
     }
 
-    fn scene_matches(&self, path: &Path, archive_entry: Option<&str>) -> bool {
+    fn scene_matches(&self, source: &PmxSourceIdentity) -> bool {
         self.loaded_scene
             .borrow()
             .as_ref()
-            .is_some_and(|scene| scene.path() == path && scene.archive_entry() == archive_entry)
+            .is_some_and(|scene| scene.source_identity() == source)
     }
 
     fn show_scene_info(&self, info: &PmxSceneInfo) {
@@ -1136,7 +1110,7 @@ impl EditorWindow {
                 ("warnings", &info.warnings().len()),
                 (
                     "source",
-                    &crate::loading::display_pmx_source(info.path(), info.archive_entry()),
+                    &crate::loading::display_pmx_source(info.source_identity()),
                 ),
             ],
         ));
@@ -2074,20 +2048,34 @@ mod tests {
     #[test]
     fn pmx_load_tracker_rejects_results_invalidated_by_a_new_project() {
         let mut tracker = PmxLoadTracker::default();
-        tracker.begin(PathBuf::from("old.pmx"), None, None);
+        let source = PmxSourceIdentity::file("old.pmx");
+        tracker.begin(source.clone(), None);
         tracker.invalidate();
 
-        assert!(tracker.complete(Path::new("old.pmx"), None).is_none());
+        assert!(tracker.complete(&source).is_none());
     }
 
     #[test]
     fn pmx_load_tracker_accepts_only_the_latest_requested_load() {
         let mut tracker = PmxLoadTracker::default();
-        tracker.begin(PathBuf::from("old.pmx"), None, None);
-        tracker.begin(PathBuf::from("new.pmx"), None, None);
+        let old = PmxSourceIdentity::file("old.pmx");
+        let new = PmxSourceIdentity::file("new.pmx");
+        tracker.begin(old.clone(), None);
+        tracker.begin(new.clone(), None);
 
-        assert!(tracker.complete(Path::new("old.pmx"), None).is_none());
-        assert!(tracker.complete(Path::new("new.pmx"), None).is_some());
+        assert!(tracker.complete(&old).is_none());
+        assert!(tracker.complete(&new).is_some());
+    }
+
+    #[test]
+    fn pmx_load_tracker_distinguishes_entries_in_the_same_archive() {
+        let mut tracker = PmxLoadTracker::default();
+        let first = PmxSourceIdentity::zip("models.zip", "A/model.pmx");
+        let second = PmxSourceIdentity::zip("models.zip", "B/model.pmx");
+        tracker.begin(first.clone(), None);
+
+        assert!(tracker.complete(&second).is_none());
+        assert!(tracker.complete(&first).is_some());
     }
 
     #[test]

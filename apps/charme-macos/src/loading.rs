@@ -1,4 +1,4 @@
-use std::path::Path;
+use charme_renderer::PmxSourceIdentity;
 
 use cacao::{
     appkit::window::{TitleVisibility, Window, WindowConfig, WindowDelegate, WindowStyle},
@@ -14,12 +14,13 @@ use crate::{
     ui::{label, panel},
 };
 
-pub(crate) fn display_pmx_source(path: &Path, archive_entry: Option<&str>) -> String {
-    let archive_name = path
+pub(crate) fn display_pmx_source(source: &PmxSourceIdentity) -> String {
+    let archive_name = source
+        .path()
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-    match archive_entry {
+        .unwrap_or_else(|| source.path().display().to_string());
+    match source.archive_entry() {
         Some(entry) => format!("{archive_name} › {entry}"),
         None => archive_name,
     }
@@ -33,16 +34,16 @@ pub(crate) struct PmxLoadingSheet {
 }
 
 impl PmxLoadingSheet {
-    pub(crate) fn window(path: &Path, archive_entry: Option<&str>) -> Window<Self> {
+    pub(crate) fn window(source: &PmxSourceIdentity) -> Window<Self> {
         let mut config = WindowConfig::default();
         config.set_styles(&[WindowStyle::Titled]);
         config.set_initial_dimensions(0.0, 0.0, 420.0, 150.0);
-        Window::with(config, Self::new(path, archive_entry))
+        Window::with(config, Self::new(source))
     }
 
-    fn new(path: &Path, archive_entry: Option<&str>) -> Self {
+    fn new(source: &PmxSourceIdentity) -> Self {
         let content = panel(Color::MacOSWindowBackgroundColor);
-        let file_name = display_pmx_source(path, archive_entry);
+        let file_name = display_pmx_source(source);
         let heading = label(&file_name, 15.0, true, Color::Label);
         heading.set_line_break_mode(LineBreakMode::TruncateMiddle);
         heading.set_max_number_of_lines(1);
