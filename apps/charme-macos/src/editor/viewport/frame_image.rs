@@ -18,7 +18,7 @@ use foreign_types::ForeignType;
 
 pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
     if frame.pixel_format() != PixelFormat::Bgra8Srgb {
-        eprintln!("The cacao adapter requires BGRA8 sRGB frames");
+        tracing::error!("The cacao adapter requires BGRA8 sRGB frames");
         return Err(localization::text(Key::FramePixelFormatUnsupported).to_owned());
     }
 
@@ -29,7 +29,7 @@ pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
     let provider = CGDataProvider::from_buffer(Arc::new(pixels));
     let color_space =
         unsafe { CGColorSpace::create_with_name(kCGColorSpaceSRGB) }.ok_or_else(|| {
-            eprintln!("The sRGB color space is unavailable");
+            tracing::error!("The sRGB color space is unavailable");
             localization::text(Key::ColorSpaceUnavailable).to_owned()
         })?;
     let bitmap_info = CGImageAlphaInfo::CGImageAlphaPremultipliedFirst as u32
@@ -64,7 +64,7 @@ pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
             size: logical_size
         ];
         if image.is_null() {
-            eprintln!("AppKit could not create an image from the rendered frame");
+            tracing::error!("AppKit could not create an image from the rendered frame");
             return Err(localization::text(Key::FrameImageCreationFailed).to_owned());
         }
         let wrapped = Image::with(image);

@@ -251,7 +251,7 @@ impl CharmeApp {
             return;
         }
         if let Err(error) = editor.save_project() {
-            eprintln!("Failed to save project: {error}");
+            tracing::error!(error = %error, "Failed to save project");
             editor.show_error(localization::text(Key::SaveProjectFailed));
         }
         drop(editor_windows);
@@ -315,7 +315,7 @@ impl CharmeApp {
             return;
         };
         if let Err(error) = editor.save_project_as(path) {
-            eprintln!("Failed to save project: {error}");
+            tracing::error!(error = %error, "Failed to save project");
             editor.show_error(localization::text(Key::SaveProjectFailed));
         }
         drop(editor_windows);
@@ -363,7 +363,11 @@ impl CharmeApp {
         let controller = match EditorController::open(&path) {
             Ok(controller) => controller,
             Err(error) => {
-                eprintln!("Failed to open project {}: {error}", path.display());
+                tracing::error!(
+                    path = %path.display(),
+                    error = %error,
+                    "Failed to open project"
+                );
                 self.show_startup_error(localization::text(Key::OpenProjectFailed));
                 return;
             }

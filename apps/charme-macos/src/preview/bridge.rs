@@ -276,7 +276,7 @@ impl Drop for RenderBridge {
 fn dispatch_event(event: ApplicationEvent) {
     let event = match event {
         ApplicationEvent::Failed(error) => {
-            eprintln!("Renderer failure: {error}");
+            tracing::error!(error = %error, "Renderer failure");
             ApplicationEvent::Failed(format!(
                 "{}: {error}",
                 localization::text(Key::RendererFailed)

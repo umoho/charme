@@ -17,7 +17,11 @@ pub(crate) fn inspect_shader(path: PathBuf) {
         .spawn(move || {
             let result = fs::read_to_string(&path)
                 .map_err(|error| {
-                    eprintln!("Failed to read Shader {}: {error}", path.display());
+                    tracing::error!(
+                        path = %path.display(),
+                        error = %error,
+                        "Failed to read Shader"
+                    );
                     localization::format(Key::ShaderReadFailed, &[("path", &path.display())])
                 })
                 .and_then(|source| reflect_source(path.clone(), &source));
@@ -30,7 +34,11 @@ pub(crate) fn inspect_shader(path: PathBuf) {
 
 fn reflect_source(path: PathBuf, source: &str) -> Result<ShaderInspection, String> {
     inspect_shader_source(path.clone(), source).map_err(|error| {
-        eprintln!("Failed to inspect WGSL Shader {}: {error}", path.display());
+        tracing::error!(
+            path = %path.display(),
+            error = %error,
+            "Failed to inspect WGSL Shader"
+        );
         localization::text(Key::ShaderCompositionFailed).to_owned()
     })
 }

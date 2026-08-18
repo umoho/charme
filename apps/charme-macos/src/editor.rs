@@ -678,7 +678,7 @@ impl EditorWindow {
                 ));
             }
             Err(error) => {
-                eprintln!("Failed to create the rendered frame image: {error}");
+                tracing::error!(error = %error, "Failed to create the rendered frame image");
                 self.show_error(&error);
             }
         }
@@ -692,7 +692,11 @@ impl EditorWindow {
         let resource = match resource {
             Ok(resource) => resource,
             Err(error) => {
-                eprintln!("Failed to store PMX path {}: {error}", path.display());
+                tracing::error!(
+                    path = %path.display(),
+                    error = %error,
+                    "Failed to store PMX path"
+                );
                 self.show_error(&localization::format(
                     Key::PmxLoadFailed,
                     &[("path", &path.display())],
@@ -913,7 +917,7 @@ impl EditorWindow {
                         EditorCommand::SetCharacter(Some(character)),
                     ))
                 {
-                    eprintln!("Failed to commit the loaded character: {error}");
+                    tracing::error!(error = %error, "Failed to commit the loaded character");
                 }
                 self.show_scene_info(&info);
                 App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
@@ -942,12 +946,19 @@ impl EditorWindow {
                         self.set_inspector_preview_ready();
                         *self.current_inspector_preview.borrow_mut() = Some(image);
                     }
-                    Err(error) => eprintln!("Failed to create inspector material preview: {error}"),
+                    Err(error) => tracing::error!(
+                        error = %error,
+                        "Failed to create inspector material preview"
+                    ),
                 }
             }
             RendererNotification::PmxLoadFailed { path, message } => {
                 if self.pmx_loads.borrow_mut().complete(&path).is_some() {
-                    eprintln!("Failed to load PMX {}: {message}", path.display());
+                    tracing::error!(
+                        path = %path.display(),
+                        error = %message,
+                        "Failed to load PMX"
+                    );
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
                         path,
                         message,
@@ -970,7 +981,10 @@ impl EditorWindow {
                 }
                 match make_image(frame, 1.0) {
                     Ok(image) => self.hierarchy.set_material_thumbnail(slot_id, &image),
-                    Err(error) => eprintln!("Failed to create material thumbnail: {error}"),
+                    Err(error) => tracing::error!(
+                        error = %error,
+                        "Failed to create material thumbnail"
+                    ),
                 }
             }
             RendererNotification::ViewportPickResult { path, slot_id, .. } => {
@@ -989,7 +1003,11 @@ impl EditorWindow {
                 }
             }
             RendererNotification::MaterialParameterRejected { path, message } => {
-                eprintln!("Renderer rejected parameter {path}: {message}");
+                tracing::warn!(
+                    path = %path,
+                    message = %message,
+                    "Renderer rejected parameter"
+                );
                 self.show_error(&localization::format(
                     Key::ParameterRejected,
                     &[("path", &path)],

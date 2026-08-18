@@ -15,6 +15,7 @@ debug-ui = []
 charme-application = { path = "../../crates/charme-application" }
 charme-core = { path = "../../crates/charme-core" }
 charme-renderer = { path = "../../crates/charme-renderer" }
+tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cacao.workspace = true
