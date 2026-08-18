@@ -68,8 +68,9 @@ Build and open the native macOS application bundle with:
 
 ```sh
 cargo install cargo-packager --version 0.11.8 --locked # once
-scripts/run-macos-app.sh                 # debug: build then run
-scripts/run-macos-app.sh --release       # release: build then run
+scripts/run-macos-app.sh                 # debug: dynamic Bevy linking, build then run
+scripts/run-macos-app.sh --no-dynamic-linking # debug: build without dynamic linking
+scripts/run-macos-app.sh --release       # release: build then run (no dynamic linking)
 scripts/run-macos-app.sh --run-only      # run an existing debug bundle
 scripts/run-macos-app.sh --build-only    # build without running
 ```
