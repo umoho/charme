@@ -57,6 +57,13 @@ cargo check --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+For faster debug iteration, Bevy can be dynamically linked. This is a
+development-only option and should not be used for release bundles:
+
+```sh
+cargo run -p charme-macos --features dev-bevy-dynamic-linking
+```
+
 Build and open the native macOS application bundle with:
 
 ```sh

@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[features]
+# Development-only switch; do not enable it for release bundles.
+dynamic-linking = ["bevy/dynamic_linking"]
+
 [dependencies]
 # `bevy_pbr` supplies the renderer's 3D material stack. `bevy_pmx` supplies
 # the asset/image/render features and PMX texture codecs transitively.
