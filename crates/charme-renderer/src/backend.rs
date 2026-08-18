@@ -26,7 +26,6 @@ use bevy::{
     render::{
         RenderApp, RenderPlugin,
         gpu_readback::{Readback, ReadbackComplete},
-        pipelined_rendering::PipelinedRenderingPlugin,
         render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     },
     transform::TransformSystems,
@@ -348,14 +347,16 @@ impl Backend {
         completion: Sender<Completion>,
     ) -> Result<Self, RendererError> {
         let mut app = App::new();
+        // This renderer already owns a private worker thread and advances the
+        // Bevy app synchronously. Keep Bevy's `multi_threaded` feature off so
+        // its task pools and render pipeline do not add another thread layer.
         app.add_plugins(
             DefaultPlugins
                 .set(RenderPlugin {
                     synchronous_pipeline_compilation: true,
                     ..Default::default()
                 })
-                .build()
-                .disable::<PipelinedRenderingPlugin>(),
+                .build(),
         );
         app.add_plugins(CharmeMaterialPlugin);
         app.init_resource::<SelectionGeometry>().add_systems(

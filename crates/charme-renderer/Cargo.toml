@@ -5,22 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bevy = { workspace = true, features = [
-    "async_executor",
-    "bevy_asset",
-    "bevy_camera",
-    "bevy_color",
-    "bevy_core_pipeline",
-    "bevy_image",
-    "bevy_gizmos_render",
-    "bevy_light",
-    "bevy_mesh",
-    "bevy_pbr",
-    "bevy_render",
-    "bevy_shader",
-    "multi_threaded",
-    "std",
-] }
+# `bevy_pbr` supplies the renderer's 3D material stack. `bevy_pmx` supplies
+# the asset/image/render features and PMX texture codecs transitively.
+# `multi_threaded` is intentionally omitted: the renderer owns its worker
+# thread and runs the Bevy app synchronously.
+bevy = { workspace = true, features = ["bevy_gizmos_render", "bevy_pbr"] }
 bevy_pmx.workspace = true
 charme-bevy = { path = "../charme-bevy" }
 charme-core = { path = "../charme-core" }

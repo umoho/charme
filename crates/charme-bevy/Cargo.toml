@@ -5,16 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bevy = { workspace = true, features = [
-    "bevy_asset",
-    "bevy_color",
-    "bevy_image",
-    "bevy_mesh",
-    "bevy_pbr",
-    "bevy_render",
-    "bevy_shader",
-    "std",
-] }
+# `bevy_pbr` transitively enables the asset, image, mesh, render, and shader
+# APIs used by the reusable material; listing them again does not reduce the graph.
+bevy = { workspace = true, features = ["bevy_pbr"] }
 charme-core = { path = "../charme-core" }
 charme-shader = { path = "../charme-shader" }
 thiserror.workspace = true
