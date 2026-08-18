@@ -60,6 +60,7 @@ macOS Bundle 打包相关修改应使用 `scripts/run-macos-app.sh --build-only`
 - 优先使用项目已有的错误类型和 `thiserror`，避免无必要地引入新的错误处理依赖。
 - 修改 WGSL、资源路径或 Bundle 配置时，同时检查对应的打包资源和运行时加载路径。
 - Shell 脚本使用 `/bin/sh` 可用的语法，并在修改后运行 `sh -n scripts/run-macos-app.sh`。
+- 出现在 UI 中的中英文混合文本无需用空格隔开。
 
 ## 提交前检查
 
