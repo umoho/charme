@@ -12,7 +12,7 @@ use cacao::{
     },
     defaults::{UserDefaults, Value},
     filesystem::{FileSavePanel, FileSelectPanel},
-    foundation::nil,
+    foundation::{NO, NSArray, NSString, id, nil},
     notification_center::Dispatcher,
     objc::{msg_send, sel, sel_impl},
 };
@@ -25,7 +25,7 @@ use crate::debug::DebugState;
 
 use crate::{
     editor::{EditorWindow, HierarchyItemId},
-    loading::PmxLoadingSheet,
+    loading::{PmxLoadingSheet, display_pmx_source},
     localization::{self, Key},
     startup::StartupWindow,
 };
@@ -51,18 +51,37 @@ pub(crate) enum Message {
     Undo,
     Redo,
     MenuContextChanged(MenuContext),
-    Orbit { delta_x: f32, delta_y: f32 },
-    NavigationGizmoMouseDown { x: f64, y: f64 },
-    ViewportClicked { x: f64, y: f64 },
+    Orbit {
+        delta_x: f32,
+        delta_y: f32,
+    },
+    NavigationGizmoMouseDown {
+        x: f64,
+        y: f64,
+    },
+    ViewportClicked {
+        x: f64,
+        y: f64,
+    },
     Zoom(f32),
     ChoosePmx,
     LoadPmx(PathBuf),
-    PmxLoadStarted(PathBuf),
+    PmxLoadStarted {
+        path: PathBuf,
+        archive_entry: Option<String>,
+    },
     PmxLoadFinished,
-    PmxLoadFailed { path: PathBuf, message: String },
+    PmxLoadFailed {
+        path: PathBuf,
+        archive_entry: Option<String>,
+        message: String,
+    },
     ChooseShader,
     InspectShader(PathBuf),
-    ParameterChanged { key: String, value: ParameterValue },
+    ParameterChanged {
+        key: String,
+        value: ParameterValue,
+    },
     HierarchySelectionChanged(HierarchyItemId),
     Application(ApplicationEvent),
 }
@@ -155,9 +174,16 @@ impl Dispatcher for CharmeApp {
                 self.refresh_menus();
             }
             Message::ChoosePmx => self.choose_pmx(),
-            Message::PmxLoadStarted(path) => self.show_pmx_loading(path),
+            Message::PmxLoadStarted {
+                path,
+                archive_entry,
+            } => self.show_pmx_loading(path, archive_entry),
             Message::PmxLoadFinished => self.finish_pmx_loading(),
-            Message::PmxLoadFailed { path, message } => self.show_pmx_load_error(path, message),
+            Message::PmxLoadFailed {
+                path,
+                archive_entry,
+                message,
+            } => self.show_pmx_load_error(path, archive_entry, message),
             Message::Application(ApplicationEvent::EditorUpdated(update)) => {
                 update_menu_state(
                     self.menu_context.get(),
@@ -214,7 +240,7 @@ impl Dispatcher for CharmeApp {
                     | Message::Redo
                     | Message::MenuContextChanged(_)
                     | Message::ChoosePmx
-                    | Message::PmxLoadStarted(_)
+                    | Message::PmxLoadStarted { .. }
                     | Message::PmxLoadFinished
                     | Message::PmxLoadFailed { .. } => unreachable!(),
                 }
@@ -341,6 +367,7 @@ impl CharmeApp {
         panel.set_can_choose_directories(false);
         panel.set_allows_multiple_selection(false);
         panel.set_message(localization::text(Key::ChoosePmxMessage));
+        set_model_file_types(&panel);
         panel.show(|urls| {
             if let Some(url) = urls.first() {
                 App::<CharmeApp, Message>::dispatch_main(Message::LoadPmx(url.pathbuf()));
@@ -373,14 +400,12 @@ impl CharmeApp {
             }
         };
         let project_directory = path.parent().unwrap_or_else(|| Path::new("."));
-        let character = controller
-            .document()
-            .character()
-            .map(|character| character.path.resolve(project_directory));
+        let character = controller.document().character().cloned();
         self.with_editor(|editor| {
             editor.install_controller(controller);
             if let Some(character) = character {
-                editor.load_pmx(character, None);
+                let character_path = character.path.resolve(project_directory);
+                editor.load_pmx(character_path, Some(character));
             }
         });
         remember_project(&path);
@@ -422,14 +447,14 @@ impl CharmeApp {
         action(window);
     }
 
-    fn show_pmx_loading(&self, path: PathBuf) {
+    fn show_pmx_loading(&self, path: PathBuf, archive_entry: Option<String>) {
         self.finish_pmx_loading();
 
         let editor_windows = self.editor.borrow();
         let Some(editor_window) = editor_windows.as_ref() else {
             return;
         };
-        let sheet = PmxLoadingSheet::window(&path);
+        let sheet = PmxLoadingSheet::window(&path, archive_entry.as_deref());
         editor_window.begin_sheet(&sheet, || {});
         drop(editor_windows);
         self.pmx_loading.replace(Some(sheet));
@@ -447,9 +472,10 @@ impl CharmeApp {
         self.pmx_loading.borrow_mut().take();
     }
 
-    fn show_pmx_load_error(&self, path: PathBuf, message: String) {
+    fn show_pmx_load_error(&self, path: PathBuf, archive_entry: Option<String>, message: String) {
         self.finish_pmx_loading();
-        let short_error = localization::format(Key::PmxLoadFailed, &[("path", &path.display())]);
+        let source = display_pmx_source(&path, archive_entry.as_deref());
+        let short_error = localization::format(Key::PmxLoadFailed, &[("path", &source)]);
         {
             let editor_windows = self.editor.borrow();
             if let Some(editor) = editor_windows
@@ -461,13 +487,26 @@ impl CharmeApp {
         }
         let details = localization::format(
             Key::PmxLoadFailedDetails,
-            &[("path", &path.display()), ("error", &message)],
+            &[("path", &source), ("error", &message)],
         );
         Alert::new(localization::text(Key::AppName), &details).show();
     }
 
     fn show_startup_error(&self, error: &str) {
         Alert::new(localization::text(Key::AppName), error).show();
+    }
+}
+
+fn set_model_file_types(panel: &FileSelectPanel) {
+    let extensions = [NSString::new("pmx"), NSString::new("zip")];
+    let identifiers = extensions
+        .iter()
+        .map(|extension| &*extension.objc as *const _ as id)
+        .collect::<Vec<_>>();
+    let allowed = NSArray::new(&identifiers);
+    unsafe {
+        let _: () = msg_send![&*panel.panel, setAllowedFileTypes: &*allowed];
+        let _: () = msg_send![&*panel.panel, setAllowsOtherFileTypes: NO];
     }
 }
 

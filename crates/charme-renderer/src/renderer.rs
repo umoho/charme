@@ -22,6 +22,8 @@ pub enum RendererNotification {
     PmxLoadFailed {
         /// The path that was requested.
         path: PathBuf,
+        /// The selected PMX entry inside the source ZIP archive, if any.
+        archive_entry: Option<String>,
         /// A human-readable import error.
         message: String,
     },
@@ -29,6 +31,8 @@ pub enum RendererNotification {
     MaterialThumbnailReady {
         /// The PMX scene that owns the thumbnail.
         path: PathBuf,
+        /// The selected PMX entry inside the source ZIP archive, if any.
+        archive_entry: Option<String>,
         /// Stable identifier of the PMX material slot.
         slot_id: MaterialSlotId,
         /// The zero-based PMX material-slot index, retained for thumbnail layout.
@@ -40,6 +44,8 @@ pub enum RendererNotification {
     MaterialInspectorPreviewReady {
         /// The PMX scene that owns the preview.
         path: PathBuf,
+        /// The selected PMX entry inside the source ZIP archive, if any.
+        archive_entry: Option<String>,
         /// Stable identifier of the PMX material slot.
         slot_id: MaterialSlotId,
         /// The zero-based PMX material-slot index, retained for preview layout.
@@ -58,6 +64,8 @@ pub enum RendererNotification {
     ViewportPickResult {
         /// The PMX scene that was queried.
         path: PathBuf,
+        /// The selected PMX entry inside the source ZIP archive, if any.
+        archive_entry: Option<String>,
         /// The stable material slot hit by the viewport ray, if any.
         slot_id: Option<MaterialSlotId>,
         /// The zero-based PMX primitive hit by the viewport ray, if any.
@@ -206,7 +214,7 @@ impl Renderer {
         self.send(Command::PickViewport { x, y })
     }
 
-    /// Loads a PMX model from an arbitrary file-system path.
+    /// Loads a PMX model from an arbitrary file-system path or a ZIP model package.
     ///
     /// Loading happens on the renderer worker. Completion or failure is
     /// reported through [`Renderer::try_recv_notification`]. Material thumbnails
@@ -222,8 +230,22 @@ impl Renderer {
         path: impl AsRef<Path>,
         existing_slot_ids: Vec<(u32, MaterialSlotId)>,
     ) -> Result<(), RendererError> {
+        self.load_pmx_with_source(path, None, existing_slot_ids)
+    }
+
+    /// Loads a PMX model from a disk file or a selected entry inside a ZIP archive.
+    ///
+    /// The archive entry is relative to the ZIP root and should be supplied when an archive
+    /// contains more than one PMX file. When it is omitted, a ZIP must contain exactly one PMX.
+    pub fn load_pmx_with_source(
+        &self,
+        path: impl AsRef<Path>,
+        archive_entry: Option<String>,
+        existing_slot_ids: Vec<(u32, MaterialSlotId)>,
+    ) -> Result<(), RendererError> {
         self.send(Command::LoadPmx {
             path: path.as_ref().to_path_buf(),
+            archive_entry,
             existing_slot_ids,
         })
     }

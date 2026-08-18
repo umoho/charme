@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod archive;
 mod backend;
 mod config;
 mod error;
@@ -13,6 +14,7 @@ mod frame;
 mod renderer;
 mod scene;
 
+pub use archive::discover_pmx_archive_entries;
 pub use config::{BackgroundColor, OutputSize, PixelFormat, RendererConfig};
 pub use error::RendererError;
 pub use frame::Frame;

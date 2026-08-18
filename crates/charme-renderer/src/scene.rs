@@ -21,6 +21,10 @@ use bevy_pmx::{
 use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 use charme_core::MaterialSlotId;
 
+use crate::archive::{
+    archive_root, discover_pmx_archive_entries, is_zip_path, normalize_archive_entry,
+};
+
 /// A PMX material slot exposed to the editor UI.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxMaterialSlot {
@@ -74,6 +78,7 @@ impl PmxMaterialSlot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxSceneInfo {
     path: PathBuf,
+    archive_entry: Option<String>,
     name: String,
     vertex_count: usize,
     index_count: usize,
@@ -82,12 +87,17 @@ pub struct PmxSceneInfo {
 }
 
 impl PmxSceneInfo {
-    /// Returns the source PMX path.
+    /// Returns the source PMX path or containing ZIP archive path.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Returns the model name, falling back to the source file name.
+    /// Returns the selected PMX entry inside the source ZIP archive, if any.
+    pub fn archive_entry(&self) -> Option<&str> {
+        self.archive_entry.as_deref()
+    }
+
+    /// Returns the model name, falling back to the selected PMX entry or source file name.
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -133,6 +143,7 @@ impl PreparedPmxScene {
 #[derive(Resource, Default)]
 pub(crate) struct SelectionGeometry {
     pub(crate) scene_path: Option<PathBuf>,
+    pub(crate) scene_archive_entry: Option<String>,
     pub(crate) primitives: Vec<PrimitiveSelectionGeometry>,
     selected_slot: Option<MaterialSlotId>,
 }
@@ -213,6 +224,7 @@ impl SelectionGeometry {
 
         Self {
             scene_path: Some(prepared.info.path().to_path_buf()),
+            scene_archive_entry: prepared.info.archive_entry().map(str::to_owned),
             primitives,
             selected_slot: None,
         }
@@ -363,10 +375,10 @@ struct DecodedTexture {
 
 pub(crate) fn prepare_pmx_scene(
     path: &Path,
+    archive_entry: Option<&str>,
     existing_slot_ids: &[(u32, MaterialSlotId)],
 ) -> Result<PreparedPmxScene, String> {
-    let source = PmxSource::folder(path.parent().unwrap_or_else(|| Path::new(".")));
-    let location = PmxSourceLocation::disk(path.to_path_buf());
+    let (source, location, archive_entry) = source_for_pmx(path, archive_entry)?;
     let bytes = source.read_bytes(&location).map_err(|error| {
         format!(
             "failed to read PMX file {} (resolved to {location}): {error}",
@@ -379,7 +391,13 @@ pub(crate) fn prepare_pmx_scene(
     let (bounds_min, bounds_max) = bounds_for_model(&model)
         .ok_or_else(|| format!("{} contains no vertices", path.display()))?;
     let (textures, warnings) = load_textures(&source, model.texture_paths());
-    let info = scene_info(path, &model, warnings, existing_slot_ids);
+    let info = scene_info(
+        path,
+        archive_entry.as_deref(),
+        &model,
+        warnings,
+        existing_slot_ids,
+    );
 
     Ok(PreparedPmxScene {
         info,
@@ -388,6 +406,51 @@ pub(crate) fn prepare_pmx_scene(
         bounds_min,
         bounds_max,
     })
+}
+
+fn source_for_pmx(
+    path: &Path,
+    archive_entry: Option<&str>,
+) -> Result<(PmxSource, PmxSourceLocation, Option<String>), String> {
+    if !is_zip_path(path) {
+        let source = PmxSource::folder(path.parent().unwrap_or_else(|| Path::new(".")));
+        return Ok((source, PmxSourceLocation::disk(path.to_path_buf()), None));
+    }
+
+    let entries = discover_pmx_archive_entries(path)?;
+    let entry = match archive_entry {
+        Some(entry) => normalize_archive_entry(entry)
+            .filter(|entry| entries.iter().any(|candidate| candidate == entry))
+            .ok_or_else(|| {
+                format!(
+                    "ZIP archive {} does not contain PMX entry '{}', or the entry path is invalid",
+                    path.display(),
+                    entry
+                )
+            })?,
+        None => match entries.as_slice() {
+            [entry] => entry.clone(),
+            [] => {
+                return Err(format!(
+                    "ZIP archive {} does not contain a PMX file",
+                    path.display()
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "ZIP archive {} contains multiple PMX files; choose one from the archive",
+                    path.display()
+                ));
+            }
+        },
+    };
+    let source = PmxSource::zip_with_encoding(
+        path.to_path_buf(),
+        archive_root(&entry),
+        bevy_pmx::ZipNameEncoding::Auto,
+    );
+    let location = PmxSourceLocation::zip(path.to_path_buf(), entry.clone());
+    Ok((source, location, Some(entry)))
 }
 
 pub(crate) struct SpawnedPmxScene {
@@ -541,6 +604,7 @@ pub(crate) fn spawn_pmx_scene(app: &mut App, prepared: &PreparedPmxScene) -> Spa
 
 fn scene_info(
     path: &Path,
+    archive_entry: Option<&str>,
     model: &Pmx,
     warnings: Vec<String>,
     existing_slot_ids: &[(u32, MaterialSlotId)],
@@ -556,7 +620,10 @@ fn scene_info(
                 })
         })
         .or_else(|| {
-            path.file_stem()
+            archive_entry
+                .map(Path::new)
+                .or(Some(path))
+                .and_then(Path::file_stem)
                 .and_then(|value| value.to_str())
                 .map(str::to_owned)
         })
@@ -587,6 +654,7 @@ fn scene_info(
 
     PmxSceneInfo {
         path: path.to_path_buf(),
+        archive_entry: archive_entry.map(str::to_owned),
         name,
         vertex_count: model.geometry().positions.len(),
         index_count: model.geometry().indices.len(),
@@ -755,6 +823,7 @@ mod tests {
         )];
         let geometry = SelectionGeometry {
             scene_path: Some(PathBuf::from("model.pmx")),
+            scene_archive_entry: None,
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 3,
                 slot_id: slot,
@@ -779,6 +848,7 @@ mod tests {
         let slot = MaterialSlotId::new();
         let geometry = SelectionGeometry {
             scene_path: None,
+            scene_archive_entry: None,
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 0,
                 slot_id: slot,

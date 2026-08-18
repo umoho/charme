@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::PathBuf,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -9,6 +10,7 @@ use charme_core::ParameterValue;
 use charme_renderer::{
     BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig, RendererNotification,
 };
+use zip::{ZipWriter, write::SimpleFileOptions};
 
 #[test]
 fn renders_resizes_and_loads_pmx() {
@@ -102,6 +104,7 @@ fn renders_resizes_and_loads_pmx() {
         panic!("expected a successful PMX notification");
     };
     assert_eq!(info.path(), pmx_path);
+    assert_eq!(info.archive_entry(), None);
     assert_eq!(info.name(), "Charme fixture");
     assert_eq!(info.vertex_count(), 3);
     assert_eq!(info.index_count(), 3);
@@ -192,8 +195,24 @@ fn renders_resizes_and_loads_pmx() {
         RendererNotification::PmxLoadFailed { path, .. } if path == missing
     ));
 
+    let zip_path = write_minimal_pmx_zip();
+    renderer
+        .load_pmx_with_source(
+            &zip_path,
+            Some("Model/character.pmx".to_owned()),
+            Vec::new(),
+        )
+        .expect("ZIP PMX load should be accepted");
+    let RendererNotification::PmxLoaded(zip_info) = wait_for_notification(&mut renderer) else {
+        panic!("expected a successful ZIP PMX notification");
+    };
+    assert_eq!(zip_info.path(), zip_path);
+    assert_eq!(zip_info.archive_entry(), Some("Model/character.pmx"));
+    assert_eq!(zip_info.name(), "Charme fixture");
+
     renderer.shutdown().expect("renderer should stop cleanly");
     fs::remove_file(pmx_path).expect("fixture should be removable");
+    fs::remove_file(zip_path).expect("ZIP fixture should be removable");
 }
 
 fn wait_for_frame(renderer: &mut Renderer) -> charme_renderer::Frame {
@@ -257,6 +276,24 @@ fn write_minimal_pmx() -> PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("charme_renderer_{unique}.pmx"));
     fs::write(&path, minimal_pmx_bytes()).expect("fixture should be writable");
+    path
+}
+
+fn write_minimal_pmx_zip() -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after the Unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("charme_renderer_{unique}.zip"));
+    let file = fs::File::create(&path).expect("ZIP fixture should be writable");
+    let mut writer = ZipWriter::new(file);
+    writer
+        .start_file("Model/character.pmx", SimpleFileOptions::default())
+        .expect("ZIP PMX entry should be created");
+    writer
+        .write_all(&minimal_pmx_bytes())
+        .expect("ZIP PMX entry should be written");
+    writer.finish().expect("ZIP fixture should be finished");
     path
 }
 

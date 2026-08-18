@@ -890,6 +890,8 @@ version = "0.2.0"
 source = "git+https://github.com/umoho/bevy_pmx.git?rev=9b7b90b02da76ba9ce6f1ad48e63a0384073ea35#9b7b90b02da76ba9ce6f1ad48e63a0384073ea35"
 dependencies = [
  "bevy",
+ "encoding_rs",
+ "zip",
 ]
 
 [[package]]
@@ -1345,6 +1347,7 @@ dependencies = [
  "bevy_pmx",
  "charme-bevy",
  "charme-core",
+ "zip",
 ]
 
 [[package]]
@@ -1680,6 +1683,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -3470,6 +3482,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4044,6 +4062,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "zip"
+version = "9.0.0-pre3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58e8082c6efe6dbccc7e8ea3ebf6afe46a04847f2e0bcf772c8aebc933dd2ccf"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path",
 ]
 
 [[package]]

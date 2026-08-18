@@ -24,7 +24,7 @@ use cacao::{
     },
     color::{Color, Theme},
     filesystem::FileSelectPanel,
-    foundation::{BOOL, NO, YES, id, nil},
+    foundation::{BOOL, NO, NSInteger, NSString, YES, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     objc::{class, msg_send, sel, sel_impl},
@@ -40,7 +40,9 @@ use charme_core::{
     CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlot, MaterialSlotId,
     ParameterValue, ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
-use charme_renderer::{Frame, OutputSize, PmxSceneInfo, RendererNotification};
+use charme_renderer::{
+    Frame, OutputSize, PmxSceneInfo, RendererNotification, discover_pmx_archive_entries,
+};
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 
 use self::{
@@ -295,6 +297,7 @@ impl ToolbarDelegate for EditorToolbar {
 struct PendingPmxLoad {
     epoch: u64,
     path: PathBuf,
+    archive_entry: Option<String>,
     character: Option<CharacterSource>,
 }
 
@@ -305,11 +308,17 @@ struct PmxLoadTracker {
 }
 
 impl PmxLoadTracker {
-    fn begin(&mut self, path: PathBuf, character: Option<CharacterSource>) {
+    fn begin(
+        &mut self,
+        path: PathBuf,
+        archive_entry: Option<String>,
+        character: Option<CharacterSource>,
+    ) {
         self.advance_epoch();
         self.pending.push_back(PendingPmxLoad {
             epoch: self.current_epoch,
             path,
+            archive_entry,
             character,
         });
     }
@@ -318,9 +327,15 @@ impl PmxLoadTracker {
         self.advance_epoch();
     }
 
-    fn complete(&mut self, path: &Path) -> Option<PendingPmxLoad> {
+    fn complete(&mut self, path: &Path, archive_entry: Option<&str>) -> Option<PendingPmxLoad> {
         let request = self.pending.pop_front()?;
-        (request.epoch == self.current_epoch && request.path == path).then_some(request)
+        (request.epoch == self.current_epoch
+            && request.path == path
+            && request
+                .archive_entry
+                .as_deref()
+                .is_none_or(|expected| Some(expected) == archive_entry))
+        .then_some(request)
     }
 
     fn advance_epoch(&mut self) {
@@ -685,6 +700,43 @@ impl EditorWindow {
     }
 
     pub(crate) fn import_pmx(&self, path: PathBuf) {
+        if is_zip_path(&path) {
+            let entries = match discover_pmx_archive_entries(&path) {
+                Ok(entries) => entries,
+                Err(message) => {
+                    App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
+                        path,
+                        archive_entry: None,
+                        message,
+                    });
+                    return;
+                }
+            };
+            let archive_entry = match entries.as_slice() {
+                [] => {
+                    App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
+                        path,
+                        archive_entry: None,
+                        message: localization::text(Key::PmxArchiveContainsNoModel).to_owned(),
+                    });
+                    return;
+                }
+                [entry] => entry.clone(),
+                _ => {
+                    let Some(entry) = choose_pmx_archive_entry(&path, &entries) else {
+                        return;
+                    };
+                    entry
+                }
+            };
+            self.import_pmx_source(path, Some(archive_entry));
+            return;
+        }
+
+        self.import_pmx_source(path, None);
+    }
+
+    fn import_pmx_source(&self, path: PathBuf, archive_entry: Option<String>) {
         let resource = {
             let controller = self.controller.borrow();
             pmx_resource_path(controller.project_path(), &path)
@@ -704,7 +756,11 @@ impl EditorWindow {
                 return;
             }
         };
-        self.load_pmx(path, Some(CharacterSource::pmx(resource)));
+        let character = match archive_entry {
+            Some(entry) => CharacterSource::pmx_with_archive_entry(resource, entry),
+            None => CharacterSource::pmx(resource),
+        };
+        self.load_pmx(path, Some(character));
     }
 
     pub(crate) fn load_pmx(&self, path: PathBuf, character: Option<CharacterSource>) {
@@ -716,10 +772,19 @@ impl EditorWindow {
             .iter()
             .map(|slot| (slot.source_index(), slot.id()))
             .collect();
+        let archive_entry = character
+            .as_ref()
+            .and_then(CharacterSource::archive_entry)
+            .map(str::to_owned);
         if let Some(bridge) = self.bridge.borrow().as_ref() {
-            self.pmx_loads.borrow_mut().begin(path.clone(), character);
-            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted(path.clone()));
-            bridge.load_pmx(path, existing_slot_ids);
+            self.pmx_loads
+                .borrow_mut()
+                .begin(path.clone(), archive_entry.clone(), character);
+            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted {
+                path: path.clone(),
+                archive_entry: archive_entry.clone(),
+            });
+            bridge.load_pmx(path, archive_entry, existing_slot_ids);
         }
     }
 
@@ -909,21 +974,29 @@ impl EditorWindow {
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
             RendererNotification::PmxLoaded(info) => {
-                let Some(request) = self.pmx_loads.borrow_mut().complete(info.path()) else {
+                let Some(request) = self
+                    .pmx_loads
+                    .borrow_mut()
+                    .complete(info.path(), info.archive_entry())
+                else {
                     return;
                 };
-                if let Some(character) = request.character
-                    && let Err(error) = self.dispatch_action(EditorAction::Command(
+                if let Some(mut character) = request.character {
+                    if character.archive_entry.is_none() {
+                        character.archive_entry = info.archive_entry().map(str::to_owned);
+                    }
+                    if let Err(error) = self.dispatch_action(EditorAction::Command(
                         EditorCommand::SetCharacter(Some(character)),
-                    ))
-                {
-                    tracing::error!(error = %error, "Failed to commit the loaded character");
+                    )) {
+                        tracing::error!(error = %error, "Failed to commit the loaded character");
+                    }
                 }
                 self.show_scene_info(&info);
                 App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
             }
             RendererNotification::MaterialInspectorPreviewReady {
                 path,
+                archive_entry,
                 slot_id,
                 frame,
                 ..
@@ -932,11 +1005,7 @@ impl EditorWindow {
                     .active_inspector_slot
                     .borrow()
                     .is_some_and(|active| active == slot_id);
-                let scene_matches = self
-                    .loaded_scene
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|scene| scene.path() == path);
+                let scene_matches = self.scene_matches(&path, archive_entry.as_deref());
                 if !scene_matches || !slot_matches {
                     return;
                 }
@@ -952,30 +1021,38 @@ impl EditorWindow {
                     ),
                 }
             }
-            RendererNotification::PmxLoadFailed { path, message } => {
-                if self.pmx_loads.borrow_mut().complete(&path).is_some() {
+            RendererNotification::PmxLoadFailed {
+                path,
+                archive_entry,
+                message,
+            } => {
+                if self
+                    .pmx_loads
+                    .borrow_mut()
+                    .complete(&path, archive_entry.as_deref())
+                    .is_some()
+                {
                     tracing::error!(
                         path = %path.display(),
+                        archive_entry = ?archive_entry,
                         error = %message,
                         "Failed to load PMX"
                     );
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFailed {
                         path,
+                        archive_entry,
                         message,
                     });
                 }
             }
             RendererNotification::MaterialThumbnailReady {
                 path,
+                archive_entry,
                 slot_id,
                 frame,
                 ..
             } => {
-                let scene_matches = self
-                    .loaded_scene
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|scene| scene.path() == path);
+                let scene_matches = self.scene_matches(&path, archive_entry.as_deref());
                 if !scene_matches {
                     return;
                 }
@@ -987,12 +1064,13 @@ impl EditorWindow {
                     ),
                 }
             }
-            RendererNotification::ViewportPickResult { path, slot_id, .. } => {
-                let scene_matches = self
-                    .loaded_scene
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|scene| scene.path() == path);
+            RendererNotification::ViewportPickResult {
+                path,
+                archive_entry,
+                slot_id,
+                ..
+            } => {
+                let scene_matches = self.scene_matches(&path, archive_entry.as_deref());
                 if !scene_matches {
                     return;
                 }
@@ -1015,6 +1093,13 @@ impl EditorWindow {
             }
             _ => {}
         }
+    }
+
+    fn scene_matches(&self, path: &Path, archive_entry: Option<&str>) -> bool {
+        self.loaded_scene
+            .borrow()
+            .as_ref()
+            .is_some_and(|scene| scene.path() == path && scene.archive_entry() == archive_entry)
     }
 
     fn show_scene_info(&self, info: &PmxSceneInfo) {
@@ -1049,6 +1134,10 @@ impl EditorWindow {
                 ("name", &info.name()),
                 ("slots", &info.material_slots().len()),
                 ("warnings", &info.warnings().len()),
+                (
+                    "source",
+                    &crate::loading::display_pmx_source(info.path(), info.archive_entry()),
+                ),
             ],
         ));
     }
@@ -1783,6 +1872,53 @@ fn format_parameter_value(value: &ParameterValue) -> String {
     }
 }
 
+fn is_zip_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+}
+
+fn choose_pmx_archive_entry(path: &Path, entries: &[String]) -> Option<String> {
+    let alert: id = unsafe { msg_send![class!(NSAlert), new] };
+    let title = NSString::new(localization::text(Key::ChoosePmxArchiveTitle));
+    let message = NSString::new(&format!(
+        "{}\n{}",
+        localization::text(Key::ChoosePmxArchiveMessage),
+        path.display()
+    ));
+    let cancel = NSString::new(localization::text(Key::Cancel));
+    let import = NSString::new(localization::text(Key::Import));
+
+    let popup = unsafe {
+        let frame = CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(360.0, 28.0));
+        let popup: id = msg_send![class!(NSPopUpButton), alloc];
+        let popup: id = msg_send![popup, initWithFrame: frame pullsDown: NO];
+        for entry in entries {
+            let title = NSString::new(entry);
+            let _: () = msg_send![popup, addItemWithTitle: &*title];
+        }
+        popup
+    };
+
+    unsafe {
+        let _: () = msg_send![alert, setMessageText: &*title];
+        let _: () = msg_send![alert, setInformativeText: &*message];
+        let _: id = msg_send![alert, addButtonWithTitle: &*cancel];
+        let _: id = msg_send![alert, addButtonWithTitle: &*import];
+        let _: () = msg_send![alert, setAccessoryView: popup];
+        let response: NSInteger = msg_send![alert, runModal];
+        let selected = if response == 1001 {
+            let index: NSInteger = msg_send![popup, indexOfSelectedItem];
+            entries.get(index.max(0) as usize).cloned()
+        } else {
+            None
+        };
+        let _: () = msg_send![popup, release];
+        let _: () = msg_send![alert, release];
+        selected
+    }
+}
+
 fn pmx_resource_path(
     project_path: Option<&Path>,
     path: &Path,
@@ -1938,20 +2074,20 @@ mod tests {
     #[test]
     fn pmx_load_tracker_rejects_results_invalidated_by_a_new_project() {
         let mut tracker = PmxLoadTracker::default();
-        tracker.begin(PathBuf::from("old.pmx"), None);
+        tracker.begin(PathBuf::from("old.pmx"), None, None);
         tracker.invalidate();
 
-        assert!(tracker.complete(Path::new("old.pmx")).is_none());
+        assert!(tracker.complete(Path::new("old.pmx"), None).is_none());
     }
 
     #[test]
     fn pmx_load_tracker_accepts_only_the_latest_requested_load() {
         let mut tracker = PmxLoadTracker::default();
-        tracker.begin(PathBuf::from("old.pmx"), None);
-        tracker.begin(PathBuf::from("new.pmx"), None);
+        tracker.begin(PathBuf::from("old.pmx"), None, None);
+        tracker.begin(PathBuf::from("new.pmx"), None, None);
 
-        assert!(tracker.complete(Path::new("old.pmx")).is_none());
-        assert!(tracker.complete(Path::new("new.pmx")).is_some());
+        assert!(tracker.complete(Path::new("old.pmx"), None).is_none());
+        assert!(tracker.complete(Path::new("new.pmx"), None).is_some());
     }
 
     #[test]

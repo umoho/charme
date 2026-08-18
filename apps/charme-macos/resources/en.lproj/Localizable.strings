@@ -24,7 +24,7 @@
 "ProjectFallback" = "Charme Project";
 "Scene" = "Scene";
 "Hierarchy" = "Hierarchy";
-"EmptyScene" = "No character imported\n\nChoose “Import PMX” to begin.";
+"EmptyScene" = "No character imported\n\nChoose “Import Model” to begin.";
 "Materials" = "Material Slots";
 "EmptyMaterials" = "No material slots";
 "Inspector" = "Inspector";
@@ -47,7 +47,12 @@
 "ErrorPrefix" = "Error: ";
 "ChooseProjectMessage" = "Choose a .charme project file.";
 "SaveProjectMessage" = "Choose where to save the project.";
-"ChoosePmxMessage" = "Choose a PMX character model to import into the current project.";
+"ChoosePmxMessage" = "Choose a PMX character model or ZIP model package to import into the current project.";
+"ChoosePmxArchiveTitle" = "Choose a PMX model";
+"ChoosePmxArchiveMessage" = "This ZIP contains multiple PMX models. Choose one to import.";
+"PmxArchiveContainsNoModel" = "This ZIP archive does not contain a PMX model.";
+"Import" = "Import";
+"Cancel" = "Cancel";
 "ChooseShaderMessage" = "Choose a WGSL material Shader to inspect.";
 "FileMenu" = "File";
 "OpenProjectMenu" = "Open Project…";
@@ -57,7 +62,7 @@
 "NoRecentProjectsHint" = "No recent projects\nOpen a .charme project and it will appear here.";
 "RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "Import…";
-"ImportPmxMenu" = "PMX…";
+"ImportPmxMenu" = "Model…";
 "SaveProjectMenu" = "Save";
 "SaveAsProjectMenu" = "Save As…";
 "InspectShaderMenu" = "Inspect WGSL Shader…";
@@ -93,8 +98,8 @@
 "SphereTexture" = "Sphere";
 "ToonTexture" = "Toon";
 "MissingValue" = "—";
-"SceneLoaded" = "Loaded {name} · {slots} material slots";
-"SceneLoadedWithWarnings" = "Loaded {name} · {warnings} warnings";
+"SceneLoaded" = "Loaded {name} · {slots} material slots · {source}";
+"SceneLoadedWithWarnings" = "Loaded {name} · {warnings} warnings · {source}";
 "FramePixelFormatUnsupported" = "The rendered frame uses an unsupported pixel format.";
 "ColorSpaceUnavailable" = "The sRGB color space is unavailable.";
 "FrameImageCreationFailed" = "The rendered frame could not be displayed.";

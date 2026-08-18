@@ -29,8 +29,8 @@ Implemented foundations:
 - WGSL composition, metadata scanning, reflection, validation, and uniform packing.
 - A private Bevy render worker with on-demand offscreen rendering, asynchronous
   CPU readback, resize suspension, and orbit camera controls.
-- Asynchronous PMX loading from arbitrary file-system paths, texture fallback,
-  material-slot summaries, scene replacement, and automatic camera framing.
+- Asynchronous PMX loading from arbitrary file-system paths and ZIP model packages,
+  texture fallback, material-slot summaries, scene replacement, and automatic camera framing.
 - A native macOS application with a macOS-style startup window, automatic
   `.charme` project startup, recent Charme projects, and an editor window with
   project-scoped PMX import plus Scene/Materials, Viewport and Inspector columns.

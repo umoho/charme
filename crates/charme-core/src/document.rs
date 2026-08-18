@@ -181,10 +181,13 @@ fn ensure_unique<T: Copy + Eq + std::hash::Hash>(
 /// A character model referenced by a document.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CharacterSource {
-    /// Character file path.
+    /// Character file path, or the ZIP archive containing the PMX file.
     pub path: ResourcePath,
     /// Character asset format.
     pub format: CharacterFormat,
+    /// Archive-relative PMX entry when `path` points to a ZIP archive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_entry: Option<String>,
 }
 
 impl CharacterSource {
@@ -193,7 +196,22 @@ impl CharacterSource {
         Self {
             path,
             format: CharacterFormat::Pmx,
+            archive_entry: None,
         }
+    }
+
+    /// Creates a PMX character source whose bytes are stored in a ZIP archive.
+    pub fn pmx_with_archive_entry(path: ResourcePath, archive_entry: impl Into<String>) -> Self {
+        Self {
+            path,
+            format: CharacterFormat::Pmx,
+            archive_entry: Some(archive_entry.into()),
+        }
+    }
+
+    /// Returns the selected PMX entry inside an archive, if any.
+    pub fn archive_entry(&self) -> Option<&str> {
+        self.archive_entry.as_deref()
     }
 }
 
@@ -479,6 +497,24 @@ mod tests {
         assert_eq!(slot.id(), id);
         assert_eq!(slot.source_index(), 2);
         assert_eq!(slot.material(), Some(material));
+    }
+
+    #[test]
+    fn archive_character_sources_round_trip_the_selected_entry() {
+        let source = CharacterSource::pmx_with_archive_entry(
+            ResourcePath::project_relative("models/character.zip").unwrap(),
+            "Model/character.pmx",
+        );
+        let encoded = ron::to_string(&source).unwrap();
+        let decoded: CharacterSource = ron::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded, source);
+        assert_eq!(decoded.archive_entry(), Some("Model/character.pmx"));
+
+        let legacy: CharacterSource =
+            ron::from_str(r#"(path: ProjectRelative("models/character.pmx"), format: Pmx)"#)
+                .unwrap();
+        assert_eq!(legacy.archive_entry(), None);
     }
 
     #[test]

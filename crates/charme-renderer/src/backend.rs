@@ -53,6 +53,7 @@ pub(crate) enum Command {
     ResetCamera,
     LoadPmx {
         path: PathBuf,
+        archive_entry: Option<String>,
         existing_slot_ids: Vec<(u32, MaterialSlotId)>,
     },
     ClearPmx,
@@ -192,9 +193,10 @@ fn run(
                 }
                 Command::LoadPmx {
                     path,
+                    archive_entry,
                     existing_slot_ids,
                 } => {
-                    dirty |= backend.load_pmx(path, &existing_slot_ids)?;
+                    dirty |= backend.load_pmx(path, archive_entry, &existing_slot_ids)?;
                 }
                 Command::ClearPmx => {
                     backend.clear_pmx()?;
@@ -248,9 +250,10 @@ fn run(
                 }
                 Ok(Command::LoadPmx {
                     path,
+                    archive_entry,
                     existing_slot_ids,
                 }) => {
-                    dirty |= backend.load_pmx(path, &existing_slot_ids)?;
+                    dirty |= backend.load_pmx(path, archive_entry, &existing_slot_ids)?;
                 }
                 Ok(Command::ClearPmx) => {
                     backend.clear_pmx()?;
@@ -342,6 +345,7 @@ struct MaterialPreview {
     slot_id: MaterialSlotId,
     slot_index: usize,
     scene_path: PathBuf,
+    scene_archive_entry: Option<String>,
     material: bevy::prelude::Handle<CharmeMaterial>,
 }
 
@@ -524,9 +528,11 @@ impl Backend {
         // command, so make sure the ray uses the latest camera state.
         self.app.update();
 
-        let (path, picked) = {
+        let (path, archive_entry, picked) = {
             let world = self.app.world();
-            let path = world.resource::<SelectionGeometry>().scene_path.clone();
+            let geometry = world.resource::<SelectionGeometry>();
+            let path = geometry.scene_path.clone();
+            let archive_entry = geometry.scene_archive_entry.clone();
             let picked = world
                 .get::<Camera>(self.camera)
                 .zip(world.get::<GlobalTransform>(self.camera))
@@ -534,9 +540,9 @@ impl Backend {
                     camera
                         .viewport_to_world(transform, Vec2::new(x, y))
                         .ok()
-                        .and_then(|ray| world.resource::<SelectionGeometry>().pick(ray))
+                        .and_then(|ray| geometry.pick(ray))
                 });
-            (path, picked)
+            (path, archive_entry, picked)
         };
 
         let Some(path) = path else {
@@ -546,6 +552,7 @@ impl Backend {
             .send(WorkerEvent::Notification(
                 RendererNotification::ViewportPickResult {
                     path,
+                    archive_entry,
                     slot_id: picked.map(|picked| picked.slot_id),
                     primitive_index: picked.map(|picked| picked.primitive_index),
                 },
@@ -556,13 +563,18 @@ impl Backend {
     fn load_pmx(
         &mut self,
         path: PathBuf,
+        archive_entry: Option<String>,
         existing_slot_ids: &[(u32, MaterialSlotId)],
     ) -> Result<bool, RendererError> {
-        let prepared = match prepare_pmx_scene(&path, existing_slot_ids) {
+        let prepared = match prepare_pmx_scene(&path, archive_entry.as_deref(), existing_slot_ids) {
             Ok(prepared) => prepared,
             Err(message) => {
                 let _ = self.events.send(WorkerEvent::Notification(
-                    RendererNotification::PmxLoadFailed { path, message },
+                    RendererNotification::PmxLoadFailed {
+                        path,
+                        archive_entry,
+                        message,
+                    },
                 ));
                 return Ok(false);
             }
@@ -582,6 +594,7 @@ impl Backend {
             scene.despawn(&mut self.app);
         }
         let scene_path = prepared.info.path().to_path_buf();
+        let scene_archive_entry = prepared.info.archive_entry().map(str::to_owned);
         self.app
             .world_mut()
             .insert_resource(SelectionGeometry::from_prepared(&prepared));
@@ -591,7 +604,7 @@ impl Backend {
         self.initial_orbit = self.orbit;
         self.update_camera_transform()?;
         if let Some(materials) = self.pmx_scene.as_ref().map(|scene| scene.materials.clone()) {
-            self.spawn_material_previews(&scene_path, &materials);
+            self.spawn_material_previews(&scene_path, scene_archive_entry.as_deref(), &materials);
         }
         let _ = self
             .events
@@ -631,6 +644,7 @@ impl Backend {
     fn spawn_material_previews(
         &mut self,
         scene_path: &std::path::Path,
+        scene_archive_entry: Option<&str>,
         materials: &[bevy::prelude::Handle<CharmeMaterial>],
     ) {
         for (slot_index, material) in materials.iter().enumerate() {
@@ -646,6 +660,7 @@ impl Backend {
                 slot_id,
                 slot_index,
                 scene_path: scene_path.to_path_buf(),
+                scene_archive_entry: scene_archive_entry.map(str::to_owned),
                 material: material.clone(),
             });
             self.thumbnail_queue.push_back(slot_index);
@@ -682,11 +697,17 @@ impl Backend {
         let Some(slot_index) = self.thumbnail_queue.pop_front() else {
             return;
         };
-        let Some((scene_path, material)) = self
+        let Some((scene_path, scene_archive_entry, material)) = self
             .material_previews
             .iter()
             .find(|preview| preview.slot_index == slot_index)
-            .map(|preview| (preview.scene_path.clone(), preview.material.clone()))
+            .map(|preview| {
+                (
+                    preview.scene_path.clone(),
+                    preview.scene_archive_entry.clone(),
+                    preview.material.clone(),
+                )
+            })
         else {
             self.start_next_thumbnail_readback();
             return;
@@ -699,7 +720,7 @@ impl Backend {
         {
             camera.is_active = true;
         }
-        self.request_thumbnail_readback(&scene_path, slot_index);
+        self.request_thumbnail_readback(&scene_path, scene_archive_entry.as_deref(), slot_index);
     }
 
     fn set_preview_material(
@@ -749,13 +770,14 @@ impl Backend {
         let Some(slot_id) = self.requested_inspector_slot.take() else {
             return;
         };
-        let Some((scene_path, material, slot_index)) = self
+        let Some((scene_path, scene_archive_entry, material, slot_index)) = self
             .material_previews
             .iter()
             .find(|preview| preview.slot_id == slot_id)
             .map(|preview| {
                 (
                     preview.scene_path.clone(),
+                    preview.scene_archive_entry.clone(),
                     preview.material.clone(),
                     preview.slot_index,
                 )
@@ -771,10 +793,20 @@ impl Backend {
         {
             camera.is_active = true;
         }
-        self.request_inspector_preview_readback(&scene_path, slot_id, slot_index);
+        self.request_inspector_preview_readback(
+            &scene_path,
+            scene_archive_entry.as_deref(),
+            slot_id,
+            slot_index,
+        );
     }
 
-    fn request_thumbnail_readback(&mut self, scene_path: &std::path::Path, slot_index: usize) {
+    fn request_thumbnail_readback(
+        &mut self,
+        scene_path: &std::path::Path,
+        scene_archive_entry: Option<&str>,
+        slot_index: usize,
+    ) {
         let Some(slot_id) = self
             .pmx_scene
             .as_ref()
@@ -786,6 +818,7 @@ impl Backend {
         let events = self.events.clone();
         let completion = self.completion.clone();
         let scene_path = scene_path.to_path_buf();
+        let scene_archive_entry = scene_archive_entry.map(str::to_owned);
         self.pending_thumbnails += 1;
         self.app
             .world_mut()
@@ -801,6 +834,7 @@ impl Backend {
                 let _ = events.send(WorkerEvent::Notification(
                     RendererNotification::MaterialThumbnailReady {
                         path: scene_path.clone(),
+                        archive_entry: scene_archive_entry.clone(),
                         slot_id,
                         slot_index,
                         frame,
@@ -878,12 +912,14 @@ impl Backend {
     fn request_inspector_preview_readback(
         &mut self,
         scene_path: &std::path::Path,
+        scene_archive_entry: Option<&str>,
         slot_id: MaterialSlotId,
         slot_index: usize,
     ) {
         let events = self.events.clone();
         let completion = self.completion.clone();
         let scene_path = scene_path.to_path_buf();
+        let scene_archive_entry = scene_archive_entry.map(str::to_owned);
         self.pending_inspector_preview = true;
         self.app
             .world_mut()
@@ -902,6 +938,7 @@ impl Backend {
                 let _ = events.send(WorkerEvent::Notification(
                     RendererNotification::MaterialInspectorPreviewReady {
                         path: scene_path.clone(),
+                        archive_entry: scene_archive_entry.clone(),
                         slot_id,
                         slot_index,
                         frame,

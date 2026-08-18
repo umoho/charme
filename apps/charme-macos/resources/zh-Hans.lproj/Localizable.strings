@@ -24,7 +24,7 @@
 "ProjectFallback" = "Charme项目";
 "Scene" = "场景";
 "Hierarchy" = "层级";
-"EmptyScene" = "尚未导入角色\n\n请点击“导入PMX”开始。";
+"EmptyScene" = "尚未导入角色\n\n请点击“导入模型”开始。";
 "Materials" = "材质槽";
 "EmptyMaterials" = "暂无材质槽";
 "Inspector" = "检视器";
@@ -47,7 +47,12 @@
 "ErrorPrefix" = "错误：";
 "ChooseProjectMessage" = "选择一个.charme项目文件。";
 "SaveProjectMessage" = "选择项目保存位置。";
-"ChoosePmxMessage" = "选择一个PMX角色模型导入当前项目。";
+"ChoosePmxMessage" = "选择一个PMX角色模型或ZIP模型包导入当前项目。";
+"ChoosePmxArchiveTitle" = "选择PMX模型";
+"ChoosePmxArchiveMessage" = "此ZIP包含多个PMX模型，请选择要导入的模型。";
+"PmxArchiveContainsNoModel" = "此ZIP压缩包不包含PMX模型。";
+"Import" = "导入";
+"Cancel" = "取消";
 "ChooseShaderMessage" = "选择一个WGSL材质Shader进行检查。";
 "FileMenu" = "文件";
 "OpenProjectMenu" = "打开项目…";
@@ -57,7 +62,7 @@
 "NoRecentProjectsHint" = "暂无最近项目\n打开一个.charme项目后会显示在这里。";
 "RecentProjectRow" = "{name}\n{path}";
 "ImportMenu" = "导入…";
-"ImportPmxMenu" = "PMX…";
+"ImportPmxMenu" = "模型…";
 "SaveProjectMenu" = "保存";
 "SaveAsProjectMenu" = "另存为…";
 "InspectShaderMenu" = "检查WGSLShader…";
@@ -93,8 +98,8 @@
 "SphereTexture" = "Sphere";
 "ToonTexture" = "Toon";
 "MissingValue" = "—";
-"SceneLoaded" = "已加载{name} · {slots}个材质槽";
-"SceneLoadedWithWarnings" = "已加载{name} · {warnings}个警告";
+"SceneLoaded" = "已加载{name} · {slots}个材质槽 · {source}";
+"SceneLoadedWithWarnings" = "已加载{name} · {warnings}个警告 · {source}";
 "FramePixelFormatUnsupported" = "渲染帧使用了不支持的像素格式。";
 "ColorSpaceUnavailable" = "sRGB色彩空间不可用。";
 "FrameImageCreationFailed" = "无法显示渲染帧。";
