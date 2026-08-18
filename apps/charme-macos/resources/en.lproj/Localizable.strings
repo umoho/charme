@@ -76,6 +76,7 @@
 "RecentProjectTitle" = "{name} · {path}";
 "FrameStatus" = "Frame {sequence} · {width}×{height}px · Drag to rotate · Trackpad scroll to orbit · Pinch or ⌘/Ctrl-scroll to zoom";
 "LoadingPmx" = "Loading…\n{path}";
+"PmxLoadingTitle" = "Loading…";
 "ShaderErrorDetails" = "{path}\n\n{error}";
 "ShaderSummary" = "{file_name}\n{parameter_blocks} parameter blocks · {diagnostics} diagnostics";
 "ShaderSummaryWithNonScalar" = "{file_name}\n{parameter_blocks} parameter blocks · {diagnostics} diagnostics · {non_scalar_fields} non-scalar fields";

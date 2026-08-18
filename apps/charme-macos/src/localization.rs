@@ -105,6 +105,7 @@ localization_keys!(
     RecentProjectTitle,
     FrameStatus,
     LoadingPmx,
+    PmxLoadingTitle,
     ShaderErrorDetails,
     ShaderSummary,
     ShaderSummaryWithNonScalar,

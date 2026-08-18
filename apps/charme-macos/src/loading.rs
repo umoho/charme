@@ -5,7 +5,7 @@ use cacao::{
     color::Color,
     layout::{Layout, LayoutConstraint},
     progress::{ProgressIndicator, ProgressIndicatorStyle},
-    text::Label,
+    text::{Label, LineBreakMode},
     view::View,
 };
 
@@ -17,6 +17,7 @@ use crate::{
 pub(crate) struct PmxLoadingSheet {
     content: View,
     heading: Label,
+    file_name: Label,
     stage: Label,
     progress: ProgressIndicator,
 }
@@ -25,19 +26,27 @@ impl PmxLoadingSheet {
     pub(crate) fn window(path: &Path) -> Window<Self> {
         let mut config = WindowConfig::default();
         config.set_styles(&[WindowStyle::Titled]);
-        config.set_initial_dimensions(0.0, 0.0, 420.0, 150.0);
+        config.set_initial_dimensions(0.0, 0.0, 420.0, 160.0);
         Window::with(config, Self::new(path))
     }
 
     fn new(path: &Path) -> Self {
         let content = panel(Color::MacOSWindowBackgroundColor);
         let heading = label(
-            &localization::format(Key::LoadingPmx, &[("path", &path.display())]),
+            localization::text(Key::PmxLoadingTitle),
             15.0,
             true,
             Color::Label,
         );
-        heading.set_max_number_of_lines(2);
+        heading.set_max_number_of_lines(1);
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| path.display().to_string());
+        let file_name = label(&file_name, 11.0, false, Color::LabelSecondary);
+        file_name.set_line_break_mode(LineBreakMode::TruncateMiddle);
+        file_name.set_max_number_of_lines(1);
         let stage = label(
             localization::text(Key::LoadingPmxTextures),
             11.0,
@@ -53,6 +62,7 @@ impl PmxLoadingSheet {
         Self {
             content,
             heading,
+            file_name,
             stage,
             progress,
         }
@@ -66,9 +76,10 @@ impl WindowDelegate for PmxLoadingSheet {
         window.set_title(localization::text(Key::AppName));
         window.set_title_visibility(TitleVisibility::Visible);
         window.set_content_view(&self.content);
-        window.set_minimum_content_size(360.0, 130.0);
+        window.set_minimum_content_size(360.0, 140.0);
 
         self.content.add_subview(&self.heading);
+        self.content.add_subview(&self.file_name);
         self.content.add_subview(&self.stage);
         self.content.add_subview(&self.progress);
 
@@ -85,11 +96,24 @@ impl WindowDelegate for PmxLoadingSheet {
                 .trailing
                 .constraint_equal_to(&self.content.trailing)
                 .offset(-24.0),
-            self.heading.height.constraint_equal_to_constant(38.0),
-            self.stage
+            self.heading.height.constraint_equal_to_constant(20.0),
+            self.file_name
                 .top
                 .constraint_equal_to(&self.heading.bottom)
-                .offset(7.0),
+                .offset(2.0),
+            self.file_name
+                .leading
+                .constraint_equal_to(&self.content.leading)
+                .offset(24.0),
+            self.file_name
+                .trailing
+                .constraint_equal_to(&self.content.trailing)
+                .offset(-24.0),
+            self.file_name.height.constraint_equal_to_constant(16.0),
+            self.stage
+                .top
+                .constraint_equal_to(&self.file_name.bottom)
+                .offset(5.0),
             self.stage
                 .leading
                 .constraint_equal_to(&self.content.leading)
