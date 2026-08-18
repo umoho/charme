@@ -166,6 +166,21 @@ fn renders_resizes_and_loads_pmx() {
     assert_eq!(slot_index, 0);
     assert_eq!(frame.size(), OutputSize::new(256, 256));
     assert_eq!(frame.pixel_format(), PixelFormat::Bgra8Srgb);
+    assert_no_notification(&mut renderer, Duration::from_millis(100));
+
+    renderer
+        .clear_pmx()
+        .expect("clearing the PMX scene should be accepted");
+    let cleared = wait_for_frame(&mut renderer);
+    assert!(cleared.sequence() > outlined.sequence());
+
+    renderer
+        .load_pmx(&pmx_path)
+        .expect("reloading PMX after clearing should be accepted");
+    assert!(matches!(
+        wait_for_notification(&mut renderer),
+        RendererNotification::PmxLoaded(info) if info.path() == pmx_path
+    ));
 
     let missing = pmx_path.with_file_name("missing-model.pmx");
     renderer
@@ -219,6 +234,18 @@ fn wait_for_notification(renderer: &mut Renderer) -> RendererNotification {
             Err(error) => panic!("renderer failed: {error}"),
         }
         assert!(Instant::now() < deadline, "renderer notification timed out");
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn assert_no_notification(renderer: &mut Renderer, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        match renderer.try_recv_notification() {
+            Ok(Some(notification)) => panic!("unexpected renderer notification: {notification:?}"),
+            Ok(None) => {}
+            Err(error) => panic!("renderer failed: {error}"),
+        }
         thread::sleep(Duration::from_millis(2));
     }
 }

@@ -55,6 +55,7 @@ pub(crate) enum Command {
         path: PathBuf,
         existing_slot_ids: Vec<(u32, MaterialSlotId)>,
     },
+    ClearPmx,
     SetMaterialParameter {
         slot_id: Option<MaterialSlotId>,
         path: String,
@@ -195,6 +196,10 @@ fn run(
                 } => {
                     dirty |= backend.load_pmx(path, &existing_slot_ids)?;
                 }
+                Command::ClearPmx => {
+                    backend.clear_pmx()?;
+                    dirty = true;
+                }
                 Command::SetMaterialParameter {
                     slot_id,
                     path,
@@ -246,6 +251,10 @@ fn run(
                     existing_slot_ids,
                 }) => {
                     dirty |= backend.load_pmx(path, &existing_slot_ids)?;
+                }
+                Ok(Command::ClearPmx) => {
+                    backend.clear_pmx()?;
+                    dirty = true;
                 }
                 Ok(Command::SetMaterialParameter {
                     slot_id,
@@ -592,20 +601,31 @@ impl Backend {
         Ok(true)
     }
 
+    fn clear_pmx(&mut self) -> Result<(), RendererError> {
+        self.clear_material_previews();
+        if let Some(scene) = self.pmx_scene.take() {
+            scene.despawn(&mut self.app);
+        }
+        self.app
+            .world_mut()
+            .insert_resource(SelectionGeometry::default());
+        self.orbit = OrbitState::default();
+        self.initial_orbit = self.orbit;
+        self.update_camera_transform()
+    }
+
     fn clear_material_previews(&mut self) {
         self.thumbnail_queue.clear();
         self.material_previews.clear();
-        if self.pending_thumbnails == 0 && !self.pending_inspector_preview {
-            self.set_preview_material(
-                self.thumbnail_preview.object,
-                self.thumbnail_preview.fallback_material.clone(),
-            );
-            self.set_preview_material(
-                self.inspector_preview.object,
-                self.inspector_preview.fallback_material.clone(),
-            );
-        }
         self.requested_inspector_slot = None;
+        self.set_preview_material(
+            self.thumbnail_preview.object,
+            self.thumbnail_preview.fallback_material.clone(),
+        );
+        self.set_preview_material(
+            self.inspector_preview.object,
+            self.inspector_preview.fallback_material.clone(),
+        );
     }
 
     fn spawn_material_previews(
@@ -726,7 +746,7 @@ impl Backend {
         if self.pending_inspector_preview {
             return;
         }
-        let Some(slot_id) = self.requested_inspector_slot else {
+        let Some(slot_id) = self.requested_inspector_slot.take() else {
             return;
         };
         let Some((scene_path, material, slot_index)) = self

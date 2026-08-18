@@ -228,6 +228,14 @@ impl Renderer {
         })
     }
 
+    /// Removes the current PMX scene and requests an empty preview frame.
+    ///
+    /// In-flight readbacks are allowed to complete, but no scene assets or
+    /// queued material previews remain referenced by the renderer afterward.
+    pub fn clear_pmx(&self) -> Result<(), RendererError> {
+        self.send(Command::ClearPmx)
+    }
+
     /// Updates a fixed-ABI material parameter and requests a new frame.
     ///
     /// The path and value are renderer-independent core types. Unsupported

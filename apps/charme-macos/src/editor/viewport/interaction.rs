@@ -48,7 +48,7 @@ impl OrbitInputView {
 
         Self {
             view,
-            _input: ObjcProperty::retain(input),
+            _input: ObjcProperty::from_retained(input),
         }
     }
 }

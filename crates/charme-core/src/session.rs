@@ -11,6 +11,8 @@ use crate::{
 /// A semantic edit that can be issued by any platform UI.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorCommand {
+    /// Applies multiple commands atomically as one validation and Undo unit.
+    Transaction(Vec<EditorCommand>),
     /// Changes the project display name.
     RenameDocument(String),
     /// Selects or clears the character source.
@@ -212,7 +214,13 @@ impl EditorSession {
     /// `Ok(None)` means that the command did not alter the document.
     pub fn apply(&mut self, command: EditorCommand) -> Result<Option<EditorEvent>, EditorError> {
         let previous = self.document.clone();
-        let change = apply_command(&mut self.document, command)?;
+        let change = match apply_command(&mut self.document, command) {
+            Ok(change) => change,
+            Err(error) => {
+                self.document = previous;
+                return Err(error);
+            }
+        };
         if self.document == previous {
             return Ok(None);
         }
@@ -277,6 +285,18 @@ fn apply_command(
     command: EditorCommand,
 ) -> Result<DocumentChange, EditorError> {
     match command {
+        EditorCommand::Transaction(commands) => {
+            let mut combined = None;
+            for command in commands {
+                let change = apply_command(document, command)?;
+                combined = Some(match combined {
+                    None => change,
+                    Some(previous) if previous == change => previous,
+                    Some(_) => DocumentChange::Everything,
+                });
+            }
+            Ok(combined.unwrap_or(DocumentChange::Everything))
+        }
         EditorCommand::RenameDocument(name) => {
             document.name = name;
             Ok(DocumentChange::Metadata)
@@ -468,6 +488,52 @@ mod tests {
         let snapshot = session.snapshot();
         assert_eq!(snapshot.revision, session.revision());
         assert!(snapshot.dirty);
+    }
+
+    #[test]
+    fn transactions_are_one_undo_unit() {
+        let mut session = EditorSession::new("Character");
+        let shader = ShaderSource::new(
+            "Toon",
+            ResourcePath::project_relative("shaders/toon.wgsl").unwrap(),
+        );
+        let material = MaterialInstance::new("Body", shader.id());
+        let slot = MaterialSlot::with_id(
+            MaterialSlotId::new(),
+            0,
+            "Body",
+            "Body",
+            Some(material.id()),
+        );
+
+        session
+            .apply(EditorCommand::Transaction(vec![
+                EditorCommand::UpsertShader(shader),
+                EditorCommand::UpsertMaterial(material),
+                EditorCommand::ReplaceMaterialSlots(vec![slot]),
+            ]))
+            .unwrap();
+
+        assert_eq!(session.document().materials().len(), 1);
+        session.undo().unwrap();
+        assert!(session.document().materials().is_empty());
+        assert!(!session.can_undo());
+    }
+
+    #[test]
+    fn failed_transactions_restore_all_prior_changes() {
+        let mut session = EditorSession::new("Character");
+        let before = session.snapshot();
+
+        assert!(matches!(
+            session.apply(EditorCommand::Transaction(vec![
+                EditorCommand::RenameDocument("Changed".to_owned()),
+                EditorCommand::RemoveMaterial(MaterialId::new()),
+            ])),
+            Err(EditorError::UnknownMaterial(_))
+        ));
+        assert_eq!(session.snapshot(), before);
+        assert!(!session.can_undo());
     }
 
     #[test]

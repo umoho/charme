@@ -54,9 +54,9 @@ pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
     };
     let logical_size = CGSize::new(width as f64 / scale, height as f64 / scale);
 
-    // SAFETY: `cg_image` is valid for this call and NSImage retains the image
-    // representation created by the designated initializer. `init` returns an
-    // owned Objective-C object, which is transferred to cacao's Image wrapper.
+    // SAFETY: `initWithCGImage:size:` returns an owned (+1) NSImage. Cacao's
+    // `Image::with` retains its argument instead of adopting that ownership, so
+    // balance the initializer's retain after the wrapper has taken its own.
     let image = unsafe {
         let allocated: id = msg_send![class!(NSImage), alloc];
         let image: id = msg_send![allocated,
@@ -67,7 +67,9 @@ pub(crate) fn make_image(frame: Frame, scale: f64) -> Result<Image, String> {
             eprintln!("AppKit could not create an image from the rendered frame");
             return Err(localization::text(Key::FrameImageCreationFailed).to_owned());
         }
-        Image::with(image)
+        let wrapped = Image::with(image);
+        let _: () = msg_send![image, release];
+        wrapped
     };
 
     Ok(image)

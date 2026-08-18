@@ -134,7 +134,7 @@ impl NavigationGizmo {
             x_label,
             y_label,
             z_label,
-            _input: ObjcProperty::retain(input),
+            _input: ObjcProperty::from_retained(input),
             orientation: Cell::new(orientation),
             current_image: RefCell::new(Some(image)),
         };

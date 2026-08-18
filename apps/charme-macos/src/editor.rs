@@ -7,7 +7,7 @@ pub(crate) use hierarchy::HierarchyItemId;
 
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     ptr,
@@ -24,7 +24,7 @@ use cacao::{
     },
     color::{Color, Theme},
     filesystem::FileSelectPanel,
-    foundation::{BOOL, NO, YES, id},
+    foundation::{BOOL, NO, YES, id, nil},
     image::{Image, ImageView},
     layout::{Layout, LayoutConstraint},
     objc::{class, msg_send, sel, sel_impl},
@@ -292,6 +292,42 @@ impl ToolbarDelegate for EditorToolbar {
     }
 }
 
+struct PendingPmxLoad {
+    epoch: u64,
+    path: PathBuf,
+}
+
+#[derive(Default)]
+struct PmxLoadTracker {
+    current_epoch: u64,
+    pending: VecDeque<PendingPmxLoad>,
+}
+
+impl PmxLoadTracker {
+    fn begin(&mut self, path: PathBuf) {
+        self.advance_epoch();
+        self.pending.push_back(PendingPmxLoad {
+            epoch: self.current_epoch,
+            path,
+        });
+    }
+
+    fn invalidate(&mut self) {
+        self.advance_epoch();
+    }
+
+    fn complete(&mut self, path: &Path) -> bool {
+        let Some(request) = self.pending.pop_front() else {
+            return false;
+        };
+        request.epoch == self.current_epoch && request.path == path
+    }
+
+    fn advance_epoch(&mut self) {
+        self.current_epoch = self.current_epoch.wrapping_add(1);
+    }
+}
+
 pub(crate) struct EditorWindow {
     toolbar: Toolbar<EditorToolbar>,
     titlebar: ProjectTitlebar,
@@ -310,6 +346,7 @@ pub(crate) struct EditorWindow {
     status: Label,
     hierarchy_label: Label,
     hierarchy: HierarchyView,
+    pmx_loads: RefCell<PmxLoadTracker>,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
     active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
@@ -475,6 +512,7 @@ impl EditorWindow {
             status,
             hierarchy_label,
             hierarchy,
+            pmx_loads: RefCell::new(PmxLoadTracker::default()),
             loaded_scene: RefCell::new(None),
             active_inspector_slot: RefCell::new(None),
             inspector_heading,
@@ -505,23 +543,7 @@ impl EditorWindow {
 
     pub(crate) fn install_controller(&self, controller: EditorController) {
         self.controller.replace(controller);
-        self.active_material.replace(None);
-        self.parameter_controls.borrow_mut().clear();
-        self.reflected_inspection.replace(None);
-        self.current_inspector_preview.replace(None);
-        self.set_inspector_preview_visible(false);
-        self.set_source_visible(false);
-        self.set_parameter_section_visible(false);
-        self.active_inspector_slot.replace(None);
-        if let Some(bridge) = self.bridge.borrow().as_ref() {
-            bridge.set_selected_material_slot(None);
-        }
-        self.loaded_scene.replace(None);
-        self.hierarchy.clear();
-        self.inspector_heading
-            .set_text(localization::text(Key::Inspector));
-        self.inspector_body
-            .set_text(localization::text(Key::InspectorBody));
+        self.reset_project_views();
         self.publish_view_model();
     }
 
@@ -530,24 +552,34 @@ impl EditorWindow {
             .replace(EditorController::new(localization::text(
                 Key::UntitledProject,
             )));
+        self.reset_project_views();
+        self.publish_view_model();
+    }
+
+    fn reset_project_views(&self) {
+        self.pmx_loads.borrow_mut().invalidate();
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.reflected_inspection.replace(None);
+        self.current_image.replace(None);
         self.current_inspector_preview.replace(None);
+        clear_image(&self.image_view);
+        clear_image(&self.inspector_preview);
         self.set_inspector_preview_visible(false);
         self.set_source_visible(false);
         self.set_parameter_section_visible(false);
         self.active_inspector_slot.replace(None);
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             bridge.set_selected_material_slot(None);
+            bridge.clear_pmx();
         }
         self.loaded_scene.replace(None);
         self.hierarchy.clear();
+        self.navigation_gizmo.reset();
         self.inspector_heading
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
-        self.publish_view_model();
     }
 
     pub(crate) fn save_project(&self) -> Result<(), charme_application::EditorControllerError> {
@@ -694,6 +726,7 @@ impl EditorWindow {
             .map(|slot| (slot.source_index(), slot.id()))
             .collect();
         if let Some(bridge) = self.bridge.borrow().as_ref() {
+            self.pmx_loads.borrow_mut().begin(path.clone());
             bridge.load_pmx(path, existing_slot_ids);
         }
     }
@@ -883,7 +916,11 @@ impl EditorWindow {
 
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
-            RendererNotification::PmxLoaded(info) => self.show_scene_info(&info),
+            RendererNotification::PmxLoaded(info) => {
+                if self.pmx_loads.borrow_mut().complete(info.path()) {
+                    self.show_scene_info(&info);
+                }
+            }
             RendererNotification::MaterialInspectorPreviewReady {
                 path,
                 slot_id,
@@ -912,11 +949,13 @@ impl EditorWindow {
                 }
             }
             RendererNotification::PmxLoadFailed { path, message } => {
-                eprintln!("Failed to load PMX {}: {message}", path.display());
-                self.show_error(&localization::format(
-                    Key::PmxLoadFailed,
-                    &[("path", &path.display())],
-                ));
+                if self.pmx_loads.borrow_mut().complete(&path) {
+                    eprintln!("Failed to load PMX {}: {message}", path.display());
+                    self.show_error(&localization::format(
+                        Key::PmxLoadFailed,
+                        &[("path", &path.display())],
+                    ));
+                }
             }
             RendererNotification::MaterialThumbnailReady {
                 path,
@@ -1005,25 +1044,45 @@ impl EditorWindow {
         else {
             return;
         };
-        let shader = DocumentShaderSource::new("Preview Material", shader_path);
-        if self
-            .dispatch_action(EditorAction::Command(EditorCommand::UpsertShader(
-                shader.clone(),
-            )))
-            .is_err()
-        {
-            return;
-        }
+        let (existing_shader, existing_materials) = {
+            let controller = self.controller.borrow();
+            let document = controller.document();
+            let shader = document
+                .shaders()
+                .iter()
+                .find(|shader| shader.path() == &shader_path)
+                .map(DocumentShaderSource::id);
+            let materials = info
+                .material_slots()
+                .iter()
+                .map(|slot| {
+                    document
+                        .material_slot(slot.id())
+                        .and_then(MaterialSlot::material)
+                        .filter(|material| document.material(*material).is_some())
+                })
+                .collect::<Vec<_>>();
+            (shader, materials)
+        };
+
+        let mut commands = Vec::new();
+        let shader_id = existing_shader.unwrap_or_else(|| {
+            let shader = DocumentShaderSource::new("Preview Material", shader_path);
+            let id = shader.id();
+            commands.push(EditorCommand::UpsertShader(shader));
+            id
+        });
         let material_ids = info
             .material_slots()
             .iter()
-            .map(|slot| {
-                let material = MaterialInstance::new(slot.name(), shader.id());
-                let material_id = material.id();
-                let _ = self.dispatch_action(EditorAction::Command(EditorCommand::UpsertMaterial(
-                    material,
-                )));
-                material_id
+            .zip(existing_materials)
+            .map(|(slot, existing)| {
+                existing.unwrap_or_else(|| {
+                    let material = MaterialInstance::new(slot.name(), shader_id);
+                    let id = material.id();
+                    commands.push(EditorCommand::UpsertMaterial(material));
+                    id
+                })
             })
             .collect::<Vec<_>>();
         let slots = info
@@ -1040,9 +1099,8 @@ impl EditorWindow {
                 )
             })
             .collect();
-        let _ = self.dispatch_action(EditorAction::Command(EditorCommand::ReplaceMaterialSlots(
-            slots,
-        )));
+        commands.push(EditorCommand::ReplaceMaterialSlots(slots));
+        let _ = self.dispatch_action(EditorAction::Command(EditorCommand::Transaction(commands)));
     }
 
     pub(crate) fn select_hierarchy_item(&self, item: HierarchyItemId) {
@@ -1687,6 +1745,12 @@ impl WindowDelegate for EditorWindow {
     }
 }
 
+fn clear_image(image_view: &ImageView) {
+    image_view.objc.with_mut(|image_view| unsafe {
+        let _: () = msg_send![image_view, setImage: nil];
+    });
+}
+
 fn format_parameter_value(value: &ParameterValue) -> String {
     match value {
         ParameterValue::Bool(value) => value.to_string(),
@@ -1855,6 +1919,25 @@ fn editor_separator_color() -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pmx_load_tracker_rejects_results_invalidated_by_a_new_project() {
+        let mut tracker = PmxLoadTracker::default();
+        tracker.begin(PathBuf::from("old.pmx"));
+        tracker.invalidate();
+
+        assert!(!tracker.complete(Path::new("old.pmx")));
+    }
+
+    #[test]
+    fn pmx_load_tracker_accepts_only_the_latest_requested_load() {
+        let mut tracker = PmxLoadTracker::default();
+        tracker.begin(PathBuf::from("old.pmx"));
+        tracker.begin(PathBuf::from("new.pmx"));
+
+        assert!(!tracker.complete(Path::new("old.pmx")));
+        assert!(tracker.complete(Path::new("new.pmx")));
+    }
 
     #[test]
     fn stores_imported_pmx_relative_to_an_existing_project() {

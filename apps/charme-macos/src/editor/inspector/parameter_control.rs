@@ -68,7 +68,7 @@ impl ParameterControl {
                 let color_well = make_color_well(&mut target, &values);
                 view.add_subview(&name);
                 view.add_subview(&value_label);
-                add_control(&view, color_well, &mut controls);
+                add_retained_control(&view, color_well, &mut controls);
                 LayoutConstraint::activate(&[
                     name.top.constraint_equal_to(&view.top),
                     name.leading.constraint_equal_to(&view.leading),
@@ -177,6 +177,13 @@ fn add_control(view: &View, control: id, retained: &mut Vec<ObjcProperty>) {
         let _: () = msg_send![container, addSubview: control];
     });
     retained.push(ObjcProperty::retain(control));
+}
+
+fn add_retained_control(view: &View, control: id, retained: &mut Vec<ObjcProperty>) {
+    view.objc.with_mut(|container| unsafe {
+        let _: () = msg_send![container, addSubview: control];
+    });
+    retained.push(ObjcProperty::from_retained(control));
 }
 
 fn make_slider(

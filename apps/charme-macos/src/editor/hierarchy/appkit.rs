@@ -42,7 +42,7 @@ impl NativeState {
                     item
                 };
                 NativeNode {
-                    item: ObjcProperty::retain(item),
+                    item: ObjcProperty::from_retained(item),
                 }
             })
             .collect();
@@ -131,9 +131,9 @@ impl NativeHierarchyView {
 
         let hierarchy = Self {
             view,
-            outline: ObjcProperty::retain(outline),
-            _scroll_view: ObjcProperty::retain(scroll_view),
-            _delegate: ObjcProperty::retain(delegate),
+            outline: ObjcProperty::from_retained(outline),
+            _scroll_view: ObjcProperty::from_retained(scroll_view),
+            _delegate: ObjcProperty::from_retained(delegate),
             state,
         };
         hierarchy.reload_and_expand();
@@ -361,6 +361,7 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
             let _: () = msg_send![image_view, setImageScaling: 3usize];
             let _: () = msg_send![cell, addSubview: image_view];
             let _: () = msg_send![cell, setImageView: image_view];
+            let _: () = msg_send![image_view, release];
 
             let text_field: id =
                 msg_send![class!(NSTextField), labelWithString: &*NSString::new("")];
@@ -371,6 +372,7 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
             let _: () = msg_send![cell, addSubview: text_field];
             let _: () = msg_send![cell, setTextField: text_field];
             layout_cell(image_view, text_field, cell);
+            let _: () = msg_send![cell, autorelease];
         }
         let text_field: id = msg_send![cell, textField];
         let image_view: id = msg_send![cell, imageView];

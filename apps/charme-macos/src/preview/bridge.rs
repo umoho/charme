@@ -29,6 +29,7 @@ enum Command {
         path: PathBuf,
         existing_slot_ids: Vec<(u32, MaterialSlotId)>,
     },
+    ClearPmx,
     SetMaterialParameter {
         slot_id: MaterialSlotId,
         path: String,
@@ -103,6 +104,12 @@ impl RenderBridge {
                                 if let Err(error) =
                                     renderer.load_pmx_with_slot_ids(path, existing_slot_ids)
                                 {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::ClearPmx) => {
+                                if let Err(error) = renderer.clear_pmx() {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -217,6 +224,10 @@ impl RenderBridge {
             path,
             existing_slot_ids,
         });
+    }
+
+    pub(crate) fn clear_pmx(&self) {
+        let _ = self.commands.send(Command::ClearPmx);
     }
 
     pub(crate) fn set_material_parameter(
