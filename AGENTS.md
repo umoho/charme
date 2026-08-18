@@ -62,6 +62,17 @@ macOS Bundle 打包相关修改应使用 `scripts/run-macos-app.sh --build-only`
 - Shell 脚本使用 `/bin/sh` 可用的语法，并在修改后运行 `sh -n scripts/run-macos-app.sh`。
 - 出现在 UI 中的中英文混合文本无需用空格隔开。
 
+## 日志规范
+
+- 运行时诊断优先使用 `tracing`，按严重程度使用 `tracing::error!`、`warn!`、`info!`、`debug!` 或 `trace!`，不使用 `eprintln!`、`print!` 或 `println!` 代替日志。
+- 日志优先使用结构化字段记录上下文，例如 `path = %path`、`error = %error`，避免只拼接成不可检索的字符串。
+- 日志只用于诊断，不替代面向用户的本地化 UI 错误提示。
+- 以下场景可以保留直接输出：
+  - 命令行参数错误或不支持平台的启动提示；
+  - `build.rs` 必需的 Cargo 指令输出；
+  - 示例程序明确设计的标准输出。
+- Bevy 相关代码应优先与其现有的 `tracing`/`bevy_log` 体系集成，避免重复初始化全局日志订阅器。
+
 ## 提交前检查
 
 - `git diff --check` 无输出。
