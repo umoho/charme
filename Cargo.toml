@@ -5,6 +5,7 @@ members = [
     "crates/charme-application",
     "crates/charme-bevy",
     "crates/charme-core",
+    "crates/charme-geometry",
     "crates/charme-renderer",
     "crates/charme-shader",
 ]

@@ -26,6 +26,12 @@ charme-renderer ──┘                            │
 Owns stable IDs, editor documents, material instances, parameter values,
 commands, events, persistence, and undo/redo semantics.
 
+### `charme-geometry`
+
+Owns renderer-independent indexed-mesh topology algorithms, including
+primitive connected-component analysis. It does not depend on Bevy, PMX, or a
+platform UI.
+
 ### `charme-shader`
 
 Owns WGSL composition, metadata parsing, reflection, diagnostics, parameter
