@@ -13,6 +13,7 @@ use bevy::{
 use bevy_pmx::{Pmx, PmxImportContext, PmxMaterialRecord, PmxResolvedPath, import_pmx, parse_pmx};
 use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 use charme_core::MaterialSlotId;
+use charme_geometry::{PrimitiveRange, PrimitiveSplit, split_primitive};
 
 use crate::{
     PmxLoadStage,
@@ -68,12 +69,44 @@ impl PmxMaterialSlot {
     }
 }
 
+/// UI-facing summary of one connected component within a PMX primitive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PmxPrimitiveComponentInfo {
+    index: usize,
+    triangle_count: usize,
+    index_count: usize,
+    vertex_count: usize,
+}
+
+impl PmxPrimitiveComponentInfo {
+    /// Returns the component's zero-based index within its primitive.
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns the number of triangles in the component.
+    pub const fn triangle_count(&self) -> usize {
+        self.triangle_count
+    }
+
+    /// Returns the number of indices in the component.
+    pub const fn index_count(&self) -> usize {
+        self.index_count
+    }
+
+    /// Returns the number of distinct source vertices referenced by the component.
+    pub const fn vertex_count(&self) -> usize {
+        self.vertex_count
+    }
+}
+
 /// UI-facing summary of one indexed PMX primitive.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxPrimitiveInfo {
     index: usize,
     index_count: usize,
     material_slot_id: Option<MaterialSlotId>,
+    components: Vec<PmxPrimitiveComponentInfo>,
 }
 
 impl PmxPrimitiveInfo {
@@ -90,6 +123,11 @@ impl PmxPrimitiveInfo {
     /// Returns the material slot assigned to the primitive, when valid.
     pub const fn material_slot_id(&self) -> Option<MaterialSlotId> {
         self.material_slot_id
+    }
+
+    /// Returns connected components in source triangle order.
+    pub fn components(&self) -> &[PmxPrimitiveComponentInfo] {
+        &self.components
     }
 }
 
@@ -155,6 +193,7 @@ impl PmxSceneInfo {
 pub(crate) struct PreparedPmxScene {
     pub info: PmxSceneInfo,
     model: Pmx,
+    primitive_splits: Vec<Option<PrimitiveSplit>>,
     textures: Vec<DecodedTexture>,
     bounds_min: Vec3,
     bounds_max: Vec3,
@@ -180,6 +219,10 @@ pub(crate) struct SelectionGeometry {
 pub(crate) struct PrimitiveSelectionGeometry {
     pub(crate) primitive_index: usize,
     pub(crate) slot_id: MaterialSlotId,
+    pub(crate) components: Vec<PrimitiveComponentSelectionGeometry>,
+}
+
+pub(crate) struct PrimitiveComponentSelectionGeometry {
     pub(crate) faces: Vec<SelectionFace>,
     pub(crate) edges: Vec<SelectionEdge>,
 }
@@ -222,39 +265,44 @@ impl SelectionGeometry {
                 report(primitive_index + 1, total);
                 continue;
             };
-            let Some(index_end) = primitive.index_start.checked_add(primitive.index_count) else {
-                report(primitive_index + 1, total);
-                continue;
-            };
-            let Some(indices) = prepared
-                .model
-                .geometry()
-                .indices
-                .get(primitive.index_start..index_end)
+            let Some(split) = prepared
+                .primitive_splits
+                .get(primitive_index)
+                .and_then(Option::as_ref)
             else {
                 report(primitive_index + 1, total);
                 continue;
             };
-            let faces = indices
-                .chunks_exact(3)
-                .filter_map(|triangle| {
-                    let first = positions.get(triangle[0] as usize)?;
-                    let second = positions.get(triangle[1] as usize)?;
-                    let third = positions.get(triangle[2] as usize)?;
-                    Some(selection_face(
-                        Vec3::from(*first) + translation,
-                        Vec3::from(*second) + translation,
-                        Vec3::from(*third) + translation,
-                    ))
+            let components = split
+                .components
+                .iter()
+                .filter_map(|component| {
+                    let faces = component
+                        .indices
+                        .chunks_exact(3)
+                        .filter_map(|triangle| {
+                            let first = positions.get(triangle[0] as usize)?;
+                            let second = positions.get(triangle[1] as usize)?;
+                            let third = positions.get(triangle[2] as usize)?;
+                            Some(selection_face(
+                                Vec3::from(*first) + translation,
+                                Vec3::from(*second) + translation,
+                                Vec3::from(*third) + translation,
+                            ))
+                        })
+                        .collect::<Vec<_>>();
+                    if faces.is_empty() {
+                        return None;
+                    }
+                    let edges = selection_edges(&faces);
+                    Some(PrimitiveComponentSelectionGeometry { faces, edges })
                 })
                 .collect::<Vec<_>>();
-            if !faces.is_empty() {
-                let edges = selection_edges(&faces);
+            if !components.is_empty() {
                 primitives.push(PrimitiveSelectionGeometry {
                     primitive_index,
                     slot_id,
-                    faces,
-                    edges,
+                    components,
                 });
             }
             report(primitive_index + 1, total);
@@ -310,21 +358,23 @@ impl SelectionGeometry {
         let direction = *ray.direction;
         let mut closest = None;
         for primitive in &self.primitives {
-            for face in &primitive.faces {
-                let Some(distance) =
-                    ray_triangle_intersection(ray.origin, direction, face.vertices)
-                else {
-                    continue;
-                };
-                if closest
-                    .as_ref()
-                    .is_none_or(|hit: &PickedPrimitive| distance < hit.distance)
-                {
-                    closest = Some(PickedPrimitive {
-                        primitive_index: primitive.primitive_index,
-                        slot_id: primitive.slot_id,
-                        distance,
-                    });
+            for component in &primitive.components {
+                for face in &component.faces {
+                    let Some(distance) =
+                        ray_triangle_intersection(ray.origin, direction, face.vertices)
+                    else {
+                        continue;
+                    };
+                    if closest
+                        .as_ref()
+                        .is_none_or(|hit: &PickedPrimitive| distance < hit.distance)
+                    {
+                        closest = Some(PickedPrimitive {
+                            primitive_index: primitive.primitive_index,
+                            slot_id: primitive.slot_id,
+                            distance,
+                        });
+                    }
                 }
             }
         }
@@ -468,16 +518,19 @@ pub(crate) fn prepare_pmx_scene(
     let (textures, warnings) = load_textures(source, model.texture_paths(), |completed, total| {
         report(PmxLoadStage::LoadingTextures, Some(completed), Some(total));
     });
+    let primitive_splits = build_primitive_splits(&model);
     let info = scene_info(
         source.identity(),
         &model,
         warnings,
         &request.existing_slot_ids,
+        &primitive_splits,
     );
 
     Ok(PreparedPmxScene {
         info,
         model,
+        primitive_splits,
         textures,
         bounds_min,
         bounds_max,
@@ -659,6 +712,7 @@ fn scene_info(
     model: &Pmx,
     warnings: Vec<String>,
     existing_slot_ids: &[(u32, MaterialSlotId)],
+    primitive_splits: &[Option<PrimitiveSplit>],
 ) -> PmxSceneInfo {
     let name = model
         .raw_document()
@@ -713,6 +767,11 @@ fn scene_info(
             material_slot_id: material_slots
                 .get(primitive.material_index)
                 .map(PmxMaterialSlot::id),
+            components: primitive_splits
+                .get(index)
+                .and_then(Option::as_ref)
+                .map(primitive_component_infos)
+                .unwrap_or_default(),
         })
         .collect();
 
@@ -725,6 +784,36 @@ fn scene_info(
         primitives,
         warnings,
     }
+}
+
+fn build_primitive_splits(model: &Pmx) -> Vec<Option<PrimitiveSplit>> {
+    let geometry = model.geometry();
+    model
+        .primitives()
+        .iter()
+        .map(|primitive| {
+            split_primitive(
+                &geometry.indices,
+                geometry.positions.len(),
+                PrimitiveRange::new(primitive.index_start, primitive.index_count),
+            )
+            .ok()
+        })
+        .collect()
+}
+
+fn primitive_component_infos(split: &PrimitiveSplit) -> Vec<PmxPrimitiveComponentInfo> {
+    split
+        .components
+        .iter()
+        .enumerate()
+        .map(|(index, component)| PmxPrimitiveComponentInfo {
+            index,
+            triangle_count: component.triangle_count(),
+            index_count: component.index_count(),
+            vertex_count: component.vertex_indices.len(),
+        })
+        .collect()
 }
 
 fn texture_path(model: &Pmx, index: i32) -> Option<String> {
@@ -863,6 +952,38 @@ fn placeholder_texture() -> Image {
 mod tests {
     use super::*;
     use bevy::math::{Dir3, Ray3d};
+    use bevy_pmx::{PmxMeshGeometry, PmxPrimitive};
+
+    #[test]
+    fn primitive_components_are_summarized_in_source_order() {
+        let model = Pmx::new(
+            None,
+            PmxMeshGeometry {
+                positions: vec![[0.0, 0.0, 0.0]; 6],
+                normals: vec![[0.0, 0.0, 1.0]; 6],
+                uvs: vec![[0.0, 0.0]; 6],
+                indices: vec![0, 1, 2, 3, 4, 5],
+            },
+            vec![PmxPrimitive {
+                material_index: 0,
+                index_start: 0,
+                index_count: 6,
+            }],
+        );
+        let splits = build_primitive_splits(&model);
+        let split = splits[0]
+            .as_ref()
+            .expect("valid primitive should have topology data");
+
+        assert_eq!(split.triangle_components, [0, 1]);
+        assert_eq!(
+            primitive_component_infos(split)
+                .iter()
+                .map(PmxPrimitiveComponentInfo::triangle_count)
+                .collect::<Vec<_>>(),
+            [1, 1]
+        );
+    }
 
     #[test]
     fn coplanar_triangle_diagonals_are_not_silhouette_boundaries() {
@@ -897,8 +1018,10 @@ mod tests {
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 3,
                 slot_id: slot,
-                edges: selection_edges(&faces),
-                faces,
+                components: vec![PrimitiveComponentSelectionGeometry {
+                    edges: selection_edges(&faces),
+                    faces,
+                }],
             }],
             selected_slot: None,
             selected_primitives: Vec::new(),
@@ -922,8 +1045,7 @@ mod tests {
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 0,
                 slot_id: slot,
-                faces: Vec::new(),
-                edges: Vec::new(),
+                components: Vec::new(),
             }],
             selected_slot: None,
             selected_primitives: Vec::new(),
@@ -944,8 +1066,7 @@ mod tests {
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 3,
                 slot_id: slot,
-                faces: Vec::new(),
-                edges: Vec::new(),
+                components: Vec::new(),
             }],
             selected_slot: None,
             selected_primitives: Vec::new(),

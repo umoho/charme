@@ -17,6 +17,7 @@ bevy = { workspace = true, features = ["bevy_gizmos_render", "bevy_pbr"] }
 bevy_pmx.workspace = true
 charme-bevy = { path = "../charme-bevy" }
 charme-core = { path = "../charme-core" }
+charme-geometry = { path = "../charme-geometry" }
 zip.workspace = true
 
 [lints]

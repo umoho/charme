@@ -140,6 +140,9 @@ fn renders_resizes_and_loads_pmx() {
     assert_eq!(info.index_count(), 3);
     assert_eq!(info.material_slots().len(), 1);
     assert_eq!(info.material_slots()[0].name(), "Body");
+    assert_eq!(info.primitives().len(), 1);
+    assert_eq!(info.primitives()[0].components().len(), 1);
+    assert_eq!(info.primitives()[0].components()[0].triangle_count(), 1);
     let slot_id = info.material_slots()[0].id();
     assert!(info.warnings().is_empty());
 

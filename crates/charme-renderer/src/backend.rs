@@ -1504,30 +1504,32 @@ fn draw_selected_primitive_gizmo(
             || selected_primitives.is_empty()
                 && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
     }) {
-        for edge in &primitive.edges {
-            let draw_edge = if edge.faces.len() == 1 {
-                true
-            } else {
-                let mut has_front_face = false;
-                let mut has_back_face = false;
-                for &face_index in &edge.faces {
-                    let Some(face) = primitive.faces.get(face_index) else {
-                        continue;
-                    };
-                    if face.normal == Vec3::ZERO {
-                        continue;
+        for component in &primitive.components {
+            for edge in &component.edges {
+                let draw_edge = if edge.faces.len() == 1 {
+                    true
+                } else {
+                    let mut has_front_face = false;
+                    let mut has_back_face = false;
+                    for &face_index in &edge.faces {
+                        let Some(face) = component.faces.get(face_index) else {
+                            continue;
+                        };
+                        if face.normal == Vec3::ZERO {
+                            continue;
+                        }
+                        if face.normal.dot(camera_position - face.center) > 0.0 {
+                            has_front_face = true;
+                        } else {
+                            has_back_face = true;
+                        }
                     }
-                    if face.normal.dot(camera_position - face.center) > 0.0 {
-                        has_front_face = true;
-                    } else {
-                        has_back_face = true;
-                    }
-                }
-                has_front_face && has_back_face
-            };
+                    has_front_face && has_back_face
+                };
 
-            if draw_edge {
-                gizmos.line(edge.start, edge.end, SELECTION_GIZMO_COLOR);
+                if draw_edge {
+                    gizmos.line(edge.start, edge.end, SELECTION_GIZMO_COLOR);
+                }
             }
         }
     }

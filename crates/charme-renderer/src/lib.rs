@@ -22,5 +22,5 @@ pub use frame::Frame;
 pub use renderer::{
     PmxLoadProgress, PmxLoadStage, Renderer, RendererNotification, ViewportSelectionAction,
 };
-pub use scene::{PmxMaterialSlot, PmxPrimitiveInfo, PmxSceneInfo};
+pub use scene::{PmxMaterialSlot, PmxPrimitiveComponentInfo, PmxPrimitiveInfo, PmxSceneInfo};
 pub use source::{PmxLoadRequest, PmxSourceIdentity};
