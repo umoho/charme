@@ -96,6 +96,7 @@
 - [x] 将 StandardMaterial 预览替换为 `charme-bevy` 材质（首版固定参数 ABI）。
 - [x] 支持选择和高亮 material slot。
 - [x] 将 primitive shared-edge connectivity analysis 接入 selection geometry，并暴露 component summaries。
+- [x] 增加“按连通性拆分所选Primitive(s)”的临时预览，不写入文档。
 - [x] 支持从 UI 更新固定材质参数并立即重绘；纹理仍待接入。
 - [x] 增加材质球与材质缩略图 render session（首版加载后异步生成全部槽位）。
 - [ ] 增加灯光、背景和环境 preset。

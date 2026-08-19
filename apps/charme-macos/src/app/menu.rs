@@ -240,6 +240,17 @@ fn build_edit_menu() -> id {
         add_separator(menu);
         add_item(
             menu,
+            menu_item_with_target(
+                localization::text(Key::SplitSelectedPrimitives),
+                sel!(charmeSplitSelectedPrimitives:),
+                "",
+                0,
+                target,
+            ),
+        );
+        add_separator(menu);
+        add_item(
+            menu,
             menu_item(localization::text(Key::Cut), sel!(cut:), "x", COMMAND, nil),
         );
         add_item(
@@ -510,6 +521,10 @@ fn menu_target_class() -> &'static Class {
             menu_redo as extern "C" fn(&Object, Sel, id),
         );
         declaration.add_method(
+            sel!(charmeSplitSelectedPrimitives:),
+            menu_split_selected_primitives as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
             sel!(charmeSelectMaterialSlot:),
             menu_select_material_slot as extern "C" fn(&Object, Sel, id),
         );
@@ -561,6 +576,9 @@ extern "C" fn menu_undo(_: &Object, _: Sel, _: id) {
 }
 extern "C" fn menu_redo(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::Redo);
+}
+extern "C" fn menu_split_selected_primitives(_: &Object, _: Sel, _: id) {
+    App::<CharmeApp, Message>::dispatch_main(Message::SplitSelectedPrimitives);
 }
 extern "C" fn menu_select_material_slot(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::SelectionLevelChanged(
@@ -670,6 +688,15 @@ pub(super) fn update_menu_state(
         set_menu_item_state(file, 7, editor, editor);
         set_menu_item_state(edit, 0, true, can_undo);
         set_menu_item_state(edit, 1, true, can_redo);
+        set_menu_item_state(
+            edit,
+            3,
+            editor,
+            editor
+                && selection_level == SelectionLevel::Primitive
+                && has_scene
+                && has_primitive_selection,
+        );
         set_menu_item_state(select, 0, true, editor);
         let level_item: id = msg_send![select, itemAtIndex: 0usize];
         let levels: id = msg_send![level_item, submenu];

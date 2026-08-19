@@ -75,6 +75,8 @@
 "SaveProjectMenu" = "Save";
 "SaveAsProjectMenu" = "Save As…";
 "InspectShaderMenu" = "Inspect WGSL Shader…";
+"SplitSelectedPrimitives" = "Split Selected Primitive(s) by Connectivity";
+"ConnectivitySplitPreview" = "Split {count} primitive(s) by connectivity (preview only)";
 "EditMenu" = "Edit";
 "SelectMenu" = "Select";
 "SelectionLevelMenu" = "Selection Level";
@@ -105,6 +107,7 @@
 "ParameterRejected" = "Parameter {path} was rejected.";
 "SceneSummary" = "{name}\n\n{vertices} vertices · {indices} indices";
 "MaterialSlotListItem" = "{index}  {name}";
+"PrimitiveComponentListItem" = "Component {index}";
 "MoreMaterials" = "\n…and {count} more";
 "SourceSlot" = "PMX Slot";
 "DiffuseTexture" = "Diffuse";

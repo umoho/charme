@@ -374,6 +374,7 @@ pub(crate) struct EditorWindow {
     loaded_scene_request_id: RefCell<Option<u64>>,
     selection_level: Cell<SelectionLevel>,
     selected_primitives: RefCell<Vec<usize>>,
+    split_preview_primitives: RefCell<Vec<usize>>,
     active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
     inspector_body: Label,
@@ -543,6 +544,7 @@ impl EditorWindow {
             loaded_scene_request_id: RefCell::new(None),
             selection_level: Cell::new(SelectionLevel::MaterialSlot),
             selected_primitives: RefCell::new(Vec::new()),
+            split_preview_primitives: RefCell::new(Vec::new()),
             active_inspector_slot: RefCell::new(None),
             inspector_heading,
             inspector_body,
@@ -592,6 +594,7 @@ impl EditorWindow {
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
         self.active_material.replace(None);
         self.selected_primitives.borrow_mut().clear();
+        self.split_preview_primitives.borrow_mut().clear();
         self.parameter_controls.borrow_mut().clear();
         self.reflected_inspection.replace(None);
         self.current_image.replace(None);
@@ -676,6 +679,62 @@ impl EditorWindow {
             .collect::<Vec<_>>();
         drop(scene);
         self.select_primitives(&mut indices);
+    }
+
+    pub(crate) fn split_selected_primitives_by_connectivity(&self) {
+        if self.selection_level.get() != SelectionLevel::Primitive {
+            return;
+        }
+        let selected = self.selected_primitives.borrow().clone();
+        if selected.is_empty() {
+            return;
+        }
+        let newly_split = {
+            let scene = self.loaded_scene.borrow();
+            let Some(info) = scene.as_ref() else {
+                return;
+            };
+            let split_preview = self.split_preview_primitives.borrow();
+            info.primitives()
+                .iter()
+                .filter(|primitive| {
+                    selected.contains(&primitive.index())
+                        && primitive.components().len() > 1
+                        && !split_preview.contains(&primitive.index())
+                })
+                .map(|primitive| primitive.index())
+                .collect::<Vec<_>>()
+        };
+        if newly_split.is_empty() {
+            return;
+        }
+
+        let bridge_ref = self.bridge.borrow();
+        let Some(bridge) = bridge_ref.as_ref() else {
+            return;
+        };
+        bridge.split_selected_primitives_by_connectivity(selected.clone());
+        drop(bridge_ref);
+
+        let split_preview = {
+            let mut split_preview = self.split_preview_primitives.borrow_mut();
+            split_preview.extend(newly_split.iter().copied());
+            split_preview.sort_unstable();
+            split_preview.dedup();
+            split_preview.clone()
+        };
+        let scene = self.loaded_scene.borrow();
+        if let Some(info) = scene.as_ref() {
+            self.hierarchy
+                .set_scene_with_split_primitives(info, &split_preview);
+        }
+        drop(scene);
+        let mut selected = selected;
+        self.select_primitives(&mut selected);
+        self.status.set_text(localization::format(
+            Key::ConnectivitySplitPreview,
+            &[("count", &newly_split.len())],
+        ));
     }
 
     pub(crate) fn save_project(&self) -> Result<(), charme_application::EditorControllerError> {
@@ -1269,7 +1328,8 @@ impl EditorWindow {
                 }
             }
         }
-        self.hierarchy.set_scene(info);
+        self.split_preview_primitives.borrow_mut().clear();
+        self.hierarchy.set_scene_with_split_primitives(info, &[]);
         self.loaded_scene.replace(Some(info.clone()));
         self.loaded_scene_request_id.replace(Some(request_id));
         self.select_hierarchy_item(HierarchyItemId::Model);
@@ -1413,6 +1473,9 @@ impl EditorWindow {
             HierarchyItemId::Geometry => unreachable!("geometry is a non-selectable group"),
             HierarchyItemId::Primitive(_) => {
                 unreachable!("primitive selection is handled before the hierarchy match")
+            }
+            HierarchyItemId::Component { .. } => {
+                unreachable!("component rows are informational preview nodes")
             }
             HierarchyItemId::Materials => {
                 self.selected_primitives.borrow_mut().clear();

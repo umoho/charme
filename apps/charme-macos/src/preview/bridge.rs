@@ -36,6 +36,7 @@ enum Command {
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
     SetSelectedPrimitives(Vec<usize>),
+    SplitSelectedPrimitivesByConnectivity(Vec<usize>),
     PickViewport {
         x: f32,
         y: f32,
@@ -131,6 +132,16 @@ impl RenderBridge {
                             Ok(Command::SetSelectedPrimitives(primitive_indices)) => {
                                 if let Err(error) =
                                     renderer.set_selected_primitives(primitive_indices)
+                                {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::SplitSelectedPrimitivesByConnectivity(
+                                primitive_indices,
+                            )) => {
+                                if let Err(error) = renderer
+                                    .split_selected_primitives_by_connectivity(primitive_indices)
                                 {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
@@ -277,6 +288,14 @@ impl RenderBridge {
         let _ = self
             .commands
             .send(Command::SetSelectedPrimitives(primitive_indices));
+    }
+
+    pub(crate) fn split_selected_primitives_by_connectivity(&self, primitive_indices: Vec<usize>) {
+        let _ = self
+            .commands
+            .send(Command::SplitSelectedPrimitivesByConnectivity(
+                primitive_indices,
+            ));
     }
 
     pub(crate) fn pick_viewport(&self, x: f32, y: f32, selection_action: ViewportSelectionAction) {

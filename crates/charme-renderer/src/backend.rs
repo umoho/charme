@@ -61,6 +61,7 @@ pub(crate) enum Command {
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
     SetSelectedPrimitives(Vec<usize>),
+    SplitSelectedPrimitivesByConnectivity(Vec<usize>),
     PickViewport {
         x: f32,
         y: f32,
@@ -225,6 +226,9 @@ fn run(
                 Command::SetSelectedPrimitives(primitive_indices) => {
                     dirty |= backend.set_selected_primitives(primitive_indices);
                 }
+                Command::SplitSelectedPrimitivesByConnectivity(primitive_indices) => {
+                    dirty |= backend.split_selected_primitives_by_connectivity(primitive_indices);
+                }
                 Command::PickViewport {
                     x,
                     y,
@@ -287,6 +291,9 @@ fn run(
                 }
                 Ok(Command::SetSelectedPrimitives(primitive_indices)) => {
                     dirty |= backend.set_selected_primitives(primitive_indices);
+                }
+                Ok(Command::SplitSelectedPrimitivesByConnectivity(primitive_indices)) => {
+                    dirty |= backend.split_selected_primitives_by_connectivity(primitive_indices);
                 }
                 Ok(Command::PickViewport {
                     x,
@@ -578,6 +585,17 @@ impl Backend {
             // Gizmos are materialized in Bevy's Last schedule. Run one update
             // before scheduling the readback so the first frame after a
             // selection change contains the newly generated outline asset.
+            self.app.update();
+        }
+        changed
+    }
+
+    fn split_selected_primitives_by_connectivity(&mut self, primitive_indices: Vec<usize>) -> bool {
+        let Some(scene) = self.pmx_scene.as_mut() else {
+            return false;
+        };
+        let changed = scene.split_primitives_by_connectivity(&mut self.app, &primitive_indices);
+        if changed {
             self.app.update();
         }
         changed

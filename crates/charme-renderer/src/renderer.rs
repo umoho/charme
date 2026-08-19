@@ -329,6 +329,21 @@ impl Renderer {
         self.set_selected_primitives(primitive_index.into_iter().collect())
     }
 
+    /// Temporarily splits selected PMX primitives into connected component
+    /// entities in the renderer preview.
+    ///
+    /// This operation does not modify a Charme document and is therefore not
+    /// represented in dirty state or Undo/Redo history. An empty vector is a
+    /// no-op.
+    pub fn split_selected_primitives_by_connectivity(
+        &self,
+        primitive_indices: Vec<usize>,
+    ) -> Result<(), RendererError> {
+        self.send(Command::SplitSelectedPrimitivesByConnectivity(
+            primitive_indices,
+        ))
+    }
+
     /// Performs a non-blocking viewport pick.
     ///
     /// Coordinates are in physical output pixels with a top-left origin. The

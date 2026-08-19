@@ -11,6 +11,13 @@ pub(crate) enum HierarchyItemId {
     Geometry,
     /// Source-local primitive index within the loaded PMX model.
     Primitive(usize),
+    /// Temporary connected component under a split source primitive.
+    Component {
+        /// Source-local primitive index.
+        primitive_index: usize,
+        /// Zero-based component index within the primitive.
+        component_index: usize,
+    },
     Materials,
     MaterialSlot(MaterialSlotId),
 }
@@ -38,7 +45,10 @@ impl HierarchySnapshot {
         }
     }
 
-    pub(super) fn from_scene(info: &PmxSceneInfo) -> Self {
+    pub(super) fn from_scene_with_split_primitives(
+        info: &PmxSceneInfo,
+        split_primitives: &[usize],
+    ) -> Self {
         let mut nodes = vec![
             HierarchyNode {
                 id: HierarchyItemId::Scene,
@@ -72,6 +82,29 @@ impl HierarchySnapshot {
                 title: index,
                 children: Vec::new(),
             });
+            if split_primitives.contains(&primitive.index()) {
+                let children = primitive
+                    .components()
+                    .iter()
+                    .map(|component| {
+                        let component_node_index = nodes.len();
+                        let index = format!("{:02}", component.index());
+                        nodes.push(HierarchyNode {
+                            id: HierarchyItemId::Component {
+                                primitive_index: primitive.index(),
+                                component_index: component.index(),
+                            },
+                            title: localization::format(
+                                Key::PrimitiveComponentListItem,
+                                &[("index", &index)],
+                            ),
+                            children: Vec::new(),
+                        });
+                        component_node_index
+                    })
+                    .collect();
+                nodes[node_index].children = children;
+            }
         }
 
         for slot in info.material_slots() {

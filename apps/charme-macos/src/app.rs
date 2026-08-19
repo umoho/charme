@@ -60,6 +60,7 @@ pub(crate) enum Message {
     SelectAll,
     DeselectAll,
     InvertSelection,
+    SplitSelectedPrimitives,
     MenuContextChanged(MenuContext),
     SelectionLevelChanged(SelectionLevel),
     Orbit {
@@ -202,6 +203,7 @@ impl Dispatcher for CharmeApp {
             Message::SelectAll => self.select_all_primitives(),
             Message::DeselectAll => self.deselect_all(),
             Message::InvertSelection => self.invert_selection(),
+            Message::SplitSelectedPrimitives => self.split_selected_primitives(),
             Message::MenuContextChanged(context) => {
                 self.menu_context.set(context);
                 self.refresh_menus();
@@ -237,6 +239,8 @@ impl Dispatcher for CharmeApp {
                         }
                         ApplicationEvent::Renderer(notification) => {
                             window.handle_renderer_notification(notification);
+                            drop(editor);
+                            self.refresh_menus();
                         }
                         ApplicationEvent::Failed(error) => {
                             App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished {
@@ -264,6 +268,8 @@ impl Dispatcher for CharmeApp {
                     }
                     Message::HierarchySelectionChanged(items) => {
                         window.handle_hierarchy_selection_changed(items);
+                        drop(editor);
+                        self.refresh_menus();
                     }
                     Message::ChooseProject
                     | Message::OpenProject(_)
@@ -276,6 +282,7 @@ impl Dispatcher for CharmeApp {
                     | Message::SelectAll
                     | Message::DeselectAll
                     | Message::InvertSelection
+                    | Message::SplitSelectedPrimitives
                     | Message::MenuContextChanged(_)
                     | Message::SelectionLevelChanged(_)
                     | Message::ChoosePmx
@@ -442,6 +449,15 @@ impl CharmeApp {
         let editor = self.editor.borrow();
         if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
             window.invert_primitive_selection();
+        }
+        drop(editor);
+        self.refresh_menus();
+    }
+
+    fn split_selected_primitives(&self) {
+        let editor = self.editor.borrow();
+        if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
+            window.split_selected_primitives_by_connectivity();
         }
         drop(editor);
         self.refresh_menus();

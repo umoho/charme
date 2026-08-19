@@ -32,9 +32,16 @@ impl HierarchyView {
         self.native.set_snapshot(HierarchySnapshot::empty());
     }
 
-    pub(crate) fn set_scene(&self, info: &PmxSceneInfo) {
+    pub(crate) fn set_scene_with_split_primitives(
+        &self,
+        info: &PmxSceneInfo,
+        split_primitives: &[usize],
+    ) {
         self.native
-            .set_snapshot(HierarchySnapshot::from_scene(info));
+            .set_snapshot(HierarchySnapshot::from_scene_with_split_primitives(
+                info,
+                split_primitives,
+            ));
     }
 
     pub(crate) fn set_material_thumbnail(&self, slot_id: MaterialSlotId, image: &Image) {

@@ -75,6 +75,8 @@
 "SaveProjectMenu" = "保存";
 "SaveAsProjectMenu" = "另存为…";
 "InspectShaderMenu" = "检查WGSLShader…";
+"SplitSelectedPrimitives" = "按连通性拆分所选Primitive(s)";
+"ConnectivitySplitPreview" = "已按连通性临时拆分{count}个Primitive(s)";
 "EditMenu" = "编辑";
 "SelectMenu" = "选择";
 "SelectionLevelMenu" = "选择级别";
@@ -105,6 +107,7 @@
 "ParameterRejected" = "参数{path}被拒绝。";
 "SceneSummary" = "{name}\n\n{vertices}个顶点 · {indices}个索引";
 "MaterialSlotListItem" = "{index}  {name}";
+"PrimitiveComponentListItem" = "组件{index}";
 "MoreMaterials" = "\n…以及{count}个";
 "SourceSlot" = "PMX材质槽";
 "DiffuseTexture" = "漫反射";
