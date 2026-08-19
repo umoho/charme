@@ -4,17 +4,13 @@ use bevy::{
     asset::RenderAssetUsages,
     image::{CompressedImageFormats, ImageSampler, ImageType},
     math::Ray3d,
-    mesh::{Indices, PrimitiveTopology},
     prelude::{
-        AlphaMode, App, Assets, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
+        AlphaMode, App, Assets, ChildOf, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
         Resource, Transform, Vec3,
     },
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
-use bevy_pmx::{
-    Pmx, PmxImportContext, PmxMaterialRecord, PmxMeshGeometry, PmxResolvedPath, import_pmx,
-    parse_pmx,
-};
+use bevy_pmx::{Pmx, PmxImportContext, PmxMaterialRecord, PmxResolvedPath, import_pmx, parse_pmx};
 use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 use charme_core::MaterialSlotId;
 use charme_geometry::{PrimitiveRange, PrimitiveSplit, split_primitive};
@@ -546,9 +542,7 @@ pub(crate) struct SpawnedPmxScene {
     images: Vec<Handle<Image>>,
     meshes: Vec<Handle<Mesh>>,
     primitive_entities: Vec<Option<Entity>>,
-    primitive_material_indices: Vec<Option<usize>>,
-    split_geometry: PmxMeshGeometry,
-    primitive_ranges: Vec<PrimitiveRange>,
+    primitive_component_counts: Vec<usize>,
     pub(crate) materials: Vec<Handle<CharmeMaterial>>,
     pub(crate) material_slot_ids: Vec<MaterialSlotId>,
 }
@@ -578,64 +572,32 @@ impl SpawnedPmxScene {
             let Some(Some(original_entity)) = self.primitive_entities.get(primitive_index) else {
                 continue;
             };
-            let Some(material_index) = self
-                .primitive_material_indices
-                .get(primitive_index)
-                .and_then(Option::as_ref)
-                .copied()
+            let Some(&component_count) = self.primitive_component_counts.get(primitive_index)
             else {
                 continue;
             };
-            let Some(material) = self.materials.get(material_index).cloned() else {
+            if component_count <= 1 {
                 continue;
-            };
-            let Some(range) = self.primitive_ranges.get(primitive_index).copied() else {
-                continue;
-            };
-            let Some(component_indices) = split_primitive(
-                &self.split_geometry.indices,
-                self.split_geometry.positions.len(),
-                range,
-            )
-            .ok()
-            .filter(|split| split.components.len() > 1)
-            .map(|split| {
-                split
-                    .components
-                    .into_iter()
-                    .map(|component| component.indices)
-                    .collect::<Vec<_>>()
-            }) else {
-                continue;
-            };
-            let transform = app
-                .world()
-                .get::<Transform>(*original_entity)
-                .cloned()
-                .unwrap_or_default();
+            }
 
-            for (component_index, indices) in component_indices.into_iter().enumerate() {
-                let mesh = app
-                    .world_mut()
-                    .resource_mut::<Assets<Mesh>>()
-                    .add(mesh_for_indices(&self.split_geometry, &indices));
-                self.meshes.push(mesh.clone());
+            // Connected components have the same material and transform, so
+            // replacing one primitive draw with a draw per component produces
+            // identical pixels but can increase render work by hundreds of
+            // times. Keep the original batched mesh and represent the temporary
+            // split with lightweight child entities instead.
+            for component_index in 0..component_count {
                 let entity = app
                     .world_mut()
                     .spawn((
                         Name::new(format!(
                             "PMX Primitive {primitive_index} Component {component_index}"
                         )),
-                        Mesh3d(mesh),
-                        MeshMaterial3d(material.clone()),
-                        transform,
+                        ChildOf(*original_entity),
                     ))
                     .id();
                 self.entities.push(entity);
             }
 
-            let _ = app.world_mut().despawn(*original_entity);
-            self.entities.retain(|entity| entity != original_entity);
             self.primitive_entities[primitive_index] = None;
             changed = true;
         }
@@ -706,7 +668,6 @@ pub(crate) fn spawn_pmx_scene(
     let mut entities = Vec::new();
     let mut mesh_handles = Vec::new();
     let mut primitive_entities = vec![None; prepared.model.primitives().len()];
-    let mut primitive_material_indices = vec![None; prepared.model.primitives().len()];
     // Keep one material asset per PMX slot. Apart from avoiding duplicate
     // assets for slots used by multiple primitives, this gives the renderer a
     // stable slot-to-material mapping for material-ball previews.
@@ -733,7 +694,6 @@ pub(crate) fn spawn_pmx_scene(
                 .get(primitive.material_index),
             material_handles.get(primitive.material_index).cloned(),
         ) {
-            primitive_material_indices[primitive_index] = Some(primitive.material_index);
             let mesh = app
                 .world_mut()
                 .resource_mut::<Assets<Mesh>>()
@@ -788,13 +748,10 @@ pub(crate) fn spawn_pmx_scene(
         images: texture_handles,
         meshes: mesh_handles,
         primitive_entities,
-        primitive_material_indices,
-        split_geometry: prepared.model.geometry().clone(),
-        primitive_ranges: prepared
-            .model
-            .primitives()
+        primitive_component_counts: prepared
+            .primitive_splits
             .iter()
-            .map(|primitive| PrimitiveRange::new(primitive.index_start, primitive.index_count))
+            .map(|split| split.as_ref().map_or(0, |split| split.components.len()))
             .collect(),
         material_slot_ids: prepared
             .info
@@ -804,56 +761,6 @@ pub(crate) fn spawn_pmx_scene(
             .collect(),
         materials: material_handles,
     }
-}
-
-fn mesh_for_indices(geometry: &PmxMeshGeometry, indices: &[u32]) -> Mesh {
-    // A primitive can have hundreds or thousands of connected components. Do
-    // not clone the model's complete vertex buffers into every component mesh:
-    // that makes split cost grow by model_vertices * component_count and can
-    // exhaust memory before the renderer can process another command.
-    let mut local_indices = HashMap::<u32, u32>::with_capacity(indices.len());
-    let mut positions = Vec::with_capacity(indices.len());
-    let mut normals = Vec::with_capacity(indices.len());
-    let mut uvs = Vec::with_capacity(indices.len());
-    let mut remapped_indices = Vec::with_capacity(indices.len());
-
-    for &source_index in indices {
-        let local_index = if let Some(&local_index) = local_indices.get(&source_index) {
-            local_index
-        } else {
-            let source_index_usize = source_index as usize;
-            let position = geometry
-                .positions
-                .get(source_index_usize)
-                .expect("split component position index should already be validated");
-            let normal = geometry
-                .normals
-                .get(source_index_usize)
-                .expect("split component normal index should already be validated");
-            let uv = geometry
-                .uvs
-                .get(source_index_usize)
-                .expect("split component UV index should already be validated");
-            let local_index = u32::try_from(positions.len())
-                .expect("split component vertex count should fit in u32");
-            positions.push(*position);
-            normals.push(*normal);
-            uvs.push(*uv);
-            local_indices.insert(source_index, local_index);
-            local_index
-        };
-        remapped_indices.push(local_index);
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_indices(Indices::U32(remapped_indices));
-    mesh
 }
 
 fn scene_info(
@@ -1101,25 +1008,7 @@ fn placeholder_texture() -> Image {
 mod tests {
     use super::*;
     use bevy::math::{Dir3, Ray3d};
-    use bevy_pmx::PmxPrimitive;
-
-    #[test]
-    fn split_component_mesh_only_copies_referenced_vertices() {
-        let mut geometry = PmxMeshGeometry {
-            positions: (0..1_003).map(|index| [index as f32, 0.0, 0.0]).collect(),
-            normals: vec![[0.0, 1.0, 0.0]; 1_003],
-            uvs: vec![[0.0, 0.0]; 1_003],
-            indices: Vec::new(),
-        };
-        geometry.positions[1_000] = [0.0, 0.0, 0.0];
-        geometry.positions[1_001] = [1.0, 0.0, 0.0];
-        geometry.positions[1_002] = [0.0, 1.0, 0.0];
-
-        let mesh = mesh_for_indices(&geometry, &[1_002, 1_000, 1_001, 1_002, 1_001, 1_000]);
-
-        assert_eq!(mesh.count_vertices(), 3);
-        assert_eq!(mesh.indices(), Some(&Indices::U32(vec![0, 1, 2, 0, 2, 1])));
-    }
+    use bevy_pmx::{PmxMeshGeometry, PmxPrimitive};
 
     #[test]
     fn primitive_components_are_summarized_in_source_order() {

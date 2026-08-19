@@ -33,6 +33,7 @@ struct NativeState {
     snapshot: HierarchySnapshot,
     nodes: Vec<NativeNode>,
     thumbnails: Vec<Option<ObjcProperty>>,
+    suppress_selection_notifications: bool,
 }
 
 impl NativeState {
@@ -54,6 +55,7 @@ impl NativeState {
             snapshot,
             nodes,
             thumbnails,
+            suppress_selection_notifications: false,
         }
     }
 
@@ -200,6 +202,7 @@ impl NativeHierarchyView {
                 .collect::<Vec<_>>()
         };
         let outline = self.outline.get(|outline| outline as *const Object as id);
+        self.state.borrow_mut().suppress_selection_notifications = true;
         unsafe {
             let indexes: id = msg_send![class!(NSMutableIndexSet), new];
             for item in items {
@@ -218,20 +221,24 @@ impl NativeHierarchyView {
             }
             let _: () = msg_send![indexes, release];
         }
+        self.state.borrow_mut().suppress_selection_notifications = false;
     }
 
     pub(super) fn clear_selection(&self) {
         let outline = self.outline.get(|outline| outline as *const Object as id);
+        self.state.borrow_mut().suppress_selection_notifications = true;
         unsafe {
             let selected_row: NSInteger = msg_send![outline, selectedRow];
             if selected_row >= 0 {
                 let _: () = msg_send![outline, deselectAll: nil];
             }
         }
+        self.state.borrow_mut().suppress_selection_notifications = false;
     }
 
     fn reload_and_expand(&self) {
         let outline = self.outline.get(|outline| outline as *const Object as id);
+        self.state.borrow_mut().suppress_selection_notifications = true;
         unsafe {
             let _: () = msg_send![outline, deselectAll: nil];
             let _: () = msg_send![outline, reloadData];
@@ -253,6 +260,7 @@ impl NativeHierarchyView {
                 let _: () = msg_send![outline, expandItem: item as id];
             }
         }
+        self.state.borrow_mut().suppress_selection_notifications = false;
     }
 }
 
@@ -422,6 +430,12 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
 }
 
 extern "C" fn selection_did_change(delegate: &Object, _: Sel, notification: id) {
+    if with_state(delegate, true, |state| {
+        state.suppress_selection_notifications
+    }) {
+        return;
+    }
+
     let selection = catch_unwind(AssertUnwindSafe(|| unsafe {
         let outline: id = msg_send![notification, object];
         let indexes: id = msg_send![outline, selectedRowIndexes];

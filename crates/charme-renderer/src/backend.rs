@@ -150,6 +150,7 @@ fn run(
 
     let mut dirty = false;
     let mut in_flight = false;
+    let mut selection_needs_update = false;
 
     loop {
         while let Ok(completion) = completion_rx.try_recv() {
@@ -221,10 +222,14 @@ fn run(
                     dirty |= backend.set_material_parameter(slot_id, path, value);
                 }
                 Command::SetSelectedMaterialSlot(slot_id) => {
-                    dirty |= backend.set_selected_material_slot(slot_id);
+                    let changed = backend.set_selected_material_slot(slot_id);
+                    dirty |= changed;
+                    selection_needs_update |= changed;
                 }
                 Command::SetSelectedPrimitives(primitive_indices) => {
-                    dirty |= backend.set_selected_primitives(primitive_indices);
+                    let changed = backend.set_selected_primitives(primitive_indices);
+                    dirty |= changed;
+                    selection_needs_update |= changed;
                 }
                 Command::SplitSelectedPrimitivesByConnectivity(primitive_indices) => {
                     dirty |= backend.split_selected_primitives_by_connectivity(primitive_indices);
@@ -287,10 +292,14 @@ fn run(
                     dirty |= backend.set_material_parameter(slot_id, path, value);
                 }
                 Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
-                    dirty |= backend.set_selected_material_slot(slot_id);
+                    let changed = backend.set_selected_material_slot(slot_id);
+                    dirty |= changed;
+                    selection_needs_update |= changed;
                 }
                 Ok(Command::SetSelectedPrimitives(primitive_indices)) => {
-                    dirty |= backend.set_selected_primitives(primitive_indices);
+                    let changed = backend.set_selected_primitives(primitive_indices);
+                    dirty |= changed;
+                    selection_needs_update |= changed;
                 }
                 Ok(Command::SplitSelectedPrimitivesByConnectivity(primitive_indices)) => {
                     dirty |= backend.split_selected_primitives_by_connectivity(primitive_indices);
@@ -322,7 +331,15 @@ fn run(
 
         if dirty && backend.size.is_empty() {
             dirty = false;
+            selection_needs_update = false;
         } else if dirty && !in_flight {
+            if selection_needs_update {
+                // Gizmos are materialized in Bevy's Last schedule. Coalesce all
+                // queued selection changes into one update before scheduling
+                // the readback so its first frame includes the final outline.
+                backend.app.update();
+                selection_needs_update = false;
+            }
             backend.request_readback();
             dirty = false;
             in_flight = true;
@@ -340,6 +357,7 @@ fn run(
 
         if in_flight || backend.pending_thumbnails != 0 || backend.pending_inspector_preview {
             backend.app.update();
+            selection_needs_update = false;
         }
     }
 }
@@ -561,44 +579,24 @@ impl Backend {
     }
 
     fn set_selected_material_slot(&mut self, slot_id: Option<MaterialSlotId>) -> bool {
-        let changed = self
-            .app
+        self.app
             .world_mut()
             .resource_mut::<SelectionGeometry>()
-            .set_selected_slot(slot_id);
-        if changed {
-            // Gizmos are materialized in Bevy's Last schedule. Run one update
-            // before scheduling the readback so the first frame after a
-            // selection change contains the newly generated outline asset.
-            self.app.update();
-        }
-        changed
+            .set_selected_slot(slot_id)
     }
 
     fn set_selected_primitives(&mut self, primitive_indices: Vec<usize>) -> bool {
-        let changed = self
-            .app
+        self.app
             .world_mut()
             .resource_mut::<SelectionGeometry>()
-            .set_selected_primitives(primitive_indices);
-        if changed {
-            // Gizmos are materialized in Bevy's Last schedule. Run one update
-            // before scheduling the readback so the first frame after a
-            // selection change contains the newly generated outline asset.
-            self.app.update();
-        }
-        changed
+            .set_selected_primitives(primitive_indices)
     }
 
     fn split_selected_primitives_by_connectivity(&mut self, primitive_indices: Vec<usize>) -> bool {
         let Some(scene) = self.pmx_scene.as_mut() else {
             return false;
         };
-        let changed = scene.split_primitives_by_connectivity(&mut self.app, &primitive_indices);
-        if changed {
-            self.app.update();
-        }
-        changed
+        scene.split_primitives_by_connectivity(&mut self.app, &primitive_indices)
     }
 
     fn pick_viewport(
