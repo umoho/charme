@@ -9,7 +9,7 @@ use charme_application::ApplicationEvent;
 use charme_core::{MaterialSlotId, ParameterValue};
 use charme_renderer::{
     BackgroundColor, OutputSize, PixelFormat, PmxLoadRequest, Renderer, RendererConfig,
-    ViewportSelectionAction,
+    RendererNotification, ViewportSelectionAction,
 };
 
 use crate::{
@@ -179,9 +179,17 @@ impl RenderBridge {
                             break;
                         }
                     }
+                    let mut latest_progress = None;
                     loop {
                         match renderer.try_recv_notification() {
+                            Ok(Some(RendererNotification::PmxLoadProgress(progress))) => {
+                                latest_progress =
+                                    Some(RendererNotification::PmxLoadProgress(progress));
+                            }
                             Ok(Some(notification)) => {
+                                if let Some(progress) = latest_progress.take() {
+                                    dispatch_event(ApplicationEvent::Renderer(progress));
+                                }
                                 dispatch_event(ApplicationEvent::Renderer(notification));
                             }
                             Ok(None) => break,
@@ -190,6 +198,9 @@ impl RenderBridge {
                                 break 'running;
                             }
                         }
+                    }
+                    if let Some(progress) = latest_progress {
+                        dispatch_event(ApplicationEvent::Renderer(progress));
                     }
                     loop {
                         match renderer.try_recv_material_thumbnail() {
