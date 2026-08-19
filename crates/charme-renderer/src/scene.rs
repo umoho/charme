@@ -807,14 +807,52 @@ pub(crate) fn spawn_pmx_scene(
 }
 
 fn mesh_for_indices(geometry: &PmxMeshGeometry, indices: &[u32]) -> Mesh {
+    // A primitive can have hundreds or thousands of connected components. Do
+    // not clone the model's complete vertex buffers into every component mesh:
+    // that makes split cost grow by model_vertices * component_count and can
+    // exhaust memory before the renderer can process another command.
+    let mut local_indices = HashMap::<u32, u32>::with_capacity(indices.len());
+    let mut positions = Vec::with_capacity(indices.len());
+    let mut normals = Vec::with_capacity(indices.len());
+    let mut uvs = Vec::with_capacity(indices.len());
+    let mut remapped_indices = Vec::with_capacity(indices.len());
+
+    for &source_index in indices {
+        let local_index = if let Some(&local_index) = local_indices.get(&source_index) {
+            local_index
+        } else {
+            let source_index_usize = source_index as usize;
+            let position = geometry
+                .positions
+                .get(source_index_usize)
+                .expect("split component position index should already be validated");
+            let normal = geometry
+                .normals
+                .get(source_index_usize)
+                .expect("split component normal index should already be validated");
+            let uv = geometry
+                .uvs
+                .get(source_index_usize)
+                .expect("split component UV index should already be validated");
+            let local_index = u32::try_from(positions.len())
+                .expect("split component vertex count should fit in u32");
+            positions.push(*position);
+            normals.push(*normal);
+            uvs.push(*uv);
+            local_indices.insert(source_index, local_index);
+            local_index
+        };
+        remapped_indices.push(local_index);
+    }
+
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, geometry.positions.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, geometry.normals.clone());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, geometry.uvs.clone());
-    mesh.insert_indices(Indices::U32(indices.to_vec()));
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(remapped_indices));
     mesh
 }
 
@@ -1064,6 +1102,24 @@ mod tests {
     use super::*;
     use bevy::math::{Dir3, Ray3d};
     use bevy_pmx::PmxPrimitive;
+
+    #[test]
+    fn split_component_mesh_only_copies_referenced_vertices() {
+        let mut geometry = PmxMeshGeometry {
+            positions: (0..1_003).map(|index| [index as f32, 0.0, 0.0]).collect(),
+            normals: vec![[0.0, 1.0, 0.0]; 1_003],
+            uvs: vec![[0.0, 0.0]; 1_003],
+            indices: Vec::new(),
+        };
+        geometry.positions[1_000] = [0.0, 0.0, 0.0];
+        geometry.positions[1_001] = [1.0, 0.0, 0.0];
+        geometry.positions[1_002] = [0.0, 1.0, 0.0];
+
+        let mesh = mesh_for_indices(&geometry, &[1_002, 1_000, 1_001, 1_002, 1_001, 1_000]);
+
+        assert_eq!(mesh.count_vertices(), 3);
+        assert_eq!(mesh.indices(), Some(&Indices::U32(vec![0, 1, 2, 0, 2, 1])));
+    }
 
     #[test]
     fn primitive_components_are_summarized_in_source_order() {
