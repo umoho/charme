@@ -24,6 +24,8 @@
 "ProjectFallback" = "Charme Project";
 "Scene" = "Scene";
 "Hierarchy" = "Hierarchy";
+"Geometry" = "Geometry";
+"PrimitiveListItem" = "Primitive {index} · Material Slot: {material}";
 "EmptyScene" = "No character imported\n\nChoose “Import Model” to begin.";
 "Materials" = "Material Slots";
 "EmptyMaterials" = "No material slots";

@@ -53,6 +53,8 @@ localization_keys!(
     ProjectFallback,
     Scene,
     Hierarchy,
+    Geometry,
+    PrimitiveListItem,
     EmptyScene,
     Materials,
     EmptyMaterials,

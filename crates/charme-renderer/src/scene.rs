@@ -68,6 +68,31 @@ impl PmxMaterialSlot {
     }
 }
 
+/// UI-facing summary of one indexed PMX primitive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PmxPrimitiveInfo {
+    index: usize,
+    index_count: usize,
+    material_slot_id: Option<MaterialSlotId>,
+}
+
+impl PmxPrimitiveInfo {
+    /// Returns the primitive's zero-based index in the PMX model.
+    pub const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Returns the number of indices occupied by the primitive.
+    pub const fn index_count(&self) -> usize {
+        self.index_count
+    }
+
+    /// Returns the material slot assigned to the primitive, when valid.
+    pub const fn material_slot_id(&self) -> Option<MaterialSlotId> {
+        self.material_slot_id
+    }
+}
+
 /// UI-facing summary of a loaded PMX scene.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxSceneInfo {
@@ -76,6 +101,7 @@ pub struct PmxSceneInfo {
     vertex_count: usize,
     index_count: usize,
     material_slots: Vec<PmxMaterialSlot>,
+    primitives: Vec<PmxPrimitiveInfo>,
     warnings: Vec<String>,
 }
 
@@ -113,6 +139,11 @@ impl PmxSceneInfo {
     /// Returns material slots in PMX document order.
     pub fn material_slots(&self) -> &[PmxMaterialSlot] {
         &self.material_slots
+    }
+
+    /// Returns indexed primitives in PMX document order.
+    pub fn primitives(&self) -> &[PmxPrimitiveInfo] {
+        &self.primitives
     }
 
     /// Returns recoverable import warnings, such as missing textures.
@@ -648,6 +679,18 @@ fn scene_info(
                 texture_path(model, record.material.toon_texture_index)
             },
         })
+        .collect::<Vec<_>>();
+    let primitives = model
+        .primitives()
+        .iter()
+        .enumerate()
+        .map(|(index, primitive)| PmxPrimitiveInfo {
+            index,
+            index_count: primitive.index_count,
+            material_slot_id: material_slots
+                .get(primitive.material_index)
+                .map(PmxMaterialSlot::id),
+        })
         .collect();
 
     PmxSceneInfo {
@@ -656,6 +699,7 @@ fn scene_info(
         vertex_count: model.geometry().positions.len(),
         index_count: model.geometry().indices.len(),
         material_slots,
+        primitives,
         warnings,
     }
 }

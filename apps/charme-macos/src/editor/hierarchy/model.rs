@@ -3,11 +3,14 @@ use charme_renderer::PmxSceneInfo;
 
 use crate::localization::{self, Key};
 
-/// Stable semantic identity used when the native outline selection changes.
+/// Semantic identity used when the native outline selection changes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HierarchyItemId {
     Scene,
     Model,
+    Geometry,
+    /// Source-local primitive index within the loaded PMX model.
+    Primitive(usize),
     Materials,
     MaterialSlot(MaterialSlotId),
 }
@@ -45,7 +48,12 @@ impl HierarchySnapshot {
             HierarchyNode {
                 id: HierarchyItemId::Model,
                 title: info.name().to_owned(),
-                children: vec![2],
+                children: Vec::new(),
+            },
+            HierarchyNode {
+                id: HierarchyItemId::Geometry,
+                title: localization::text(Key::Geometry).to_owned(),
+                children: Vec::new(),
             },
             HierarchyNode {
                 id: HierarchyItemId::Materials,
@@ -53,10 +61,35 @@ impl HierarchySnapshot {
                 children: Vec::new(),
             },
         ];
+        nodes[1].children.extend([2, 3]);
+
+        for primitive in info.primitives() {
+            let node_index = nodes.len();
+            nodes[2].children.push(node_index);
+            let index = format!("{:03}", primitive.index());
+            let material = primitive
+                .material_slot_id()
+                .and_then(|slot_id| {
+                    info.material_slots()
+                        .iter()
+                        .find(|slot| slot.id() == slot_id)
+                })
+                .map(|slot| slot.name())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(localization::text(Key::MissingValue));
+            nodes.push(HierarchyNode {
+                id: HierarchyItemId::Primitive(primitive.index()),
+                title: localization::format(
+                    Key::PrimitiveListItem,
+                    &[("index", &index), ("material", &material)],
+                ),
+                children: Vec::new(),
+            });
+        }
 
         for slot in info.material_slots() {
             let node_index = nodes.len();
-            nodes[2].children.push(node_index);
+            nodes[3].children.push(node_index);
             let index = format!("{:02}", slot.index());
             nodes.push(HierarchyNode {
                 id: HierarchyItemId::MaterialSlot(slot.id()),

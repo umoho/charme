@@ -15,7 +15,7 @@ use cacao::{
 };
 use charme_core::MaterialSlotId;
 
-use super::model::HierarchySnapshot;
+use super::model::{HierarchyItemId, HierarchySnapshot};
 use crate::app::{Message, dispatch};
 
 const STATE_IVAR: &str = "charmeHierarchyState";
@@ -334,6 +334,20 @@ extern "C" fn is_item_expandable(delegate: &Object, _: Sel, _: id, item: id) -> 
     })
 }
 
+extern "C" fn should_select_item(delegate: &Object, _: Sel, _: id, item: id) -> BOOL {
+    with_state(delegate, NO, |state| {
+        let selectable = NativeState::node_index(item)
+            .and_then(|index| state.snapshot.nodes.get(index))
+            .is_some_and(|node| {
+                !matches!(
+                    node.id,
+                    HierarchyItemId::Geometry | HierarchyItemId::Primitive(_)
+                )
+            });
+        if selectable { YES } else { NO }
+    })
+}
+
 extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item: id) -> id {
     let item_data = with_state(delegate, None, |state| {
         NativeState::node_index(item)
@@ -423,6 +437,10 @@ fn hierarchy_delegate_class() -> &'static Class {
         declaration.add_method(
             sel!(outlineView:isItemExpandable:),
             is_item_expandable as extern "C" fn(&Object, Sel, id, id) -> BOOL,
+        );
+        declaration.add_method(
+            sel!(outlineView:shouldSelectItem:),
+            should_select_item as extern "C" fn(&Object, Sel, id, id) -> BOOL,
         );
         declaration.add_method(
             sel!(outlineView:viewForTableColumn:item:),

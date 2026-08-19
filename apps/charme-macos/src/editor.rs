@@ -1239,6 +1239,15 @@ impl EditorWindow {
             return;
         };
 
+        // Geometry rows are currently structural only. Primitive selection will
+        // be wired after the hierarchy can expose a real geometry selection.
+        if matches!(
+            item,
+            HierarchyItemId::Geometry | HierarchyItemId::Primitive(_)
+        ) {
+            return;
+        }
+
         self.hierarchy.select_item(item);
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
@@ -1344,6 +1353,9 @@ impl EditorWindow {
                     slot.sphere_texture().unwrap_or(missing).to_owned(),
                     slot.toon_texture().unwrap_or(missing).to_owned(),
                 ]);
+            }
+            HierarchyItemId::Geometry | HierarchyItemId::Primitive(_) => {
+                unreachable!("structural geometry rows are handled before selection")
             }
         }
     }

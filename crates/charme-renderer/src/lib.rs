@@ -20,5 +20,5 @@ pub use config::{BackgroundColor, OutputSize, PixelFormat, RendererConfig};
 pub use error::RendererError;
 pub use frame::Frame;
 pub use renderer::{PmxLoadProgress, PmxLoadStage, Renderer, RendererNotification};
-pub use scene::{PmxMaterialSlot, PmxSceneInfo};
+pub use scene::{PmxMaterialSlot, PmxPrimitiveInfo, PmxSceneInfo};
 pub use source::{PmxLoadRequest, PmxSourceIdentity};
