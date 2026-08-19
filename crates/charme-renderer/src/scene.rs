@@ -174,7 +174,7 @@ pub(crate) struct SelectionGeometry {
     pub(crate) scene_source: Option<PmxSourceIdentity>,
     pub(crate) primitives: Vec<PrimitiveSelectionGeometry>,
     selected_slot: Option<MaterialSlotId>,
-    selected_primitive: Option<usize>,
+    selected_primitives: Vec<usize>,
 }
 
 pub(crate) struct PrimitiveSelectionGeometry {
@@ -264,7 +264,7 @@ impl SelectionGeometry {
             scene_source: Some(prepared.info.source_identity().clone()),
             primitives,
             selected_slot: None,
-            selected_primitive: None,
+            selected_primitives: Vec::new(),
         }
     }
 
@@ -274,20 +274,26 @@ impl SelectionGeometry {
                 .iter()
                 .any(|primitive| primitive.slot_id == *slot_id)
         });
-        let changed = self.selected_slot != selected_slot || self.selected_primitive.is_some();
+        let changed = self.selected_slot != selected_slot || !self.selected_primitives.is_empty();
         self.selected_slot = selected_slot;
-        self.selected_primitive = None;
+        self.selected_primitives.clear();
         changed
     }
 
-    pub(crate) fn set_selected_primitive(&mut self, primitive_index: Option<usize>) -> bool {
-        let selected_primitive = primitive_index.filter(|primitive_index| {
-            self.primitives
-                .iter()
-                .any(|primitive| primitive.primitive_index == *primitive_index)
-        });
-        let changed = self.selected_primitive != selected_primitive || self.selected_slot.is_some();
-        self.selected_primitive = selected_primitive;
+    pub(crate) fn set_selected_primitives(&mut self, primitive_indices: Vec<usize>) -> bool {
+        let mut selected_primitives = primitive_indices
+            .into_iter()
+            .filter(|primitive_index| {
+                self.primitives
+                    .iter()
+                    .any(|primitive| primitive.primitive_index == *primitive_index)
+            })
+            .collect::<Vec<_>>();
+        selected_primitives.sort_unstable();
+        selected_primitives.dedup();
+        let changed =
+            self.selected_primitives != selected_primitives || self.selected_slot.is_some();
+        self.selected_primitives = selected_primitives;
         self.selected_slot = None;
         changed
     }
@@ -296,8 +302,8 @@ impl SelectionGeometry {
         self.selected_slot
     }
 
-    pub(crate) fn selected_primitive(&self) -> Option<usize> {
-        self.selected_primitive
+    pub(crate) fn selected_primitives(&self) -> &[usize] {
+        &self.selected_primitives
     }
 
     pub(crate) fn pick(&self, ray: Ray3d) -> Option<PickedPrimitive> {
@@ -895,7 +901,7 @@ mod tests {
                 faces,
             }],
             selected_slot: None,
-            selected_primitive: None,
+            selected_primitives: Vec::new(),
         };
         let ray = Ray3d::new(
             Vec3::new(0.0, 0.0, 2.0),
@@ -920,7 +926,7 @@ mod tests {
                 edges: Vec::new(),
             }],
             selected_slot: None,
-            selected_primitive: None,
+            selected_primitives: Vec::new(),
         };
         let mut geometry = geometry;
 
@@ -942,16 +948,16 @@ mod tests {
                 edges: Vec::new(),
             }],
             selected_slot: None,
-            selected_primitive: None,
+            selected_primitives: Vec::new(),
         };
 
-        assert!(!geometry.set_selected_primitive(Some(9)));
-        assert_eq!(geometry.selected_primitive(), None);
+        assert!(!geometry.set_selected_primitives(vec![9]));
+        assert!(geometry.selected_primitives().is_empty());
         assert!(geometry.set_selected_slot(Some(slot)));
-        assert!(geometry.set_selected_primitive(Some(3)));
-        assert_eq!(geometry.selected_primitive(), Some(3));
+        assert!(geometry.set_selected_primitives(vec![3, 3]));
+        assert_eq!(geometry.selected_primitives(), [3]);
         assert_eq!(geometry.selected_slot(), None);
-        assert!(geometry.set_selected_primitive(None));
-        assert_eq!(geometry.selected_primitive(), None);
+        assert!(geometry.set_selected_primitives(Vec::new()));
+        assert!(geometry.selected_primitives().is_empty());
     }
 }

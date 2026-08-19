@@ -7,7 +7,7 @@ use std::{
 use cacao::objc::declare::ClassDecl;
 use cacao::objc::runtime::{Class, Object, Sel};
 use cacao::{
-    foundation::{BOOL, NO, NSArray, NSInteger, NSString, YES, id, nil},
+    foundation::{BOOL, NO, NSArray, NSInteger, NSString, NSUInteger, YES, id, nil},
     image::Image,
     objc::{class, msg_send, sel, sel_impl},
     utils::properties::ObjcProperty,
@@ -167,33 +167,49 @@ impl NativeHierarchyView {
         }
     }
 
-    pub(super) fn select_item(&self, item_id: super::model::HierarchyItemId) {
-        let item = {
-            let state = self.state.borrow();
-            state
-                .snapshot
-                .nodes
-                .iter()
-                .enumerate()
-                .find(|(_, node)| node.id == item_id)
-                .map(|(index, _)| state.item(index))
-        };
-        let Some(item) = item else {
-            return;
-        };
-
+    pub(super) fn set_allows_multiple_selection(&self, allows: bool) {
         let outline = self.outline.get(|outline| outline as *const Object as id);
         unsafe {
-            let row: NSInteger = msg_send![outline, rowForItem: item];
-            let selected_row: NSInteger = msg_send![outline, selectedRow];
-            if row < 0 || row == selected_row {
-                return;
+            let _: () = msg_send![outline,
+                setAllowsMultipleSelection: if allows { YES } else { NO }
+            ];
+        }
+    }
+
+    pub(super) fn select_item(&self, item_id: super::model::HierarchyItemId) {
+        self.select_items(std::slice::from_ref(&item_id));
+    }
+
+    pub(super) fn select_items(&self, item_ids: &[super::model::HierarchyItemId]) {
+        let items = {
+            let state = self.state.borrow();
+            item_ids
+                .iter()
+                .filter_map(|item_id| {
+                    state
+                        .snapshot
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .find(|(_, node)| node.id == *item_id)
+                        .map(|(index, _)| state.item(index))
+                })
+                .collect::<Vec<_>>()
+        };
+        let outline = self.outline.get(|outline| outline as *const Object as id);
+        unsafe {
+            let indexes: id = msg_send![class!(NSMutableIndexSet), new];
+            for item in items {
+                let row: NSInteger = msg_send![outline, rowForItem: item];
+                if row >= 0 {
+                    let _: () = msg_send![indexes, addIndex: row as NSUInteger];
+                }
             }
-            let indexes: id = msg_send![class!(NSIndexSet), indexSetWithIndex: row as usize];
             let _: () = msg_send![outline,
                 selectRowIndexes: indexes
                 byExtendingSelection: NO
             ];
+            let _: () = msg_send![indexes, release];
         }
     }
 
@@ -396,16 +412,25 @@ extern "C" fn view_for_item(delegate: &Object, _: Sel, outline: id, _: id, item:
 extern "C" fn selection_did_change(delegate: &Object, _: Sel, notification: id) {
     let selection = catch_unwind(AssertUnwindSafe(|| unsafe {
         let outline: id = msg_send![notification, object];
-        let row: NSInteger = msg_send![outline, selectedRow];
-        if row < 0 {
+        let indexes: id = msg_send![outline, selectedRowIndexes];
+        if indexes.is_null() {
             return None;
         }
-        let item: id = msg_send![outline, itemAtRow: row];
-        with_state(delegate, None, |state| {
-            NativeState::node_index(item)
-                .and_then(|index| state.snapshot.nodes.get(index))
-                .map(|node| node.id)
-        })
+
+        let mut row: NSUInteger = msg_send![indexes, firstIndex];
+        let mut selections = Vec::new();
+        while row != NSUInteger::MAX {
+            let item: id = msg_send![outline, itemAtRow: row as NSInteger];
+            if let Some(selection) = with_state(delegate, None, |state| {
+                NativeState::node_index(item)
+                    .and_then(|index| state.snapshot.nodes.get(index))
+                    .map(|node| node.id)
+            }) {
+                selections.push(selection);
+            }
+            row = msg_send![indexes, indexGreaterThanIndex: row];
+        }
+        Some(selections)
     }))
     .ok()
     .flatten();

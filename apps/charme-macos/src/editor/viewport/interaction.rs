@@ -13,6 +13,7 @@ use cacao::{
     utils::properties::ObjcProperty,
     view::View,
 };
+use charme_renderer::ViewportSelectionAction;
 use core_graphics::geometry::CGPoint;
 
 use crate::app::{CharmeApp, Message};
@@ -25,6 +26,7 @@ const SCROLL_ORBIT_SENSITIVITY: f32 = 0.0035;
 const SCROLL_ZOOM_SENSITIVITY: f32 = 0.035;
 const MAGNIFICATION_ZOOM_SENSITIVITY: f32 = 1.0;
 const CONTROL_MODIFIER_FLAG: NSUInteger = 1 << 18;
+const OPTION_MODIFIER_FLAG: NSUInteger = 1 << 19;
 const COMMAND_MODIFIER_FLAG: NSUInteger = 1 << 20;
 
 pub(crate) struct OrbitInputView {
@@ -146,9 +148,18 @@ extern "C" fn mouse_up(view: &Object, _: Sel, event: id) {
 
     let window_point: CGPoint = unsafe { msg_send![event, locationInWindow] };
     let point: CGPoint = unsafe { msg_send![view, convertPoint: window_point fromView: nil] };
+    let modifier_flags: NSUInteger = unsafe { msg_send![event, modifierFlags] };
+    let selection_action = if modifier_flags & OPTION_MODIFIER_FLAG != 0 {
+        ViewportSelectionAction::Remove
+    } else if modifier_flags & COMMAND_MODIFIER_FLAG != 0 {
+        ViewportSelectionAction::Toggle
+    } else {
+        ViewportSelectionAction::Replace
+    };
     App::<CharmeApp, Message>::dispatch_main(Message::ViewportClicked {
         x: point.x,
         y: point.y,
+        selection_action,
     });
 }
 

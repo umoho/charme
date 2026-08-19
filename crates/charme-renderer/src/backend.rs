@@ -37,7 +37,7 @@ use charme_core::{MaterialSlotId, ParameterValue};
 use crate::{
     BackgroundColor, Frame, OutputSize, PixelFormat, PmxLoadProgress, PmxLoadRequest, PmxLoadStage,
     PmxSourceIdentity, RendererConfig, RendererError,
-    renderer::RendererNotification,
+    renderer::{RendererNotification, ViewportSelectionAction},
     scene::{
         PreparedPmxScene, SelectionGeometry, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene,
     },
@@ -60,10 +60,11 @@ pub(crate) enum Command {
         value: ParameterValue,
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
-    SetSelectedPrimitive(Option<usize>),
+    SetSelectedPrimitives(Vec<usize>),
     PickViewport {
         x: f32,
         y: f32,
+        selection_action: ViewportSelectionAction,
     },
     RequestMaterialInspectorPreview {
         slot_id: Option<MaterialSlotId>,
@@ -221,11 +222,15 @@ fn run(
                 Command::SetSelectedMaterialSlot(slot_id) => {
                     dirty |= backend.set_selected_material_slot(slot_id);
                 }
-                Command::SetSelectedPrimitive(primitive_index) => {
-                    dirty |= backend.set_selected_primitive(primitive_index);
+                Command::SetSelectedPrimitives(primitive_indices) => {
+                    dirty |= backend.set_selected_primitives(primitive_indices);
                 }
-                Command::PickViewport { x, y } => {
-                    backend.pick_viewport(x, y)?;
+                Command::PickViewport {
+                    x,
+                    y,
+                    selection_action,
+                } => {
+                    backend.pick_viewport(x, y, selection_action)?;
                 }
                 Command::Redraw => dirty = true,
                 Command::RequestMaterialInspectorPreview {
@@ -280,11 +285,15 @@ fn run(
                 Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
                     dirty |= backend.set_selected_material_slot(slot_id);
                 }
-                Ok(Command::SetSelectedPrimitive(primitive_index)) => {
-                    dirty |= backend.set_selected_primitive(primitive_index);
+                Ok(Command::SetSelectedPrimitives(primitive_indices)) => {
+                    dirty |= backend.set_selected_primitives(primitive_indices);
                 }
-                Ok(Command::PickViewport { x, y }) => {
-                    backend.pick_viewport(x, y)?;
+                Ok(Command::PickViewport {
+                    x,
+                    y,
+                    selection_action,
+                }) => {
+                    backend.pick_viewport(x, y, selection_action)?;
                 }
                 Ok(Command::Redraw) => dirty = true,
                 Ok(Command::RequestMaterialInspectorPreview {
@@ -559,12 +568,12 @@ impl Backend {
         changed
     }
 
-    fn set_selected_primitive(&mut self, primitive_index: Option<usize>) -> bool {
+    fn set_selected_primitives(&mut self, primitive_indices: Vec<usize>) -> bool {
         let changed = self
             .app
             .world_mut()
             .resource_mut::<SelectionGeometry>()
-            .set_selected_primitive(primitive_index);
+            .set_selected_primitives(primitive_indices);
         if changed {
             // Gizmos are materialized in Bevy's Last schedule. Run one update
             // before scheduling the readback so the first frame after a
@@ -574,7 +583,12 @@ impl Backend {
         changed
     }
 
-    fn pick_viewport(&mut self, x: f32, y: f32) -> Result<(), RendererError> {
+    fn pick_viewport(
+        &mut self,
+        x: f32,
+        y: f32,
+        selection_action: ViewportSelectionAction,
+    ) -> Result<(), RendererError> {
         // Camera projection and GlobalTransform are updated by Bevy during the
         // app update. Picking can arrive immediately after a resize or orbit
         // command, so make sure the ray uses the latest camera state.
@@ -606,6 +620,7 @@ impl Backend {
                     source,
                     slot_id: picked.map(|picked| picked.slot_id),
                     primitive_index: picked.map(|picked| picked.primitive_index),
+                    selection_action,
                 },
             ))
             .map_err(|_| RendererError::WorkerStopped)
@@ -1479,14 +1494,14 @@ fn draw_selected_primitive_gizmo(
         return;
     };
     let camera_position = camera_transform.translation();
-    let selected_primitive = selection.selected_primitive();
+    let selected_primitives = selection.selected_primitives();
     let selected_slot = selection.selected_slot();
-    if selected_primitive.is_none() && selected_slot.is_none() {
+    if selected_primitives.is_empty() && selected_slot.is_none() {
         return;
     }
     for primitive in selection.primitives.iter().filter(|primitive| {
-        selected_primitive.is_some_and(|index| primitive.primitive_index == index)
-            || selected_primitive.is_none()
+        selected_primitives.contains(&primitive.primitive_index)
+            || selected_primitives.is_empty()
                 && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
     }) {
         for edge in &primitive.edges {

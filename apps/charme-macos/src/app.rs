@@ -18,7 +18,7 @@ use cacao::{
 };
 use charme_application::{ApplicationEvent, EditorAction, EditorController};
 use charme_core::ParameterValue;
-use charme_renderer::{PmxLoadProgress, PmxSourceIdentity};
+use charme_renderer::{PmxLoadProgress, PmxSourceIdentity, ViewportSelectionAction};
 use url::Url;
 
 #[cfg(feature = "debug-ui")]
@@ -57,6 +57,9 @@ pub(crate) enum Message {
     SaveProjectAs(PathBuf),
     Undo,
     Redo,
+    SelectAll,
+    DeselectAll,
+    InvertSelection,
     MenuContextChanged(MenuContext),
     SelectionLevelChanged(SelectionLevel),
     Orbit {
@@ -70,6 +73,7 @@ pub(crate) enum Message {
     ViewportClicked {
         x: f64,
         y: f64,
+        selection_action: ViewportSelectionAction,
     },
     Zoom(f32),
     ChoosePmx,
@@ -95,7 +99,7 @@ pub(crate) enum Message {
         key: String,
         value: ParameterValue,
     },
-    HierarchySelectionChanged(HierarchyItemId),
+    HierarchySelectionChanged(Vec<HierarchyItemId>),
     Application(ApplicationEvent),
 }
 
@@ -152,6 +156,8 @@ impl AppDelegate for CharmeApp {
             false,
             false,
             SelectionLevel::MaterialSlot,
+            false,
+            false,
         );
         #[cfg(feature = "debug-ui")]
         if !matches!(self.debug_state, DebugState::Startup) {
@@ -193,6 +199,9 @@ impl Dispatcher for CharmeApp {
             Message::SaveProjectAs(path) => self.save_project_as(path),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
+            Message::SelectAll => self.select_all_primitives(),
+            Message::DeselectAll => self.deselect_all(),
+            Message::InvertSelection => self.invert_selection(),
             Message::MenuContextChanged(context) => {
                 self.menu_context.set(context);
                 self.refresh_menus();
@@ -241,7 +250,11 @@ impl Dispatcher for CharmeApp {
                     Message::NavigationGizmoMouseDown { x, y } => {
                         window.navigation_gizmo_mouse_down(x, y);
                     }
-                    Message::ViewportClicked { x, y } => window.viewport_clicked(x, y),
+                    Message::ViewportClicked {
+                        x,
+                        y,
+                        selection_action,
+                    } => window.viewport_clicked(x, y, selection_action),
                     Message::Zoom(delta) => window.zoom(delta),
                     Message::LoadPmx(path) => window.import_pmx(path),
                     Message::ChooseShader => window.choose_shader(),
@@ -249,8 +262,8 @@ impl Dispatcher for CharmeApp {
                     Message::ParameterChanged { key, value } => {
                         window.set_parameter_value(&key, value);
                     }
-                    Message::HierarchySelectionChanged(item) => {
-                        window.select_hierarchy_item(item);
+                    Message::HierarchySelectionChanged(items) => {
+                        window.handle_hierarchy_selection_changed(items);
                     }
                     Message::ChooseProject
                     | Message::OpenProject(_)
@@ -260,6 +273,9 @@ impl Dispatcher for CharmeApp {
                     | Message::SaveProjectAs(_)
                     | Message::Undo
                     | Message::Redo
+                    | Message::SelectAll
+                    | Message::DeselectAll
+                    | Message::InvertSelection
                     | Message::MenuContextChanged(_)
                     | Message::SelectionLevelChanged(_)
                     | Message::ChoosePmx
@@ -374,14 +390,20 @@ impl CharmeApp {
 
     fn refresh_menus(&self) {
         let editor = self.editor.borrow();
-        let (dirty, can_undo, can_redo) = editor
+        let (dirty, can_undo, can_redo, has_scene, has_primitive_selection) = editor
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
             .map(|window| {
                 let view_model = window.controller.borrow().view_model();
-                (view_model.dirty, view_model.can_undo, view_model.can_redo)
+                (
+                    view_model.dirty,
+                    view_model.can_undo,
+                    view_model.can_redo,
+                    window.has_loaded_scene(),
+                    window.has_primitive_selection(),
+                )
             })
-            .unwrap_or((false, false, false));
+            .unwrap_or((false, false, false, false, false));
         let selection_level = editor
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
@@ -393,7 +415,36 @@ impl CharmeApp {
             can_undo,
             can_redo,
             selection_level,
+            has_scene,
+            has_primitive_selection,
         );
+    }
+
+    fn select_all_primitives(&self) {
+        let editor = self.editor.borrow();
+        if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
+            window.select_all_primitives();
+        }
+        drop(editor);
+        self.refresh_menus();
+    }
+
+    fn deselect_all(&self) {
+        let editor = self.editor.borrow();
+        if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
+            window.deselect_all_selection();
+        }
+        drop(editor);
+        self.refresh_menus();
+    }
+
+    fn invert_selection(&self) {
+        let editor = self.editor.borrow();
+        if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
+            window.invert_primitive_selection();
+        }
+        drop(editor);
+        self.refresh_menus();
     }
 
     fn set_selection_level(&self, level: SelectionLevel) {

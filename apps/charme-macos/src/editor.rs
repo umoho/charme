@@ -42,7 +42,7 @@ use charme_core::{
 };
 use charme_renderer::{
     Frame, OutputSize, PmxLoadProgress, PmxLoadRequest, PmxSceneInfo, PmxSourceIdentity,
-    RendererNotification, discover_pmx_archive_entries,
+    RendererNotification, ViewportSelectionAction, discover_pmx_archive_entries,
 };
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 
@@ -373,7 +373,7 @@ pub(crate) struct EditorWindow {
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
     loaded_scene_request_id: RefCell<Option<u64>>,
     selection_level: Cell<SelectionLevel>,
-    selected_primitive: RefCell<Option<usize>>,
+    selected_primitives: RefCell<Vec<usize>>,
     active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
     inspector_body: Label,
@@ -542,7 +542,7 @@ impl EditorWindow {
             loaded_scene: RefCell::new(None),
             loaded_scene_request_id: RefCell::new(None),
             selection_level: Cell::new(SelectionLevel::MaterialSlot),
-            selected_primitive: RefCell::new(None),
+            selected_primitives: RefCell::new(Vec::new()),
             active_inspector_slot: RefCell::new(None),
             inspector_heading,
             inspector_body,
@@ -587,10 +587,11 @@ impl EditorWindow {
 
     fn reset_project_views(&self) {
         self.selection_level.set(SelectionLevel::MaterialSlot);
+        self.hierarchy.set_allows_multiple_selection(false);
         self.pmx_loads.borrow_mut().invalidate();
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
         self.active_material.replace(None);
-        self.selected_primitive.replace(None);
+        self.selected_primitives.borrow_mut().clear();
         self.parameter_controls.borrow_mut().clear();
         self.reflected_inspection.replace(None);
         self.current_image.replace(None);
@@ -620,7 +621,61 @@ impl EditorWindow {
     }
 
     pub(crate) fn set_selection_level(&self, level: SelectionLevel) {
+        if self.selection_level.get() == level {
+            return;
+        }
         self.selection_level.set(level);
+        self.hierarchy
+            .set_allows_multiple_selection(level == SelectionLevel::Primitive);
+        self.clear_selection();
+    }
+
+    pub(crate) fn has_loaded_scene(&self) -> bool {
+        self.loaded_scene.borrow().is_some()
+    }
+
+    pub(crate) fn has_primitive_selection(&self) -> bool {
+        !self.selected_primitives.borrow().is_empty()
+    }
+
+    pub(crate) fn select_all_primitives(&self) {
+        if self.selection_level.get() != SelectionLevel::Primitive {
+            return;
+        }
+        let scene = self.loaded_scene.borrow();
+        let Some(info) = scene.as_ref() else {
+            return;
+        };
+        let mut indices = info
+            .primitives()
+            .iter()
+            .map(|primitive| primitive.index())
+            .collect::<Vec<_>>();
+        drop(scene);
+        self.select_primitives(&mut indices);
+    }
+
+    pub(crate) fn deselect_all_selection(&self) {
+        self.clear_selection();
+    }
+
+    pub(crate) fn invert_primitive_selection(&self) {
+        if self.selection_level.get() != SelectionLevel::Primitive {
+            return;
+        }
+        let scene = self.loaded_scene.borrow();
+        let Some(info) = scene.as_ref() else {
+            return;
+        };
+        let selected = self.selected_primitives.borrow().clone();
+        let mut indices = info
+            .primitives()
+            .iter()
+            .map(|primitive| primitive.index())
+            .filter(|index| !selected.contains(index))
+            .collect::<Vec<_>>();
+        drop(scene);
+        self.select_primitives(&mut indices);
     }
 
     pub(crate) fn save_project(&self) -> Result<(), charme_application::EditorControllerError> {
@@ -1102,20 +1157,13 @@ impl EditorWindow {
                 source,
                 slot_id,
                 primitive_index,
+                selection_action,
             } => {
                 let scene_matches = self.scene_matches(request_id, &source);
                 if !scene_matches {
                     return;
                 }
-                let selected = match self.selection_level.get() {
-                    SelectionLevel::MaterialSlot => slot_id.map(HierarchyItemId::MaterialSlot),
-                    SelectionLevel::Primitive => primitive_index.map(HierarchyItemId::Primitive),
-                };
-                if let Some(selected) = selected {
-                    self.select_hierarchy_item(selected);
-                } else {
-                    self.clear_selection();
-                }
+                self.handle_viewport_selection(selection_action, slot_id, primitive_index);
             }
             RendererNotification::MaterialParameterRejected { path, message } => {
                 tracing::warn!(
@@ -1129,6 +1177,67 @@ impl EditorWindow {
                 ));
             }
             _ => {}
+        }
+    }
+
+    fn handle_viewport_selection(
+        &self,
+        selection_action: ViewportSelectionAction,
+        slot_id: Option<MaterialSlotId>,
+        primitive_index: Option<usize>,
+    ) {
+        match self.selection_level.get() {
+            SelectionLevel::MaterialSlot => {
+                let Some(slot_id) = slot_id else {
+                    if selection_action == ViewportSelectionAction::Replace {
+                        self.clear_selection();
+                    }
+                    return;
+                };
+                let current_slot = *self.active_inspector_slot.borrow();
+                match selection_action {
+                    ViewportSelectionAction::Replace => {
+                        self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
+                    }
+                    ViewportSelectionAction::Toggle => {
+                        if current_slot == Some(slot_id) {
+                            self.clear_selection();
+                        } else {
+                            self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
+                        }
+                    }
+                    ViewportSelectionAction::Remove => {
+                        if current_slot == Some(slot_id) {
+                            self.clear_selection();
+                        }
+                    }
+                }
+            }
+            SelectionLevel::Primitive => {
+                let Some(primitive_index) = primitive_index else {
+                    if selection_action == ViewportSelectionAction::Replace {
+                        self.clear_selection();
+                    }
+                    return;
+                };
+                let mut selected = self.selected_primitives.borrow().clone();
+                match selection_action {
+                    ViewportSelectionAction::Replace => selected = vec![primitive_index],
+                    ViewportSelectionAction::Toggle => {
+                        if let Some(position) =
+                            selected.iter().position(|index| *index == primitive_index)
+                        {
+                            selected.remove(position);
+                        } else {
+                            selected.push(primitive_index);
+                        }
+                    }
+                    ViewportSelectionAction::Remove => {
+                        selected.retain(|index| *index != primitive_index);
+                    }
+                }
+                self.select_primitives(&mut selected);
+            }
         }
     }
 
@@ -1247,7 +1356,29 @@ impl EditorWindow {
         let _ = self.dispatch_action(EditorAction::Command(EditorCommand::Transaction(commands)));
     }
 
+    pub(crate) fn handle_hierarchy_selection_changed(&self, items: Vec<HierarchyItemId>) {
+        let mut primitive_indices = items
+            .iter()
+            .filter_map(|item| match item {
+                HierarchyItemId::Primitive(index) => Some(*index),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !primitive_indices.is_empty() {
+            self.select_primitives(&mut primitive_indices);
+        } else if let Some(item) = items.into_iter().next() {
+            self.select_hierarchy_item(item);
+        } else {
+            self.clear_selection();
+        }
+    }
+
     pub(crate) fn select_hierarchy_item(&self, item: HierarchyItemId) {
+        if let HierarchyItemId::Primitive(primitive_index) = item {
+            self.select_primitives(&mut vec![primitive_index]);
+            return;
+        }
+
         let scene = self.loaded_scene.borrow();
         let Some(info) = scene.as_ref() else {
             self.set_source_visible(false);
@@ -1260,7 +1391,7 @@ impl EditorWindow {
         self.hierarchy.select_item(item);
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
-                self.selected_primitive.replace(None);
+                self.selected_primitives.borrow_mut().clear();
                 self.active_inspector_slot.replace(None);
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
                     bridge.set_selected_material_slot(None);
@@ -1280,34 +1411,11 @@ impl EditorWindow {
                 ));
             }
             HierarchyItemId::Geometry => unreachable!("geometry is a non-selectable group"),
-            HierarchyItemId::Primitive(primitive_index) => {
-                let Some(primitive) = info
-                    .primitives()
-                    .iter()
-                    .find(|primitive| primitive.index() == primitive_index)
-                else {
-                    return;
-                };
-                self.selected_primitive.replace(Some(primitive_index));
-                self.active_inspector_slot.replace(None);
-                self.active_material.replace(None);
-                self.parameter_controls.borrow_mut().clear();
-                self.set_inspector_preview_visible(false);
-                self.set_source_visible(false);
-                self.set_parameter_section_visible(false);
-                if let Some(bridge) = self.bridge.borrow().as_ref() {
-                    bridge.set_selected_primitive(Some(primitive_index));
-                }
-                self.inspector_heading
-                    .set_text(localization::text(Key::Geometry));
-                let index = format!("{:02}", primitive.index());
-                self.inspector_body.set_text(localization::format(
-                    Key::PrimitiveSummary,
-                    &[("index", &index), ("indices", &primitive.index_count())],
-                ));
+            HierarchyItemId::Primitive(_) => {
+                unreachable!("primitive selection is handled before the hierarchy match")
             }
             HierarchyItemId::Materials => {
-                self.selected_primitive.replace(None);
+                self.selected_primitives.borrow_mut().clear();
                 self.active_inspector_slot.replace(None);
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
                     bridge.set_selected_material_slot(None);
@@ -1334,7 +1442,7 @@ impl EditorWindow {
                 else {
                     return;
                 };
-                self.selected_primitive.replace(None);
+                self.selected_primitives.borrow_mut().clear();
                 self.active_inspector_slot.replace(Some(slot_id));
                 let context = MaterialSelectionContext::resolve(
                     self.controller.borrow().document(),
@@ -1393,6 +1501,69 @@ impl EditorWindow {
                     slot.toon_texture().unwrap_or(missing).to_owned(),
                 ]);
             }
+        }
+    }
+
+    fn select_primitives(&self, primitive_indices: &mut Vec<usize>) {
+        primitive_indices.sort_unstable();
+        primitive_indices.dedup();
+
+        let scene = self.loaded_scene.borrow();
+        let Some(info) = scene.as_ref() else {
+            drop(scene);
+            self.clear_selection();
+            return;
+        };
+        let valid = primitive_indices
+            .iter()
+            .copied()
+            .filter(|index| {
+                info.primitives()
+                    .iter()
+                    .any(|primitive| primitive.index() == *index)
+            })
+            .collect::<Vec<_>>();
+        if valid.is_empty() {
+            drop(scene);
+            self.clear_selection();
+            return;
+        }
+
+        let items = valid
+            .iter()
+            .copied()
+            .map(HierarchyItemId::Primitive)
+            .collect::<Vec<_>>();
+        self.hierarchy.select_items(&items);
+        self.selected_primitives.replace(valid.clone());
+        self.active_inspector_slot.replace(None);
+        self.active_material.replace(None);
+        self.parameter_controls.borrow_mut().clear();
+        self.set_inspector_preview_visible(false);
+        self.set_source_visible(false);
+        self.set_parameter_section_visible(false);
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            bridge.set_selected_primitives(valid.clone());
+        }
+        self.inspector_heading
+            .set_text(localization::text(Key::Geometry));
+        if valid.len() == 1 {
+            let index = valid[0];
+            let primitive = info
+                .primitives()
+                .iter()
+                .find(|primitive| primitive.index() == index)
+                .expect("validated primitive index should be present");
+            let index = format!("{:02}", primitive.index());
+            self.inspector_body.set_text(localization::format(
+                Key::PrimitiveSummary,
+                &[("index", &index), ("indices", &primitive.index_count())],
+            ));
+        } else {
+            self.inspector_body.set_text(localization::format(
+                Key::PrimitivesSelected,
+                &[("count", &valid.len())],
+            ));
         }
     }
 
@@ -1466,7 +1637,12 @@ impl EditorWindow {
         }
     }
 
-    pub(crate) fn viewport_clicked(&self, x: f64, y: f64) {
+    pub(crate) fn viewport_clicked(
+        &self,
+        x: f64,
+        y: f64,
+        selection_action: ViewportSelectionAction,
+    ) {
         let (width, height, scale) = self.viewport.objc.get(|view| unsafe {
             let bounds: CGRect = msg_send![view, bounds];
             let window: id = msg_send![view, window];
@@ -1480,12 +1656,12 @@ impl EditorWindow {
         let x = x.clamp(0.0, width) * scale;
         let y = (height - y).clamp(0.0, height) * scale;
         if let Some(bridge) = self.bridge.borrow().as_ref() {
-            bridge.pick_viewport(x as f32, y as f32);
+            bridge.pick_viewport(x as f32, y as f32, selection_action);
         }
     }
 
     pub(crate) fn clear_selection(&self) {
-        self.selected_primitive.replace(None);
+        self.selected_primitives.borrow_mut().clear();
         self.active_inspector_slot.replace(None);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();

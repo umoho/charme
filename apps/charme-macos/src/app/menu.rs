@@ -279,11 +279,43 @@ fn build_edit_menu() -> id {
 
 fn build_select_menu() -> id {
     let menu = new_menu(localization::text(Key::SelectMenu));
+    let target = menu_target();
     add_item(
         menu,
         submenu_item(
             localization::text(Key::SelectionLevelMenu),
             build_selection_level_menu(),
+        ),
+    );
+    add_separator(menu);
+    add_item(
+        menu,
+        menu_item_with_target(
+            localization::text(Key::SelectAll),
+            sel!(charmeSelectAll:),
+            "",
+            0,
+            target,
+        ),
+    );
+    add_item(
+        menu,
+        menu_item_with_target(
+            localization::text(Key::DeselectAll),
+            sel!(charmeDeselectAll:),
+            "",
+            0,
+            target,
+        ),
+    );
+    add_item(
+        menu,
+        menu_item_with_target(
+            localization::text(Key::InvertSelection),
+            sel!(charmeInvertSelection:),
+            "",
+            0,
+            target,
         ),
     );
     menu
@@ -486,6 +518,18 @@ fn menu_target_class() -> &'static Class {
             menu_select_primitive as extern "C" fn(&Object, Sel, id),
         );
         declaration.add_method(
+            sel!(charmeSelectAll:),
+            menu_select_all as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(charmeDeselectAll:),
+            menu_deselect_all as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(charmeInvertSelection:),
+            menu_invert_selection as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
             sel!(menuOpenRecent:),
             menu_open_recent as extern "C" fn(&Object, Sel, id),
         );
@@ -527,6 +571,15 @@ extern "C" fn menu_select_primitive(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::SelectionLevelChanged(
         SelectionLevel::Primitive,
     ));
+}
+extern "C" fn menu_select_all(_: &Object, _: Sel, _: id) {
+    App::<CharmeApp, Message>::dispatch_main(Message::SelectAll);
+}
+extern "C" fn menu_deselect_all(_: &Object, _: Sel, _: id) {
+    App::<CharmeApp, Message>::dispatch_main(Message::DeselectAll);
+}
+extern "C" fn menu_invert_selection(_: &Object, _: Sel, _: id) {
+    App::<CharmeApp, Message>::dispatch_main(Message::InvertSelection);
 }
 extern "C" fn menu_noop(_: &Object, _: Sel, _: id) {}
 extern "C" fn menu_open_recent(_: &Object, _: Sel, sender: id) {
@@ -595,6 +648,8 @@ pub(super) fn update_menu_state(
     can_undo: bool,
     can_redo: bool,
     selection_level: SelectionLevel,
+    has_scene: bool,
+    has_primitive_selection: bool,
 ) {
     unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
@@ -630,6 +685,15 @@ pub(super) fn update_menu_state(
             1,
             editor && selection_level == SelectionLevel::Primitive,
         );
+        let primitive_selection = editor && selection_level == SelectionLevel::Primitive;
+        set_menu_item_state(select, 2, true, primitive_selection && has_scene);
+        set_menu_item_state(
+            select,
+            3,
+            true,
+            primitive_selection && has_primitive_selection,
+        );
+        set_menu_item_state(select, 4, true, primitive_selection && has_scene);
     }
 }
 

@@ -94,6 +94,18 @@ impl PmxLoadProgress {
     }
 }
 
+/// The selection operation associated with a viewport click.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ViewportSelectionAction {
+    /// Replace the current selection with the picked target.
+    #[default]
+    Replace,
+    /// Toggle the picked target in the current selection.
+    Toggle,
+    /// Remove the picked target from the current selection.
+    Remove,
+}
+
 /// A non-frame event produced by the renderer worker.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -159,6 +171,8 @@ pub enum RendererNotification {
         slot_id: Option<MaterialSlotId>,
         /// The zero-based PMX primitive hit by the viewport ray, if any.
         primitive_index: Option<usize>,
+        /// The selection operation supplied with the viewport request.
+        selection_action: ViewportSelectionAction,
     },
 }
 
@@ -294,15 +308,25 @@ impl Renderer {
         self.send(Command::SetSelectedMaterialSlot(slot_id))
     }
 
+    /// Sets indexed primitives to receive the selection outline.
+    ///
+    /// An empty vector clears the renderer-side outline. Selection is transient
+    /// viewport state and is not written to the editor document.
+    pub fn set_selected_primitives(
+        &self,
+        primitive_indices: Vec<usize>,
+    ) -> Result<(), RendererError> {
+        self.send(Command::SetSelectedPrimitives(primitive_indices))
+    }
+
     /// Sets one indexed primitive to receive the selection outline.
     ///
-    /// Passing `None` clears the renderer-side outline. Selection is transient
-    /// viewport state and is not written to the editor document.
+    /// Passing `None` clears the renderer-side outline.
     pub fn set_selected_primitive(
         &self,
         primitive_index: Option<usize>,
     ) -> Result<(), RendererError> {
-        self.send(Command::SetSelectedPrimitive(primitive_index))
+        self.set_selected_primitives(primitive_index.into_iter().collect())
     }
 
     /// Performs a non-blocking viewport pick.
@@ -310,8 +334,22 @@ impl Renderer {
     /// Coordinates are in physical output pixels with a top-left origin. The
     /// result is delivered through [`RendererNotification::ViewportPickResult`].
     pub fn pick_viewport(&self, x: f32, y: f32) -> Result<(), RendererError> {
+        self.pick_viewport_with_action(x, y, ViewportSelectionAction::Replace)
+    }
+
+    /// Performs a non-blocking viewport pick with an explicit selection operation.
+    pub fn pick_viewport_with_action(
+        &self,
+        x: f32,
+        y: f32,
+        selection_action: ViewportSelectionAction,
+    ) -> Result<(), RendererError> {
         validate_viewport_position(x, y)?;
-        self.send(Command::PickViewport { x, y })
+        self.send(Command::PickViewport {
+            x,
+            y,
+            selection_action,
+        })
     }
 
     /// Enqueues a PMX loading request.

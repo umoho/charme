@@ -41,8 +41,16 @@ impl HierarchyView {
         self.native.set_thumbnail(slot_id, image);
     }
 
+    pub(crate) fn set_allows_multiple_selection(&self, allows: bool) {
+        self.native.set_allows_multiple_selection(allows);
+    }
+
     pub(crate) fn select_item(&self, item: HierarchyItemId) {
         self.native.select_item(item);
+    }
+
+    pub(crate) fn select_items(&self, items: &[HierarchyItemId]) {
+        self.native.select_items(items);
     }
 
     pub(crate) fn clear_selection(&self) {

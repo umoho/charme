@@ -9,6 +9,7 @@ use charme_application::ApplicationEvent;
 use charme_core::{MaterialSlotId, ParameterValue};
 use charme_renderer::{
     BackgroundColor, OutputSize, PixelFormat, PmxLoadRequest, Renderer, RendererConfig,
+    ViewportSelectionAction,
 };
 
 use crate::{
@@ -34,10 +35,11 @@ enum Command {
         value: ParameterValue,
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
-    SetSelectedPrimitive(Option<usize>),
+    SetSelectedPrimitives(Vec<usize>),
     PickViewport {
         x: f32,
         y: f32,
+        selection_action: ViewportSelectionAction,
     },
     RequestMaterialInspectorPreview {
         slot_id: MaterialSlotId,
@@ -126,15 +128,22 @@ impl RenderBridge {
                                     break 'running;
                                 }
                             }
-                            Ok(Command::SetSelectedPrimitive(primitive_index)) => {
-                                if let Err(error) = renderer.set_selected_primitive(primitive_index)
+                            Ok(Command::SetSelectedPrimitives(primitive_indices)) => {
+                                if let Err(error) =
+                                    renderer.set_selected_primitives(primitive_indices)
                                 {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
                             }
-                            Ok(Command::PickViewport { x, y }) => {
-                                if let Err(error) = renderer.pick_viewport(x, y) {
+                            Ok(Command::PickViewport {
+                                x,
+                                y,
+                                selection_action,
+                            }) => {
+                                if let Err(error) =
+                                    renderer.pick_viewport_with_action(x, y, selection_action)
+                                {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -253,14 +262,18 @@ impl RenderBridge {
             .send(Command::SetSelectedMaterialSlot(slot_id));
     }
 
-    pub(crate) fn set_selected_primitive(&self, primitive_index: Option<usize>) {
+    pub(crate) fn set_selected_primitives(&self, primitive_indices: Vec<usize>) {
         let _ = self
             .commands
-            .send(Command::SetSelectedPrimitive(primitive_index));
+            .send(Command::SetSelectedPrimitives(primitive_indices));
     }
 
-    pub(crate) fn pick_viewport(&self, x: f32, y: f32) {
-        let _ = self.commands.send(Command::PickViewport { x, y });
+    pub(crate) fn pick_viewport(&self, x: f32, y: f32, selection_action: ViewportSelectionAction) {
+        let _ = self.commands.send(Command::PickViewport {
+            x,
+            y,
+            selection_action,
+        });
     }
 
     pub(crate) fn request_redraw(&self) {
