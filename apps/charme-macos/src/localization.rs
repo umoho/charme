@@ -54,7 +54,6 @@ localization_keys!(
     Scene,
     Hierarchy,
     Geometry,
-    PrimitiveListItem,
     EmptyScene,
     Materials,
     EmptyMaterials,

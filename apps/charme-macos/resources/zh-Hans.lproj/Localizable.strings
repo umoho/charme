@@ -25,7 +25,6 @@
 "Scene" = "场景";
 "Hierarchy" = "层级";
 "Geometry" = "几何";
-"PrimitiveListItem" = "Primitive {index} · 材质槽：{material}";
 "EmptyScene" = "尚未导入角色\n\n请点击“导入模型”开始。";
 "Materials" = "材质槽";
 "EmptyMaterials" = "暂无材质槽";
