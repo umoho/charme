@@ -73,6 +73,10 @@
 "SaveAsProjectMenu" = "另存为…";
 "InspectShaderMenu" = "检查WGSLShader…";
 "EditMenu" = "编辑";
+"SelectMenu" = "选择";
+"SelectionLevelMenu" = "选择级别";
+"MaterialSlotSelectionLevel" = "材质槽";
+"PrimitiveSelectionLevel" = "Primitive";
 "ViewMenu" = "视图";
 "WindowMenu" = "窗口";
 "BringAllToFront" = "将所有窗口置于最前";

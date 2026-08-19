@@ -42,6 +42,12 @@ pub(crate) enum MenuContext {
     Editor,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelectionLevel {
+    MaterialSlot,
+    Primitive,
+}
+
 pub(crate) enum Message {
     ChooseProject,
     OpenProject(PathBuf),
@@ -52,6 +58,7 @@ pub(crate) enum Message {
     Undo,
     Redo,
     MenuContextChanged(MenuContext),
+    SelectionLevelChanged(SelectionLevel),
     Orbit {
         delta_x: f32,
         delta_y: f32,
@@ -139,7 +146,13 @@ impl AppDelegate for CharmeApp {
     fn did_finish_launching(&self) {
         install_native_menus();
         set_application_menu_name();
-        update_menu_state(MenuContext::Startup, false, false, false);
+        update_menu_state(
+            MenuContext::Startup,
+            false,
+            false,
+            false,
+            SelectionLevel::MaterialSlot,
+        );
         #[cfg(feature = "debug-ui")]
         if !matches!(self.debug_state, DebugState::Startup) {
             self.ensure_editor();
@@ -184,6 +197,7 @@ impl Dispatcher for CharmeApp {
                 self.menu_context.set(context);
                 self.refresh_menus();
             }
+            Message::SelectionLevelChanged(level) => self.set_selection_level(level),
             Message::ChoosePmx => self.choose_pmx(),
             Message::PmxLoadStarted { request_id, source } => {
                 self.show_pmx_loading(request_id, source)
@@ -195,13 +209,8 @@ impl Dispatcher for CharmeApp {
                 source,
                 message,
             } => self.show_pmx_load_error(request_id, source, message),
-            Message::Application(ApplicationEvent::EditorUpdated(update)) => {
-                update_menu_state(
-                    self.menu_context.get(),
-                    update.view_model.dirty,
-                    update.view_model.can_undo,
-                    update.view_model.can_redo,
-                );
+            Message::Application(ApplicationEvent::EditorUpdated(_)) => {
+                self.refresh_menus();
             }
             other => {
                 let editor = self.editor.borrow();
@@ -252,6 +261,7 @@ impl Dispatcher for CharmeApp {
                     | Message::Undo
                     | Message::Redo
                     | Message::MenuContextChanged(_)
+                    | Message::SelectionLevelChanged(_)
                     | Message::ChoosePmx
                     | Message::PmxLoadStarted { .. }
                     | Message::PmxLoadProgress { .. }
@@ -372,7 +382,27 @@ impl CharmeApp {
                 (view_model.dirty, view_model.can_undo, view_model.can_redo)
             })
             .unwrap_or((false, false, false));
-        update_menu_state(self.menu_context.get(), dirty, can_undo, can_redo);
+        let selection_level = editor
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+            .map(|window| window.selection_level())
+            .unwrap_or(SelectionLevel::MaterialSlot);
+        update_menu_state(
+            self.menu_context.get(),
+            dirty,
+            can_undo,
+            can_redo,
+            selection_level,
+        );
+    }
+
+    fn set_selection_level(&self, level: SelectionLevel) {
+        let editor = self.editor.borrow();
+        if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
+            window.set_selection_level(level);
+        }
+        drop(editor);
+        self.refresh_menus();
     }
 
     fn choose_pmx(&self) {

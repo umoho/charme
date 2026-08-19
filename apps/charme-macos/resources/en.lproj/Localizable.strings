@@ -73,6 +73,10 @@
 "SaveAsProjectMenu" = "Save As…";
 "InspectShaderMenu" = "Inspect WGSL Shader…";
 "EditMenu" = "Edit";
+"SelectMenu" = "Select";
+"SelectionLevelMenu" = "Selection Level";
+"MaterialSlotSelectionLevel" = "Material Slot";
+"PrimitiveSelectionLevel" = "Primitive";
 "ViewMenu" = "View";
 "WindowMenu" = "Window";
 "BringAllToFront" = "Bring All to Front";

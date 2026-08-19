@@ -6,7 +6,7 @@ mod viewport;
 pub(crate) use hierarchy::HierarchyItemId;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -56,7 +56,7 @@ use self::{
     viewport::{NavigationGizmo, OrbitInputView, make_image},
 };
 use crate::{
-    app::{CharmeApp, MenuContext, Message},
+    app::{CharmeApp, MenuContext, Message, SelectionLevel},
     localization::{self, Key},
     preview::RenderBridge,
     shader_inspection::{self, ShaderInspection},
@@ -372,6 +372,7 @@ pub(crate) struct EditorWindow {
     pmx_loads: RefCell<PmxLoadTracker>,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
     loaded_scene_request_id: RefCell<Option<u64>>,
+    selection_level: Cell<SelectionLevel>,
     selected_primitive: RefCell<Option<usize>>,
     active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
@@ -540,6 +541,7 @@ impl EditorWindow {
             pmx_loads: RefCell::new(PmxLoadTracker::default()),
             loaded_scene: RefCell::new(None),
             loaded_scene_request_id: RefCell::new(None),
+            selection_level: Cell::new(SelectionLevel::MaterialSlot),
             selected_primitive: RefCell::new(None),
             active_inspector_slot: RefCell::new(None),
             inspector_heading,
@@ -584,6 +586,7 @@ impl EditorWindow {
     }
 
     fn reset_project_views(&self) {
+        self.selection_level.set(SelectionLevel::MaterialSlot);
         self.pmx_loads.borrow_mut().invalidate();
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
         self.active_material.replace(None);
@@ -610,6 +613,14 @@ impl EditorWindow {
             .set_text(localization::text(Key::Inspector));
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
+    }
+
+    pub(crate) fn selection_level(&self) -> SelectionLevel {
+        self.selection_level.get()
+    }
+
+    pub(crate) fn set_selection_level(&self, level: SelectionLevel) {
+        self.selection_level.set(level);
     }
 
     pub(crate) fn save_project(&self) -> Result<(), charme_application::EditorControllerError> {
@@ -1090,14 +1101,18 @@ impl EditorWindow {
                 request_id,
                 source,
                 slot_id,
-                ..
+                primitive_index,
             } => {
                 let scene_matches = self.scene_matches(request_id, &source);
                 if !scene_matches {
                     return;
                 }
-                if let Some(slot_id) = slot_id {
-                    self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
+                let selected = match self.selection_level.get() {
+                    SelectionLevel::MaterialSlot => slot_id.map(HierarchyItemId::MaterialSlot),
+                    SelectionLevel::Primitive => primitive_index.map(HierarchyItemId::Primitive),
+                };
+                if let Some(selected) = selected {
+                    self.select_hierarchy_item(selected);
                 } else {
                     self.clear_selection();
                 }

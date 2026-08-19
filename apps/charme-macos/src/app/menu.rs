@@ -8,7 +8,7 @@ use cacao::{
     objc::{class, msg_send, sel, sel_impl},
 };
 
-use super::{CharmeApp, MenuContext, Message, recent_projects};
+use super::{CharmeApp, MenuContext, Message, SelectionLevel, recent_projects};
 use crate::localization::{self, Key};
 
 pub(super) fn install_native_menus() {
@@ -28,6 +28,11 @@ pub(super) fn install_native_menus() {
             main_menu,
             localization::text(Key::EditMenu),
             build_edit_menu(),
+        );
+        add_submenu(
+            main_menu,
+            localization::text(Key::SelectMenu),
+            build_select_menu(),
         );
         add_submenu(
             main_menu,
@@ -272,6 +277,44 @@ fn build_edit_menu() -> id {
     }
 }
 
+fn build_select_menu() -> id {
+    let menu = new_menu(localization::text(Key::SelectMenu));
+    add_item(
+        menu,
+        submenu_item(
+            localization::text(Key::SelectionLevelMenu),
+            build_selection_level_menu(),
+        ),
+    );
+    menu
+}
+
+fn build_selection_level_menu() -> id {
+    let menu = new_menu(localization::text(Key::SelectionLevelMenu));
+    let target = menu_target();
+    add_item(
+        menu,
+        menu_item_with_target(
+            localization::text(Key::MaterialSlotSelectionLevel),
+            sel!(charmeSelectMaterialSlot:),
+            "",
+            0,
+            target,
+        ),
+    );
+    add_item(
+        menu,
+        menu_item_with_target(
+            localization::text(Key::PrimitiveSelectionLevel),
+            sel!(charmeSelectPrimitive:),
+            "",
+            0,
+            target,
+        ),
+    );
+    menu
+}
+
 fn build_view_menu() -> id {
     let menu = new_menu(localization::text(Key::ViewMenu));
     // The canonical title and selector let AppKit replace this item with its
@@ -435,6 +478,14 @@ fn menu_target_class() -> &'static Class {
             menu_redo as extern "C" fn(&Object, Sel, id),
         );
         declaration.add_method(
+            sel!(charmeSelectMaterialSlot:),
+            menu_select_material_slot as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
+            sel!(charmeSelectPrimitive:),
+            menu_select_primitive as extern "C" fn(&Object, Sel, id),
+        );
+        declaration.add_method(
             sel!(menuOpenRecent:),
             menu_open_recent as extern "C" fn(&Object, Sel, id),
         );
@@ -466,6 +517,16 @@ extern "C" fn menu_undo(_: &Object, _: Sel, _: id) {
 }
 extern "C" fn menu_redo(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::Redo);
+}
+extern "C" fn menu_select_material_slot(_: &Object, _: Sel, _: id) {
+    App::<CharmeApp, Message>::dispatch_main(Message::SelectionLevelChanged(
+        SelectionLevel::MaterialSlot,
+    ));
+}
+extern "C" fn menu_select_primitive(_: &Object, _: Sel, _: id) {
+    App::<CharmeApp, Message>::dispatch_main(Message::SelectionLevelChanged(
+        SelectionLevel::Primitive,
+    ));
 }
 extern "C" fn menu_noop(_: &Object, _: Sel, _: id) {}
 extern "C" fn menu_open_recent(_: &Object, _: Sel, sender: id) {
@@ -528,7 +589,13 @@ fn build_recent_menu() -> id {
     }
 }
 
-pub(super) fn update_menu_state(context: MenuContext, dirty: bool, can_undo: bool, can_redo: bool) {
+pub(super) fn update_menu_state(
+    context: MenuContext,
+    dirty: bool,
+    can_undo: bool,
+    can_redo: bool,
+    selection_level: SelectionLevel,
+) {
     unsafe {
         let app: id = msg_send![class!(NSApplication), sharedApplication];
         let main_menu: id = msg_send![app, mainMenu];
@@ -539,6 +606,8 @@ pub(super) fn update_menu_state(context: MenuContext, dirty: bool, can_undo: boo
         let file: id = msg_send![file_item, submenu];
         let edit_item: id = msg_send![main_menu, itemAtIndex: 2usize];
         let edit: id = msg_send![edit_item, submenu];
+        let select_item: id = msg_send![main_menu, itemAtIndex: 3usize];
+        let select: id = msg_send![select_item, submenu];
         let editor = context == MenuContext::Editor;
         set_menu_item_state(file, 3, editor, editor);
         set_menu_item_state(file, 4, editor, editor);
@@ -546,6 +615,21 @@ pub(super) fn update_menu_state(context: MenuContext, dirty: bool, can_undo: boo
         set_menu_item_state(file, 7, editor, editor);
         set_menu_item_state(edit, 0, true, can_undo);
         set_menu_item_state(edit, 1, true, can_redo);
+        set_menu_item_state(select, 0, true, editor);
+        let level_item: id = msg_send![select, itemAtIndex: 0usize];
+        let levels: id = msg_send![level_item, submenu];
+        set_menu_item_state(levels, 0, true, editor);
+        set_menu_item_state(levels, 1, true, editor);
+        set_menu_item_checked(
+            levels,
+            0,
+            editor && selection_level == SelectionLevel::MaterialSlot,
+        );
+        set_menu_item_checked(
+            levels,
+            1,
+            editor && selection_level == SelectionLevel::Primitive,
+        );
     }
 }
 
@@ -560,6 +644,19 @@ fn set_menu_item_state(menu: id, index: usize, visible: bool, enabled: bool) {
         }
         let _: () = msg_send![item, setHidden: if visible { NO } else { YES }];
         let _: () = msg_send![item, setEnabled: if enabled { YES } else { NO }];
+    }
+}
+
+fn set_menu_item_checked(menu: id, index: usize, checked: bool) {
+    unsafe {
+        if menu.is_null() {
+            return;
+        }
+        let item: id = msg_send![menu, itemAtIndex: index];
+        if item.is_null() {
+            return;
+        }
+        let _: () = msg_send![item, setState: if checked { 1isize } else { 0isize }];
     }
 }
 
