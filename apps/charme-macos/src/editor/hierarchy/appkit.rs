@@ -21,6 +21,9 @@ use crate::app::{Message, dispatch};
 const STATE_IVAR: &str = "charmeHierarchyState";
 const ITEM_INDEX_IVAR: &str = "charmeHierarchyItemIndex";
 const CELL_IDENTIFIER: &str = "CharmeHierarchyCell";
+// Foundation defines NSNotFound as NSIntegerMax, even for APIs whose return
+// type is NSUInteger. It is therefore not NSUInteger::MAX on 64-bit macOS.
+const NS_NOT_FOUND: NSUInteger = NSInteger::MAX as NSUInteger;
 
 struct NativeNode {
     item: ObjcProperty,
@@ -205,10 +208,14 @@ impl NativeHierarchyView {
                     let _: () = msg_send![indexes, addIndex: row as NSUInteger];
                 }
             }
-            let _: () = msg_send![outline,
-                selectRowIndexes: indexes
-                byExtendingSelection: NO
-            ];
+            let selected_indexes: id = msg_send![outline, selectedRowIndexes];
+            let unchanged: BOOL = msg_send![selected_indexes, isEqualToIndexSet: indexes];
+            if unchanged == NO {
+                let _: () = msg_send![outline,
+                    selectRowIndexes: indexes
+                    byExtendingSelection: NO
+                ];
+            }
             let _: () = msg_send![indexes, release];
         }
     }
@@ -419,7 +426,7 @@ extern "C" fn selection_did_change(delegate: &Object, _: Sel, notification: id) 
 
         let mut row: NSUInteger = msg_send![indexes, firstIndex];
         let mut selections = Vec::new();
-        while row != NSUInteger::MAX {
+        while row != NS_NOT_FOUND {
             let item: id = msg_send![outline, itemAtRow: row as NSInteger];
             if let Some(selection) = with_state(delegate, None, |state| {
                 NativeState::node_index(item)
