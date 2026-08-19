@@ -174,6 +174,7 @@ pub(crate) struct SelectionGeometry {
     pub(crate) scene_source: Option<PmxSourceIdentity>,
     pub(crate) primitives: Vec<PrimitiveSelectionGeometry>,
     selected_slot: Option<MaterialSlotId>,
+    selected_primitive: Option<usize>,
 }
 
 pub(crate) struct PrimitiveSelectionGeometry {
@@ -263,6 +264,7 @@ impl SelectionGeometry {
             scene_source: Some(prepared.info.source_identity().clone()),
             primitives,
             selected_slot: None,
+            selected_primitive: None,
         }
     }
 
@@ -272,15 +274,30 @@ impl SelectionGeometry {
                 .iter()
                 .any(|primitive| primitive.slot_id == *slot_id)
         });
-        if self.selected_slot == selected_slot {
-            return false;
-        }
+        let changed = self.selected_slot != selected_slot || self.selected_primitive.is_some();
         self.selected_slot = selected_slot;
-        true
+        self.selected_primitive = None;
+        changed
+    }
+
+    pub(crate) fn set_selected_primitive(&mut self, primitive_index: Option<usize>) -> bool {
+        let selected_primitive = primitive_index.filter(|primitive_index| {
+            self.primitives
+                .iter()
+                .any(|primitive| primitive.primitive_index == *primitive_index)
+        });
+        let changed = self.selected_primitive != selected_primitive || self.selected_slot.is_some();
+        self.selected_primitive = selected_primitive;
+        self.selected_slot = None;
+        changed
     }
 
     pub(crate) fn selected_slot(&self) -> Option<MaterialSlotId> {
         self.selected_slot
+    }
+
+    pub(crate) fn selected_primitive(&self) -> Option<usize> {
+        self.selected_primitive
     }
 
     pub(crate) fn pick(&self, ray: Ray3d) -> Option<PickedPrimitive> {
@@ -878,6 +895,7 @@ mod tests {
                 faces,
             }],
             selected_slot: None,
+            selected_primitive: None,
         };
         let ray = Ray3d::new(
             Vec3::new(0.0, 0.0, 2.0),
@@ -902,6 +920,7 @@ mod tests {
                 edges: Vec::new(),
             }],
             selected_slot: None,
+            selected_primitive: None,
         };
         let mut geometry = geometry;
 
@@ -909,5 +928,30 @@ mod tests {
         assert_eq!(geometry.selected_slot(), Some(slot));
         assert!(geometry.set_selected_slot(None));
         assert_eq!(geometry.selected_slot(), None);
+    }
+
+    #[test]
+    fn primitive_selection_is_limited_and_exclusive() {
+        let slot = MaterialSlotId::new();
+        let mut geometry = SelectionGeometry {
+            scene_source: None,
+            primitives: vec![PrimitiveSelectionGeometry {
+                primitive_index: 3,
+                slot_id: slot,
+                faces: Vec::new(),
+                edges: Vec::new(),
+            }],
+            selected_slot: None,
+            selected_primitive: None,
+        };
+
+        assert!(!geometry.set_selected_primitive(Some(9)));
+        assert_eq!(geometry.selected_primitive(), None);
+        assert!(geometry.set_selected_slot(Some(slot)));
+        assert!(geometry.set_selected_primitive(Some(3)));
+        assert_eq!(geometry.selected_primitive(), Some(3));
+        assert_eq!(geometry.selected_slot(), None);
+        assert!(geometry.set_selected_primitive(None));
+        assert_eq!(geometry.selected_primitive(), None);
     }
 }

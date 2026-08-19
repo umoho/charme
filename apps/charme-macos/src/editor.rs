@@ -372,6 +372,7 @@ pub(crate) struct EditorWindow {
     pmx_loads: RefCell<PmxLoadTracker>,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
     loaded_scene_request_id: RefCell<Option<u64>>,
+    selected_primitive: RefCell<Option<usize>>,
     active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
     inspector_body: Label,
@@ -539,6 +540,7 @@ impl EditorWindow {
             pmx_loads: RefCell::new(PmxLoadTracker::default()),
             loaded_scene: RefCell::new(None),
             loaded_scene_request_id: RefCell::new(None),
+            selected_primitive: RefCell::new(None),
             active_inspector_slot: RefCell::new(None),
             inspector_heading,
             inspector_body,
@@ -585,6 +587,7 @@ impl EditorWindow {
         self.pmx_loads.borrow_mut().invalidate();
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
         self.active_material.replace(None);
+        self.selected_primitive.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.reflected_inspection.replace(None);
         self.current_image.replace(None);
@@ -1239,18 +1242,10 @@ impl EditorWindow {
             return;
         };
 
-        // Geometry rows are currently structural only. Primitive selection will
-        // be wired after the hierarchy can expose a real geometry selection.
-        if matches!(
-            item,
-            HierarchyItemId::Geometry | HierarchyItemId::Primitive(_)
-        ) {
-            return;
-        }
-
         self.hierarchy.select_item(item);
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
+                self.selected_primitive.replace(None);
                 self.active_inspector_slot.replace(None);
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
                     bridge.set_selected_material_slot(None);
@@ -1269,7 +1264,35 @@ impl EditorWindow {
                     ],
                 ));
             }
+            HierarchyItemId::Geometry => unreachable!("geometry is a non-selectable group"),
+            HierarchyItemId::Primitive(primitive_index) => {
+                let Some(primitive) = info
+                    .primitives()
+                    .iter()
+                    .find(|primitive| primitive.index() == primitive_index)
+                else {
+                    return;
+                };
+                self.selected_primitive.replace(Some(primitive_index));
+                self.active_inspector_slot.replace(None);
+                self.active_material.replace(None);
+                self.parameter_controls.borrow_mut().clear();
+                self.set_inspector_preview_visible(false);
+                self.set_source_visible(false);
+                self.set_parameter_section_visible(false);
+                if let Some(bridge) = self.bridge.borrow().as_ref() {
+                    bridge.set_selected_primitive(Some(primitive_index));
+                }
+                self.inspector_heading
+                    .set_text(localization::text(Key::Geometry));
+                let index = format!("{:02}", primitive.index());
+                self.inspector_body.set_text(localization::format(
+                    Key::PrimitiveSummary,
+                    &[("index", &index), ("indices", &primitive.index_count())],
+                ));
+            }
             HierarchyItemId::Materials => {
+                self.selected_primitive.replace(None);
                 self.active_inspector_slot.replace(None);
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
                     bridge.set_selected_material_slot(None);
@@ -1296,6 +1319,7 @@ impl EditorWindow {
                 else {
                     return;
                 };
+                self.selected_primitive.replace(None);
                 self.active_inspector_slot.replace(Some(slot_id));
                 let context = MaterialSelectionContext::resolve(
                     self.controller.borrow().document(),
@@ -1353,9 +1377,6 @@ impl EditorWindow {
                     slot.sphere_texture().unwrap_or(missing).to_owned(),
                     slot.toon_texture().unwrap_or(missing).to_owned(),
                 ]);
-            }
-            HierarchyItemId::Geometry | HierarchyItemId::Primitive(_) => {
-                unreachable!("structural geometry rows are handled before selection")
             }
         }
     }
@@ -1449,6 +1470,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn clear_selection(&self) {
+        self.selected_primitive.replace(None);
         self.active_inspector_slot.replace(None);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();

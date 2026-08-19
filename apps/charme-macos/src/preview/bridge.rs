@@ -34,6 +34,7 @@ enum Command {
         value: ParameterValue,
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
+    SetSelectedPrimitive(Option<usize>),
     PickViewport {
         x: f32,
         y: f32,
@@ -121,6 +122,13 @@ impl RenderBridge {
                             }
                             Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
                                 if let Err(error) = renderer.set_selected_material_slot(slot_id) {
+                                    dispatch_event(ApplicationEvent::Failed(error.to_string()));
+                                    break 'running;
+                                }
+                            }
+                            Ok(Command::SetSelectedPrimitive(primitive_index)) => {
+                                if let Err(error) = renderer.set_selected_primitive(primitive_index)
+                                {
                                     dispatch_event(ApplicationEvent::Failed(error.to_string()));
                                     break 'running;
                                 }
@@ -243,6 +251,12 @@ impl RenderBridge {
         let _ = self
             .commands
             .send(Command::SetSelectedMaterialSlot(slot_id));
+    }
+
+    pub(crate) fn set_selected_primitive(&self, primitive_index: Option<usize>) {
+        let _ = self
+            .commands
+            .send(Command::SetSelectedPrimitive(primitive_index));
     }
 
     pub(crate) fn pick_viewport(&self, x: f32, y: f32) {

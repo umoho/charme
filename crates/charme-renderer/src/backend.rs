@@ -60,6 +60,7 @@ pub(crate) enum Command {
         value: ParameterValue,
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
+    SetSelectedPrimitive(Option<usize>),
     PickViewport {
         x: f32,
         y: f32,
@@ -220,6 +221,9 @@ fn run(
                 Command::SetSelectedMaterialSlot(slot_id) => {
                     dirty |= backend.set_selected_material_slot(slot_id);
                 }
+                Command::SetSelectedPrimitive(primitive_index) => {
+                    dirty |= backend.set_selected_primitive(primitive_index);
+                }
                 Command::PickViewport { x, y } => {
                     backend.pick_viewport(x, y)?;
                 }
@@ -275,6 +279,9 @@ fn run(
                 }
                 Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
                     dirty |= backend.set_selected_material_slot(slot_id);
+                }
+                Ok(Command::SetSelectedPrimitive(primitive_index)) => {
+                    dirty |= backend.set_selected_primitive(primitive_index);
                 }
                 Ok(Command::PickViewport { x, y }) => {
                     backend.pick_viewport(x, y)?;
@@ -543,6 +550,21 @@ impl Backend {
             .world_mut()
             .resource_mut::<SelectionGeometry>()
             .set_selected_slot(slot_id);
+        if changed {
+            // Gizmos are materialized in Bevy's Last schedule. Run one update
+            // before scheduling the readback so the first frame after a
+            // selection change contains the newly generated outline asset.
+            self.app.update();
+        }
+        changed
+    }
+
+    fn set_selected_primitive(&mut self, primitive_index: Option<usize>) -> bool {
+        let changed = self
+            .app
+            .world_mut()
+            .resource_mut::<SelectionGeometry>()
+            .set_selected_primitive(primitive_index);
         if changed {
             // Gizmos are materialized in Bevy's Last schedule. Run one update
             // before scheduling the readback so the first frame after a
@@ -1457,14 +1479,16 @@ fn draw_selected_primitive_gizmo(
         return;
     };
     let camera_position = camera_transform.translation();
-    let Some(selected_slot) = selection.selected_slot() else {
+    let selected_primitive = selection.selected_primitive();
+    let selected_slot = selection.selected_slot();
+    if selected_primitive.is_none() && selected_slot.is_none() {
         return;
-    };
-    for primitive in selection
-        .primitives
-        .iter()
-        .filter(|primitive| primitive.slot_id == selected_slot)
-    {
+    }
+    for primitive in selection.primitives.iter().filter(|primitive| {
+        selected_primitive.is_some_and(|index| primitive.primitive_index == index)
+            || selected_primitive.is_none()
+                && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
+    }) {
         for edge in &primitive.edges {
             let draw_edge = if edge.faces.len() == 1 {
                 true

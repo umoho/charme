@@ -283,7 +283,7 @@ impl Renderer {
         self.send(Command::ResetCamera)
     }
 
-    /// Sets the material slot whose primitive should receive the selection outline.
+    /// Sets the material slot whose primitives should receive the selection outline.
     ///
     /// Passing `None` clears the renderer-side outline. Selection is transient
     /// viewport state and is not written to the editor document.
@@ -292,6 +292,17 @@ impl Renderer {
         slot_id: Option<MaterialSlotId>,
     ) -> Result<(), RendererError> {
         self.send(Command::SetSelectedMaterialSlot(slot_id))
+    }
+
+    /// Sets one indexed primitive to receive the selection outline.
+    ///
+    /// Passing `None` clears the renderer-side outline. Selection is transient
+    /// viewport state and is not written to the editor document.
+    pub fn set_selected_primitive(
+        &self,
+        primitive_index: Option<usize>,
+    ) -> Result<(), RendererError> {
+        self.send(Command::SetSelectedPrimitive(primitive_index))
     }
 
     /// Performs a non-blocking viewport pick.

@@ -338,12 +338,7 @@ extern "C" fn should_select_item(delegate: &Object, _: Sel, _: id, item: id) -> 
     with_state(delegate, NO, |state| {
         let selectable = NativeState::node_index(item)
             .and_then(|index| state.snapshot.nodes.get(index))
-            .is_some_and(|node| {
-                !matches!(
-                    node.id,
-                    HierarchyItemId::Geometry | HierarchyItemId::Primitive(_)
-                )
-            });
+            .is_some_and(|node| !matches!(node.id, HierarchyItemId::Geometry));
         if selectable { YES } else { NO }
     })
 }

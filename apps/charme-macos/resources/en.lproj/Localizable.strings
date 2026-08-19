@@ -25,6 +25,7 @@
 "Scene" = "Scene";
 "Hierarchy" = "Hierarchy";
 "Geometry" = "Geometry";
+"PrimitiveSummary" = "{index}\n\n{indices} indices";
 "EmptyScene" = "No character imported\n\nChoose “Import Model” to begin.";
 "Materials" = "Material Slots";
 "EmptyMaterials" = "No material slots";
