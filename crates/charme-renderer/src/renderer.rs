@@ -13,14 +13,104 @@ use crate::{
     backend::{self, Command, WorkerEvent},
 };
 
+/// A stage of the PMX loading pipeline owned by Charme.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PmxLoadStage {
+    /// Reading the PMX bytes and resolving the input source.
+    ReadingPmx,
+    /// Parsing and importing the PMX document through `bevy_pmx`.
+    ParsingPmx,
+    /// Decoding the PMX-referenced textures.
+    LoadingTextures,
+    /// Building CPU geometry used by selection and viewport picking.
+    BuildingSelection,
+    /// Creating the Bevy scene assets and entities.
+    BuildingScene,
+}
+
+/// Progress reported by the Charme-owned portions of a PMX load.
+///
+/// `completed` and `total` are present only when the current stage has a
+/// countable unit of work. A `None` fraction means that the UI should use an
+/// indeterminate indicator rather than infer progress from elapsed time.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PmxLoadProgress {
+    request_id: u64,
+    source: PmxSourceIdentity,
+    stage: PmxLoadStage,
+    completed: Option<usize>,
+    total: Option<usize>,
+}
+
+impl PmxLoadProgress {
+    /// Returns the request that produced this progress event.
+    pub const fn request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    /// Returns the source associated with this progress event.
+    pub fn source_identity(&self) -> &PmxSourceIdentity {
+        &self.source
+    }
+
+    /// Returns the current loading stage.
+    pub const fn stage(&self) -> PmxLoadStage {
+        self.stage
+    }
+
+    /// Returns the number of completed units, when this stage is countable.
+    pub const fn completed(&self) -> Option<usize> {
+        self.completed
+    }
+
+    /// Returns the total number of units, when this stage is countable.
+    pub const fn total(&self) -> Option<usize> {
+        self.total
+    }
+
+    /// Returns the stage fraction when a non-empty total is available.
+    pub fn fraction(&self) -> Option<f64> {
+        let (Some(completed), Some(total)) = (self.completed, self.total) else {
+            return None;
+        };
+        (total > 0).then(|| (completed.min(total) as f64) / (total as f64))
+    }
+
+    pub(crate) fn new(
+        request_id: u64,
+        source: PmxSourceIdentity,
+        stage: PmxLoadStage,
+        completed: Option<usize>,
+        total: Option<usize>,
+    ) -> Self {
+        Self {
+            request_id,
+            source,
+            stage,
+            completed,
+            total,
+        }
+    }
+}
+
 /// A non-frame event produced by the renderer worker.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum RendererNotification {
+    /// Progress from the Charme-owned PMX loading stages.
+    PmxLoadProgress(PmxLoadProgress),
     /// A PMX model was loaded and installed in the preview scene.
-    PmxLoaded(PmxSceneInfo),
+    PmxLoaded {
+        /// The request that produced the scene.
+        request_id: u64,
+        /// Summary of the installed scene.
+        info: PmxSceneInfo,
+    },
     /// A PMX model could not be loaded; the previous scene remains active.
     PmxLoadFailed {
+        /// The request that failed.
+        request_id: u64,
         /// The source identity that was requested.
         source: PmxSourceIdentity,
         /// A human-readable import error.
@@ -28,6 +118,8 @@ pub enum RendererNotification {
     },
     /// A rendered material-slot thumbnail is ready for the native UI.
     MaterialThumbnailReady {
+        /// The request that produced the thumbnail.
+        request_id: u64,
         /// The PMX scene that owns the thumbnail.
         source: PmxSourceIdentity,
         /// Stable identifier of the PMX material slot.
@@ -39,6 +131,8 @@ pub enum RendererNotification {
     },
     /// A larger material preview with a floor is ready for the Inspector.
     MaterialInspectorPreviewReady {
+        /// The request that produced the preview.
+        request_id: u64,
         /// The PMX scene that owns the preview.
         source: PmxSourceIdentity,
         /// Stable identifier of the PMX material slot.
@@ -57,6 +151,8 @@ pub enum RendererNotification {
     },
     /// A viewport picking request completed.
     ViewportPickResult {
+        /// The request that owns the queried scene.
+        request_id: u64,
         /// The PMX scene that was queried.
         source: PmxSourceIdentity,
         /// The stable material slot hit by the viewport ray, if any.
@@ -209,10 +305,13 @@ impl Renderer {
 
     /// Enqueues a PMX loading request.
     ///
-    /// Loading happens on the renderer worker. Completion or failure is
+    /// Preparation happens on a dedicated loading task, while scene installation
+    /// remains on the renderer worker. Progress, completion, or failure is
     /// reported through [`Renderer::try_recv_notification`]. Material thumbnails
     /// are read through [`Renderer::try_recv_material_thumbnail`]. A failed load
-    /// does not replace the currently displayed scene.
+    /// does not replace the currently displayed scene. If the request has an
+    /// identifier from [`PmxLoadRequest::with_request_id`], notifications echo
+    /// it.
     pub fn load_pmx_request(&self, request: PmxLoadRequest) -> Result<(), RendererError> {
         self.send(Command::LoadPmx(request))
     }
@@ -469,6 +568,27 @@ fn validate_background(background: BackgroundColor) -> Result<(), RendererError>
 mod tests {
     use super::*;
     use crate::BackgroundColor;
+
+    #[test]
+    fn pmx_progress_fraction_only_uses_counted_work() {
+        let source = PmxSourceIdentity::file("model.pmx");
+        let indeterminate =
+            PmxLoadProgress::new(7, source.clone(), PmxLoadStage::ParsingPmx, None, None);
+        assert_eq!(indeterminate.fraction(), None);
+
+        let counted = PmxLoadProgress::new(
+            7,
+            source.clone(),
+            PmxLoadStage::LoadingTextures,
+            Some(2),
+            Some(4),
+        );
+        assert_eq!(counted.fraction(), Some(0.5));
+
+        let empty =
+            PmxLoadProgress::new(7, source, PmxLoadStage::LoadingTextures, Some(0), Some(0));
+        assert_eq!(empty.fraction(), None);
+    }
 
     #[test]
     fn rejects_non_finite_background_components() {

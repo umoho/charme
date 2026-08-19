@@ -33,7 +33,11 @@
 "ProjectOpened" = "Project opened";
 "WaitingCharacter" = "Waiting for character model…";
 "LoadingMaterials" = "Loading material slots…";
-"LoadingPmxTextures" = "Loading PMX and textures…";
+"LoadingPmxRead" = "Reading PMX…";
+"LoadingPmxParse" = "Parsing PMX…";
+"LoadingPmxTexturesProgress" = "Loading textures {completed}/{total}…";
+"LoadingPmxSelectionProgress" = "Building selection data {completed}/{total}…";
+"LoadingPmxSceneProgress" = "Building preview scene {completed}/{total}…";
 "InspectingShader" = "Inspecting Shader…";
 "ShaderError" = "Shader Error";
 "ReflectionFailed" = "WGSL reflection failed";

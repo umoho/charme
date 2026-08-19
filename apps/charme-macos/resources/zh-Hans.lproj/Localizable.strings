@@ -33,7 +33,11 @@
 "ProjectOpened" = "项目已打开";
 "WaitingCharacter" = "等待角色模型…";
 "LoadingMaterials" = "正在加载材质槽…";
-"LoadingPmxTextures" = "正在加载PMX和纹理…";
+"LoadingPmxRead" = "正在读取PMX…";
+"LoadingPmxParse" = "正在解析PMX…";
+"LoadingPmxTexturesProgress" = "正在加载纹理{completed}/{total}…";
+"LoadingPmxSelectionProgress" = "正在构建选择数据{completed}/{total}…";
+"LoadingPmxSceneProgress" = "正在构建预览场景{completed}/{total}…";
 "InspectingShader" = "正在检查Shader…";
 "ShaderError" = "Shader错误";
 "ReflectionFailed" = "WGSL反射失败";

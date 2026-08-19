@@ -8,7 +8,8 @@ use std::{
 
 use charme_core::ParameterValue;
 use charme_renderer::{
-    BackgroundColor, OutputSize, PixelFormat, Renderer, RendererConfig, RendererNotification,
+    BackgroundColor, OutputSize, PixelFormat, PmxLoadRequest, PmxLoadStage, Renderer,
+    RendererConfig, RendererNotification,
 };
 use zip::{ZipWriter, write::SimpleFileOptions};
 
@@ -97,12 +98,41 @@ fn renders_resizes_and_loads_pmx() {
 
     let pmx_path = write_minimal_pmx();
     renderer
-        .load_pmx(&pmx_path)
+        .load_pmx_request(
+            PmxLoadRequest::from_path(pmx_path.clone(), None, Vec::new()).with_request_id(42),
+        )
         .expect("PMX load should be accepted");
-    let loaded = wait_for_notification(&mut renderer);
-    let RendererNotification::PmxLoaded(info) = loaded else {
-        panic!("expected a successful PMX notification");
+    let mut progress_events = Vec::new();
+    let (load_request_id, info) = loop {
+        match wait_for_notification(&mut renderer) {
+            RendererNotification::PmxLoadProgress(progress) => progress_events.push(progress),
+            RendererNotification::PmxLoaded { request_id, info } => break (request_id, info),
+            notification => panic!("expected PMX progress or completion, got {notification:?}"),
+        }
     };
+    assert!(!progress_events.is_empty());
+    assert_eq!(load_request_id, 42);
+    assert!(
+        progress_events
+            .iter()
+            .all(|progress| progress.request_id() == load_request_id)
+    );
+    let stages = progress_events
+        .iter()
+        .map(|progress| progress.stage())
+        .collect::<Vec<_>>();
+    assert!(stages.contains(&PmxLoadStage::ReadingPmx));
+    assert!(stages.contains(&PmxLoadStage::ParsingPmx));
+    assert!(stages.contains(&PmxLoadStage::LoadingTextures));
+    assert!(stages.contains(&PmxLoadStage::BuildingSelection));
+    assert!(stages.contains(&PmxLoadStage::BuildingScene));
+    let texture_progress = progress_events
+        .iter()
+        .find(|progress| progress.stage() == PmxLoadStage::LoadingTextures)
+        .expect("texture stage should be reported");
+    assert_eq!(texture_progress.completed(), Some(0));
+    assert_eq!(texture_progress.total(), Some(0));
+    assert_eq!(texture_progress.fraction(), None);
     assert_eq!(info.path(), pmx_path);
     assert_eq!(info.archive_entry(), None);
     assert_eq!(info.name(), "Charme fixture");
@@ -182,16 +212,14 @@ fn renders_resizes_and_loads_pmx() {
     renderer
         .load_pmx(&pmx_path)
         .expect("reloading PMX after clearing should be accepted");
-    assert!(matches!(
-        wait_for_notification(&mut renderer),
-        RendererNotification::PmxLoaded(info) if info.path() == pmx_path
-    ));
+    let (_, reloaded) = wait_for_loaded(&mut renderer);
+    assert_eq!(reloaded.path(), pmx_path);
 
     let missing = pmx_path.with_file_name("missing-model.pmx");
     renderer
         .load_pmx(&missing)
         .expect("failed PMX load should still be accepted asynchronously");
-    let failed = wait_for_notification(&mut renderer);
+    let failed = wait_for_failed(&mut renderer);
     assert!(matches!(
         failed,
         RendererNotification::PmxLoadFailed { source, .. }
@@ -215,9 +243,7 @@ fn renders_resizes_and_loads_pmx() {
             Vec::new(),
         )
         .expect("ZIP PMX load should be accepted");
-    let RendererNotification::PmxLoaded(zip_info) = wait_for_notification(&mut renderer) else {
-        panic!("expected a successful ZIP PMX notification");
-    };
+    let (_, zip_info) = wait_for_loaded(&mut renderer);
     assert_eq!(zip_info.path(), zip_path);
     assert_eq!(zip_info.archive_entry(), Some("Model/character.pmx"));
     assert_eq!(zip_info.name(), "Charme fixture");
@@ -266,6 +292,26 @@ fn wait_for_notification(renderer: &mut Renderer) -> RendererNotification {
         }
         assert!(Instant::now() < deadline, "renderer notification timed out");
         thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn wait_for_loaded(renderer: &mut Renderer) -> (u64, charme_renderer::PmxSceneInfo) {
+    loop {
+        match wait_for_notification(renderer) {
+            RendererNotification::PmxLoadProgress(_) => {}
+            RendererNotification::PmxLoaded { request_id, info } => return (request_id, info),
+            notification => panic!("expected PMX completion, got {notification:?}"),
+        }
+    }
+}
+
+fn wait_for_failed(renderer: &mut Renderer) -> RendererNotification {
+    loop {
+        match wait_for_notification(renderer) {
+            RendererNotification::PmxLoadProgress(_) => {}
+            notification @ RendererNotification::PmxLoadFailed { .. } => return notification,
+            notification => panic!("expected PMX failure, got {notification:?}"),
+        }
     }
 }
 

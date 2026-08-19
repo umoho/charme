@@ -1,4 +1,4 @@
-use charme_renderer::PmxSourceIdentity;
+use charme_renderer::{PmxLoadProgress, PmxLoadStage, PmxSourceIdentity};
 
 use cacao::{
     appkit::window::{TitleVisibility, Window, WindowConfig, WindowDelegate, WindowStyle},
@@ -48,7 +48,7 @@ impl PmxLoadingSheet {
         heading.set_line_break_mode(LineBreakMode::TruncateMiddle);
         heading.set_max_number_of_lines(1);
         let stage = label(
-            localization::text(Key::LoadingPmxTextures),
+            localization::text(Key::LoadingPmxRead),
             11.0,
             false,
             Color::LabelSecondary,
@@ -64,6 +64,45 @@ impl PmxLoadingSheet {
             heading,
             stage,
             progress,
+        }
+    }
+
+    pub(crate) fn set_progress(&self, progress: &PmxLoadProgress) {
+        let stage_text = match progress.stage() {
+            PmxLoadStage::ReadingPmx => localization::text(Key::LoadingPmxRead).to_owned(),
+            PmxLoadStage::ParsingPmx => localization::text(Key::LoadingPmxParse).to_owned(),
+            PmxLoadStage::LoadingTextures => localization::format(
+                Key::LoadingPmxTexturesProgress,
+                &[
+                    ("completed", &progress.completed().unwrap_or(0)),
+                    ("total", &progress.total().unwrap_or(0)),
+                ],
+            ),
+            PmxLoadStage::BuildingSelection => localization::format(
+                Key::LoadingPmxSelectionProgress,
+                &[
+                    ("completed", &progress.completed().unwrap_or(0)),
+                    ("total", &progress.total().unwrap_or(0)),
+                ],
+            ),
+            PmxLoadStage::BuildingScene => localization::format(
+                Key::LoadingPmxSceneProgress,
+                &[
+                    ("completed", &progress.completed().unwrap_or(0)),
+                    ("total", &progress.total().unwrap_or(0)),
+                ],
+            ),
+            _ => localization::text(Key::LoadingPmxRead).to_owned(),
+        };
+        self.stage.set_text(stage_text);
+
+        if let Some(fraction) = progress.fraction() {
+            self.progress.stop_animation();
+            self.progress.set_indeterminate(false);
+            self.progress.set_value(fraction * 100.0);
+        } else {
+            self.progress.set_indeterminate(true);
+            self.progress.start_animation();
         }
     }
 }

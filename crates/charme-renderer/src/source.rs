@@ -156,14 +156,15 @@ enum PmxSourceRequest {
 pub struct PmxLoadRequest {
     source: PmxSourceRequest,
     existing_slot_ids: Vec<(u32, MaterialSlotId)>,
+    request_id: Option<u64>,
 }
 
 impl PmxLoadRequest {
     /// Creates a request from a file-system path or ZIP archive path.
     ///
     /// A ZIP with no selected entry must contain exactly one PMX file. ZIP
-    /// entry discovery remains deferred to the renderer worker so errors keep
-    /// their existing asynchronous notification behavior.
+    /// entry discovery remains deferred to the asynchronous loading task so
+    /// errors keep their existing notification behavior.
     pub fn from_path(
         path: impl Into<PathBuf>,
         archive_entry: Option<String>,
@@ -175,7 +176,24 @@ impl PmxLoadRequest {
                 archive_entry,
             },
             existing_slot_ids,
+            request_id: None,
         }
+    }
+
+    /// Associates an application-owned identifier with this loading request.
+    ///
+    /// Renderer notifications echo this identifier so a frontend can discard
+    /// progress and results from an older request even when it has the same
+    /// source path as a newer request. If no identifier is supplied, the
+    /// renderer assigns one when the request reaches its worker.
+    pub fn with_request_id(mut self, request_id: u64) -> Self {
+        self.request_id = Some(request_id);
+        self
+    }
+
+    /// Returns the optional frontend-owned request identifier.
+    pub fn request_id(&self) -> Option<u64> {
+        self.request_id
     }
 
     /// Returns the requested source identity before source resolution.

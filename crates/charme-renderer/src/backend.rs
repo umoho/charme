@@ -35,10 +35,12 @@ use charme_bevy::{CharmeMaterial, CharmeMaterialPlugin, ParameterError};
 use charme_core::{MaterialSlotId, ParameterValue};
 
 use crate::{
-    BackgroundColor, Frame, OutputSize, PixelFormat, PmxLoadRequest, PmxSourceIdentity,
-    RendererConfig, RendererError,
+    BackgroundColor, Frame, OutputSize, PixelFormat, PmxLoadProgress, PmxLoadRequest, PmxLoadStage,
+    PmxSourceIdentity, RendererConfig, RendererError,
     renderer::RendererNotification,
-    scene::{SelectionGeometry, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene},
+    scene::{
+        PreparedPmxScene, SelectionGeometry, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene,
+    },
 };
 
 pub(crate) enum Command {
@@ -74,6 +76,19 @@ pub(crate) enum WorkerEvent {
     Frame(Frame),
     Notification(RendererNotification),
     Error(RendererError),
+}
+
+enum LoadTaskEvent {
+    Progress(PmxLoadProgress),
+    Prepared {
+        request_id: u64,
+        prepared: Box<PreparedPmxScene>,
+    },
+    Failed {
+        request_id: u64,
+        source: PmxSourceIdentity,
+        message: String,
+    },
 }
 
 enum Completion {
@@ -124,7 +139,8 @@ fn run(
     initialized: SyncSender<Result<(), RendererError>>,
 ) -> Result<(), RendererError> {
     let (completion_tx, completion_rx) = mpsc::channel();
-    let mut backend = Backend::new(&config, events, completion_tx)?;
+    let (load_tx, load_rx) = mpsc::channel();
+    let mut backend = Backend::new(&config, events, completion_tx, load_tx, load_rx)?;
     initialized
         .send(Ok(()))
         .map_err(|_| RendererError::WorkerStopped)?;
@@ -149,6 +165,7 @@ fn run(
             || dirty
             || backend.pending_thumbnails != 0
             || backend.pending_inspector_preview
+            || backend.pending_load_tasks != 0
             || backend.requested_inspector_slot.is_some()
             || !backend.thumbnail_queue.is_empty()
         {
@@ -213,7 +230,10 @@ fn run(
                 } => {
                     backend.request_material_inspector_preview(slot_id, slot_index);
                 }
-                Command::Shutdown => return Ok(()),
+                Command::Shutdown => {
+                    backend.join_load_tasks();
+                    return Ok(());
+                }
             }
         }
 
@@ -266,11 +286,16 @@ fn run(
                 }) => {
                     backend.request_material_inspector_preview(slot_id, slot_index);
                 }
-                Ok(Command::Shutdown) => return Ok(()),
+                Ok(Command::Shutdown) => {
+                    backend.join_load_tasks();
+                    return Ok(());
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Ok(()),
             }
         }
+
+        dirty |= backend.poll_load_events()?;
 
         if dirty && backend.size.is_empty() {
             dirty = false;
@@ -305,11 +330,18 @@ struct Backend {
     placeholder_entities: Vec<Entity>,
     placeholder_materials: Vec<bevy::prelude::Handle<CharmeMaterial>>,
     pmx_scene: Option<SpawnedPmxScene>,
+    scene_request_id: Option<u64>,
     orbit: OrbitState,
     initial_orbit: OrbitState,
     next_sequence: u64,
     events: Sender<WorkerEvent>,
     completion: Sender<Completion>,
+    load_events: Receiver<LoadTaskEvent>,
+    load_event_sender: Sender<LoadTaskEvent>,
+    load_workers: Vec<thread::JoinHandle<()>>,
+    pending_load_tasks: usize,
+    latest_load_request_id: Option<u64>,
+    next_load_request_id: u64,
     pending_thumbnails: usize,
     pending_inspector_preview: bool,
     requested_inspector_slot: Option<MaterialSlotId>,
@@ -329,6 +361,7 @@ struct MaterialPreviewStudio {
 }
 
 struct MaterialPreview {
+    request_id: u64,
     slot_id: MaterialSlotId,
     slot_index: usize,
     source: PmxSourceIdentity,
@@ -345,6 +378,8 @@ impl Backend {
         config: &RendererConfig,
         events: Sender<WorkerEvent>,
         completion: Sender<Completion>,
+        load_event_sender: Sender<LoadTaskEvent>,
+        load_events: Receiver<LoadTaskEvent>,
     ) -> Result<Self, RendererError> {
         let mut app = App::new();
         // This renderer already owns a private worker thread and advances the
@@ -423,11 +458,18 @@ impl Backend {
             placeholder_entities,
             placeholder_materials,
             pmx_scene: None,
+            scene_request_id: None,
             orbit,
             initial_orbit: orbit,
             next_sequence: 1,
             events,
             completion,
+            load_events,
+            load_event_sender,
+            load_workers: Vec::new(),
+            pending_load_tasks: 0,
+            latest_load_request_id: None,
+            next_load_request_id: 1,
             pending_thumbnails: 0,
             pending_inspector_preview: false,
             requested_inspector_slot: None,
@@ -516,7 +558,7 @@ impl Backend {
         // command, so make sure the ray uses the latest camera state.
         self.app.update();
 
-        let (source, picked) = {
+        let (source, picked, request_id) = {
             let world = self.app.world();
             let geometry = world.resource::<SelectionGeometry>();
             let source = geometry.scene_source.clone();
@@ -529,15 +571,16 @@ impl Backend {
                         .ok()
                         .and_then(|ray| geometry.pick(ray))
                 });
-            (source, picked)
+            (source, picked, self.scene_request_id)
         };
 
-        let Some(source) = source else {
+        let (Some(source), Some(request_id)) = (source, request_id) else {
             return Ok(());
         };
         self.events
             .send(WorkerEvent::Notification(
                 RendererNotification::ViewportPickResult {
+                    request_id,
                     source,
                     slot_id: picked.map(|picked| picked.slot_id),
                     primitive_index: picked.map(|picked| picked.primitive_index),
@@ -548,29 +591,189 @@ impl Backend {
 
     fn load_pmx(&mut self, request: PmxLoadRequest) -> Result<bool, RendererError> {
         let requested_source = request.source_identity();
-        let resolved = match request.resolve() {
-            Ok(request) => request,
-            Err(message) => {
+        let request_id = request
+            .request_id()
+            .unwrap_or_else(|| self.allocate_load_request_id());
+        self.next_load_request_id = self
+            .next_load_request_id
+            .max(request_id.saturating_add(1).max(1));
+        self.latest_load_request_id = Some(request_id);
+        self.pending_load_tasks += 1;
+
+        let load_events = self.load_event_sender.clone();
+        let task_source = requested_source.clone();
+        let task = thread::Builder::new()
+            .name(format!("charme-pmx-load-{request_id}"))
+            .spawn(move || {
+                let _ = load_events.send(LoadTaskEvent::Progress(PmxLoadProgress::new(
+                    request_id,
+                    task_source.clone(),
+                    PmxLoadStage::ReadingPmx,
+                    None,
+                    None,
+                )));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    let resolved = request
+                        .resolve()
+                        .map_err(|message| (task_source.clone(), message))?;
+                    let source = resolved.source.identity().clone();
+                    let progress_source = source.clone();
+                    let prepared = prepare_pmx_scene(&resolved, |stage, completed, total| {
+                        let _ = load_events.send(LoadTaskEvent::Progress(PmxLoadProgress::new(
+                            request_id,
+                            progress_source.clone(),
+                            stage,
+                            completed,
+                            total,
+                        )));
+                    })
+                    .map_err(|message| (source.clone(), message))?;
+                    Ok::<_, (PmxSourceIdentity, String)>((source, prepared))
+                }));
+
+                match result {
+                    Ok(Ok((_, prepared))) => {
+                        let _ = load_events.send(LoadTaskEvent::Prepared {
+                            request_id,
+                            prepared: Box::new(prepared),
+                        });
+                    }
+                    Ok(Err((source, message))) => {
+                        let _ = load_events.send(LoadTaskEvent::Failed {
+                            request_id,
+                            source,
+                            message,
+                        });
+                    }
+                    Err(_) => {
+                        let _ = load_events.send(LoadTaskEvent::Failed {
+                            request_id,
+                            source: task_source,
+                            message: "the PMX loading task terminated unexpectedly".to_owned(),
+                        });
+                    }
+                }
+            });
+
+        match task {
+            Ok(task) => self.load_workers.push(task),
+            Err(error) => {
+                self.pending_load_tasks = self.pending_load_tasks.saturating_sub(1);
                 let _ = self.events.send(WorkerEvent::Notification(
                     RendererNotification::PmxLoadFailed {
+                        request_id,
                         source: requested_source,
-                        message,
+                        message: format!("could not start the PMX loading task: {error}"),
                     },
                 ));
-                return Ok(false);
             }
-        };
-        let source = resolved.source.identity().clone();
-        let prepared = match prepare_pmx_scene(&resolved) {
-            Ok(prepared) => prepared,
-            Err(message) => {
-                let _ = self.events.send(WorkerEvent::Notification(
-                    RendererNotification::PmxLoadFailed { source, message },
-                ));
-                return Ok(false);
-            }
-        };
+        }
+        Ok(false)
+    }
 
+    fn allocate_load_request_id(&mut self) -> u64 {
+        let request_id = self.next_load_request_id.max(1);
+        self.next_load_request_id = request_id.saturating_add(1).max(1);
+        request_id
+    }
+
+    fn poll_load_events(&mut self) -> Result<bool, RendererError> {
+        let mut dirty = false;
+        while let Ok(event) = self.load_events.try_recv() {
+            match event {
+                LoadTaskEvent::Progress(progress) => {
+                    let _ = self.events.send(WorkerEvent::Notification(
+                        RendererNotification::PmxLoadProgress(progress),
+                    ));
+                }
+                LoadTaskEvent::Prepared {
+                    request_id,
+                    prepared,
+                } => {
+                    self.pending_load_tasks = self.pending_load_tasks.saturating_sub(1);
+                    if self.latest_load_request_id != Some(request_id) {
+                        continue;
+                    }
+                    let source = prepared.info.source_identity().clone();
+                    match self.install_prepared_scene(request_id, *prepared) {
+                        Ok(installed) => dirty |= installed,
+                        Err(error) => {
+                            let _ = self.events.send(WorkerEvent::Notification(
+                                RendererNotification::PmxLoadFailed {
+                                    request_id,
+                                    source,
+                                    message: error.to_string(),
+                                },
+                            ));
+                        }
+                    }
+                }
+                LoadTaskEvent::Failed {
+                    request_id,
+                    source,
+                    message,
+                } => {
+                    self.pending_load_tasks = self.pending_load_tasks.saturating_sub(1);
+                    let _ = self.events.send(WorkerEvent::Notification(
+                        RendererNotification::PmxLoadFailed {
+                            request_id,
+                            source,
+                            message,
+                        },
+                    ));
+                }
+            }
+        }
+        self.reap_finished_load_tasks();
+        Ok(dirty)
+    }
+
+    fn reap_finished_load_tasks(&mut self) {
+        let mut active = Vec::with_capacity(self.load_workers.len());
+        for task in self.load_workers.drain(..) {
+            if task.is_finished() {
+                let _ = task.join();
+            } else {
+                active.push(task);
+            }
+        }
+        self.load_workers = active;
+    }
+
+    fn install_prepared_scene(
+        &mut self,
+        request_id: u64,
+        prepared: PreparedPmxScene,
+    ) -> Result<bool, RendererError> {
+        if self.latest_load_request_id != Some(request_id) {
+            return Ok(false);
+        }
+
+        let scene_source = prepared.info.source_identity().clone();
+        let progress_events = self.events.clone();
+        let progress_source = scene_source.clone();
+        let selection =
+            SelectionGeometry::from_prepared_with_progress(&prepared, |completed, total| {
+                let _ = progress_events.send(WorkerEvent::Notification(
+                    RendererNotification::PmxLoadProgress(PmxLoadProgress::new(
+                        request_id,
+                        progress_source.clone(),
+                        PmxLoadStage::BuildingSelection,
+                        Some(completed),
+                        Some(total),
+                    )),
+                ));
+            });
+
+        let _ = self.events.send(WorkerEvent::Notification(
+            RendererNotification::PmxLoadProgress(PmxLoadProgress::new(
+                request_id,
+                scene_source.clone(),
+                PmxLoadStage::BuildingScene,
+                None,
+                None,
+            )),
+        ));
         self.clear_material_previews();
         for entity in self.placeholder_entities.drain(..) {
             let _ = self.app.world_mut().despawn(entity);
@@ -584,27 +787,51 @@ impl Backend {
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }
-        let scene_source = prepared.info.source_identity().clone();
-        self.app
-            .world_mut()
-            .insert_resource(SelectionGeometry::from_prepared(&prepared));
-        self.pmx_scene = Some(spawn_pmx_scene(&mut self.app, &prepared));
+        self.app.world_mut().insert_resource(selection);
+        self.scene_request_id = Some(request_id);
+
+        let progress_events = self.events.clone();
+        let progress_source = scene_source.clone();
+        self.pmx_scene = Some(spawn_pmx_scene(
+            &mut self.app,
+            &prepared,
+            |completed, total| {
+                let _ = progress_events.send(WorkerEvent::Notification(
+                    RendererNotification::PmxLoadProgress(PmxLoadProgress::new(
+                        request_id,
+                        progress_source.clone(),
+                        PmxLoadStage::BuildingScene,
+                        Some(completed),
+                        Some(total),
+                    )),
+                ));
+            },
+        ));
         let (bounds_min, bounds_max) = prepared.normalized_bounds();
         self.orbit = OrbitState::framing(bounds_min, bounds_max);
         self.initial_orbit = self.orbit;
         self.update_camera_transform()?;
         if let Some(materials) = self.pmx_scene.as_ref().map(|scene| scene.materials.clone()) {
-            self.spawn_material_previews(&scene_source, &materials);
+            self.spawn_material_previews(request_id, &scene_source, &materials);
         }
         let _ = self
             .events
-            .send(WorkerEvent::Notification(RendererNotification::PmxLoaded(
-                prepared.info,
-            )));
+            .send(WorkerEvent::Notification(RendererNotification::PmxLoaded {
+                request_id,
+                info: prepared.info,
+            }));
         Ok(true)
     }
 
+    fn join_load_tasks(&mut self) {
+        for task in self.load_workers.drain(..) {
+            let _ = task.join();
+        }
+    }
+
     fn clear_pmx(&mut self) -> Result<(), RendererError> {
+        self.latest_load_request_id = None;
+        self.scene_request_id = None;
         self.clear_material_previews();
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
@@ -633,6 +860,7 @@ impl Backend {
 
     fn spawn_material_previews(
         &mut self,
+        request_id: u64,
         source: &PmxSourceIdentity,
         materials: &[bevy::prelude::Handle<CharmeMaterial>],
     ) {
@@ -646,6 +874,7 @@ impl Backend {
                 continue;
             };
             self.material_previews.push(MaterialPreview {
+                request_id,
                 slot_id,
                 slot_index,
                 source: source.clone(),
@@ -685,11 +914,17 @@ impl Backend {
         let Some(slot_index) = self.thumbnail_queue.pop_front() else {
             return;
         };
-        let Some((source, material)) = self
+        let Some((request_id, source, material)) = self
             .material_previews
             .iter()
             .find(|preview| preview.slot_index == slot_index)
-            .map(|preview| (preview.source.clone(), preview.material.clone()))
+            .map(|preview| {
+                (
+                    preview.request_id,
+                    preview.source.clone(),
+                    preview.material.clone(),
+                )
+            })
         else {
             self.start_next_thumbnail_readback();
             return;
@@ -702,7 +937,7 @@ impl Backend {
         {
             camera.is_active = true;
         }
-        self.request_thumbnail_readback(&source, slot_index);
+        self.request_thumbnail_readback(request_id, &source, slot_index);
     }
 
     fn set_preview_material(
@@ -752,12 +987,13 @@ impl Backend {
         let Some(slot_id) = self.requested_inspector_slot.take() else {
             return;
         };
-        let Some((source, material, slot_index)) = self
+        let Some((request_id, source, material, slot_index)) = self
             .material_previews
             .iter()
             .find(|preview| preview.slot_id == slot_id)
             .map(|preview| {
                 (
+                    preview.request_id,
                     preview.source.clone(),
                     preview.material.clone(),
                     preview.slot_index,
@@ -774,10 +1010,15 @@ impl Backend {
         {
             camera.is_active = true;
         }
-        self.request_inspector_preview_readback(&source, slot_id, slot_index);
+        self.request_inspector_preview_readback(request_id, &source, slot_id, slot_index);
     }
 
-    fn request_thumbnail_readback(&mut self, source: &PmxSourceIdentity, slot_index: usize) {
+    fn request_thumbnail_readback(
+        &mut self,
+        request_id: u64,
+        source: &PmxSourceIdentity,
+        slot_index: usize,
+    ) {
         let Some(slot_id) = self
             .pmx_scene
             .as_ref()
@@ -803,6 +1044,7 @@ impl Backend {
                 );
                 let _ = events.send(WorkerEvent::Notification(
                     RendererNotification::MaterialThumbnailReady {
+                        request_id,
                         source: source.clone(),
                         slot_id,
                         slot_index,
@@ -880,6 +1122,7 @@ impl Backend {
 
     fn request_inspector_preview_readback(
         &mut self,
+        request_id: u64,
         source: &PmxSourceIdentity,
         slot_id: MaterialSlotId,
         slot_index: usize,
@@ -904,6 +1147,7 @@ impl Backend {
                 );
                 let _ = events.send(WorkerEvent::Notification(
                     RendererNotification::MaterialInspectorPreviewReady {
+                        request_id,
                         source: source.clone(),
                         slot_id,
                         slot_index,
@@ -968,6 +1212,12 @@ impl Backend {
                 let _ = completion.send(Completion::Frame);
                 commands.entity(event.entity).despawn();
             });
+    }
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.join_load_tasks();
     }
 }
 

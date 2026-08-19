@@ -18,7 +18,7 @@ use cacao::{
 };
 use charme_application::{ApplicationEvent, EditorAction, EditorController};
 use charme_core::ParameterValue;
-use charme_renderer::PmxSourceIdentity;
+use charme_renderer::{PmxLoadProgress, PmxSourceIdentity};
 use url::Url;
 
 #[cfg(feature = "debug-ui")]
@@ -68,10 +68,17 @@ pub(crate) enum Message {
     ChoosePmx,
     LoadPmx(PathBuf),
     PmxLoadStarted {
+        request_id: u64,
         source: PmxSourceIdentity,
     },
-    PmxLoadFinished,
+    PmxLoadProgress {
+        progress: PmxLoadProgress,
+    },
+    PmxLoadFinished {
+        request_id: Option<u64>,
+    },
     PmxLoadFailed {
+        request_id: Option<u64>,
         source: PmxSourceIdentity,
         message: String,
     },
@@ -85,10 +92,15 @@ pub(crate) enum Message {
     Application(ApplicationEvent),
 }
 
+struct ActivePmxLoadingSheet {
+    request_id: u64,
+    window: Window<PmxLoadingSheet>,
+}
+
 pub(crate) struct CharmeApp {
     startup: Window<StartupWindow>,
     editor: RefCell<Option<Window<EditorWindow>>>,
-    pmx_loading: RefCell<Option<Window<PmxLoadingSheet>>>,
+    pmx_loading: RefCell<Option<ActivePmxLoadingSheet>>,
     menu_context: Cell<MenuContext>,
     #[cfg(feature = "debug-ui")]
     debug_state: DebugState,
@@ -173,9 +185,16 @@ impl Dispatcher for CharmeApp {
                 self.refresh_menus();
             }
             Message::ChoosePmx => self.choose_pmx(),
-            Message::PmxLoadStarted { source } => self.show_pmx_loading(source),
-            Message::PmxLoadFinished => self.finish_pmx_loading(),
-            Message::PmxLoadFailed { source, message } => self.show_pmx_load_error(source, message),
+            Message::PmxLoadStarted { request_id, source } => {
+                self.show_pmx_loading(request_id, source)
+            }
+            Message::PmxLoadProgress { progress } => self.update_pmx_loading(progress),
+            Message::PmxLoadFinished { request_id } => self.finish_pmx_loading(request_id),
+            Message::PmxLoadFailed {
+                request_id,
+                source,
+                message,
+            } => self.show_pmx_load_error(request_id, source, message),
             Message::Application(ApplicationEvent::EditorUpdated(update)) => {
                 update_menu_state(
                     self.menu_context.get(),
@@ -202,7 +221,9 @@ impl Dispatcher for CharmeApp {
                             window.handle_renderer_notification(notification);
                         }
                         ApplicationEvent::Failed(error) => {
-                            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished);
+                            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished {
+                                request_id: None,
+                            });
                             window.show_error(&error);
                         }
                         _ => {}
@@ -233,7 +254,8 @@ impl Dispatcher for CharmeApp {
                     | Message::MenuContextChanged(_)
                     | Message::ChoosePmx
                     | Message::PmxLoadStarted { .. }
-                    | Message::PmxLoadFinished
+                    | Message::PmxLoadProgress { .. }
+                    | Message::PmxLoadFinished { .. }
                     | Message::PmxLoadFailed { .. } => unreachable!(),
                 }
             }
@@ -439,8 +461,8 @@ impl CharmeApp {
         action(window);
     }
 
-    fn show_pmx_loading(&self, source: PmxSourceIdentity) {
-        self.finish_pmx_loading();
+    fn show_pmx_loading(&self, request_id: u64, source: PmxSourceIdentity) {
+        self.finish_pmx_loading(None);
 
         let editor_windows = self.editor.borrow();
         let Some(editor_window) = editor_windows.as_ref() else {
@@ -449,23 +471,63 @@ impl CharmeApp {
         let sheet = PmxLoadingSheet::window(&source);
         editor_window.begin_sheet(&sheet, || {});
         drop(editor_windows);
-        self.pmx_loading.replace(Some(sheet));
+        self.pmx_loading.replace(Some(ActivePmxLoadingSheet {
+            request_id,
+            window: sheet,
+        }));
     }
 
-    fn finish_pmx_loading(&self) {
-        let editor_windows = self.editor.borrow();
+    fn update_pmx_loading(&self, progress: PmxLoadProgress) {
         let loading = self.pmx_loading.borrow();
-        if let (Some(editor_window), Some(sheet)) = (editor_windows.as_ref(), loading.as_ref()) {
-            editor_window.end_sheet(sheet);
-            sheet.close();
+        let Some(active) = loading
+            .as_ref()
+            .filter(|active| active.request_id == progress.request_id())
+        else {
+            return;
+        };
+        if let Some(sheet) = active.window.delegate.as_ref() {
+            sheet.set_progress(&progress);
         }
-        drop(loading);
-        drop(editor_windows);
-        self.pmx_loading.borrow_mut().take();
     }
 
-    fn show_pmx_load_error(&self, identity: PmxSourceIdentity, message: String) {
-        self.finish_pmx_loading();
+    fn finish_pmx_loading(&self, request_id: Option<u64>) {
+        let active = {
+            let mut loading = self.pmx_loading.borrow_mut();
+            let matches = match request_id {
+                Some(request_id) => loading
+                    .as_ref()
+                    .is_some_and(|active| active.request_id == request_id),
+                None => loading.is_some(),
+            };
+            matches.then(|| loading.take()).flatten()
+        };
+        let Some(active) = active else {
+            return;
+        };
+        let editor_windows = self.editor.borrow();
+        if let Some(editor_window) = editor_windows.as_ref() {
+            editor_window.end_sheet(&active.window);
+            active.window.close();
+        }
+    }
+
+    fn show_pmx_load_error(
+        &self,
+        request_id: Option<u64>,
+        identity: PmxSourceIdentity,
+        message: String,
+    ) {
+        if let Some(request_id) = request_id {
+            if self
+                .pmx_loading
+                .borrow()
+                .as_ref()
+                .is_none_or(|active| active.request_id != request_id)
+            {
+                return;
+            }
+            self.finish_pmx_loading(Some(request_id));
+        }
         let source = display_pmx_source(&identity);
         let short_error = localization::format(Key::PmxLoadFailed, &[("path", &source)]);
         {
