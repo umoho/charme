@@ -256,6 +256,41 @@ fn renders_resizes_and_loads_pmx() {
     fs::remove_file(zip_path).expect("ZIP fixture should be removable");
 }
 
+#[test]
+fn temporary_split_keeps_camera_updates() {
+    let config = RendererConfig::new(64, 48).pixel_format(PixelFormat::Bgra8Srgb);
+    let mut renderer = Renderer::new(config).expect("renderer should initialize");
+    let path = write_disconnected_pmx();
+
+    renderer
+        .load_pmx_request(
+            PmxLoadRequest::from_path(path.clone(), None, Vec::new()).with_request_id(7),
+        )
+        .expect("PMX load should be accepted");
+    let (_, info) = wait_for_loaded(&mut renderer);
+    assert_eq!(info.primitives()[0].components().len(), 2);
+
+    renderer
+        .set_selected_primitives(vec![0])
+        .expect("primitive selection should be accepted");
+    let selected = wait_for_frame(&mut renderer);
+    renderer
+        .split_selected_primitives_by_connectivity(vec![0])
+        .expect("temporary primitive split should be accepted");
+    let split = wait_for_frame(&mut renderer);
+    assert!(split.sequence() > selected.sequence());
+
+    renderer
+        .orbit(0.35, -0.1)
+        .expect("orbit input should be accepted after splitting");
+    let orbited = wait_for_frame(&mut renderer);
+    assert!(orbited.sequence() > split.sequence());
+    assert_ne!(orbited.pixels(), split.pixels());
+
+    renderer.shutdown().expect("renderer should stop cleanly");
+    fs::remove_file(path).expect("fixture should be removable");
+}
+
 fn wait_for_frame(renderer: &mut Renderer) -> charme_renderer::Frame {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -340,6 +375,16 @@ fn write_minimal_pmx() -> PathBuf {
     path
 }
 
+fn write_disconnected_pmx() -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be after the Unix epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("charme_renderer_disconnected_{unique}.pmx"));
+    fs::write(&path, disconnected_pmx_bytes()).expect("fixture should be writable");
+    path
+}
+
 fn write_minimal_pmx_zip() -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -356,6 +401,56 @@ fn write_minimal_pmx_zip() -> PathBuf {
         .expect("ZIP PMX entry should be written");
     writer.finish().expect("ZIP fixture should be finished");
     path
+}
+
+fn disconnected_pmx_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"PMX ");
+    push_f32(&mut bytes, 2.0);
+    bytes.push(8);
+    bytes.push(1); // UTF-8
+    bytes.push(0); // additional UV count
+    bytes.extend_from_slice(&[4, 4, 4, 4, 4, 4]);
+    push_text(&mut bytes, "Charme disconnected fixture");
+    push_text(&mut bytes, "Charme disconnected fixture");
+    push_text(&mut bytes, "");
+    push_text(&mut bytes, "");
+
+    push_i32(&mut bytes, 6);
+    push_vertex(&mut bytes, [-1.0, 0.0, 0.0], [0.0, 0.0]);
+    push_vertex(&mut bytes, [1.0, 0.0, 0.0], [1.0, 0.0]);
+    push_vertex(&mut bytes, [0.0, 2.0, 0.0], [0.5, 1.0]);
+    push_vertex(&mut bytes, [3.0, 0.0, 0.0], [0.0, 0.0]);
+    push_vertex(&mut bytes, [5.0, 0.0, 0.0], [1.0, 0.0]);
+    push_vertex(&mut bytes, [4.0, 2.0, 0.0], [0.5, 1.0]);
+    push_i32(&mut bytes, 6);
+    for index in 0..6 {
+        push_u32(&mut bytes, index);
+    }
+
+    push_i32(&mut bytes, 0); // textures
+    push_i32(&mut bytes, 1); // materials
+    push_text(&mut bytes, "Body");
+    push_text(&mut bytes, "Body");
+    push_vec4(&mut bytes, [0.8, 0.6, 0.5, 1.0]);
+    push_vec3(&mut bytes, [0.0, 0.0, 0.0]);
+    push_f32(&mut bytes, 1.0);
+    push_vec3(&mut bytes, [0.0, 0.0, 0.0]);
+    bytes.push(0); // material flags
+    push_vec4(&mut bytes, [0.0, 0.0, 0.0, 0.0]);
+    push_f32(&mut bytes, 1.0);
+    push_i32(&mut bytes, -1); // diffuse texture
+    push_i32(&mut bytes, -1); // sphere texture
+    bytes.push(0); // sphere mode
+    bytes.push(0); // individual toon texture
+    push_i32(&mut bytes, -1);
+    push_text(&mut bytes, "");
+    push_i32(&mut bytes, 6); // surface index count
+
+    for _ in 0..5 {
+        push_i32(&mut bytes, 0); // bones, morphs, frames, rigid bodies, joints
+    }
+    bytes
 }
 
 fn minimal_pmx_bytes() -> Vec<u8> {
