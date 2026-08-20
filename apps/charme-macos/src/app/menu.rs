@@ -744,55 +744,95 @@ pub(super) fn update_menu_state(
         let select_item: id = msg_send![main_menu, itemAtIndex: 3usize];
         let select: id = msg_send![select_item, submenu];
         let editor = context == MenuContext::Editor;
-        set_menu_item_state(file, MenuTag::Import, editor, editor);
-        set_menu_item_state(file, MenuTag::InspectShader, editor, editor);
-        set_menu_item_state(file, MenuTag::Save, editor, editor && dirty);
-        set_menu_item_state(file, MenuTag::SaveAs, editor, editor);
-        set_menu_item_state(edit, MenuTag::Undo, true, can_undo);
-        set_menu_item_state(edit, MenuTag::Redo, true, can_redo);
-        set_menu_item_state(
-            edit,
-            MenuTag::SplitPrimitives,
-            editor,
-            editor
-                && selection_level == SelectionLevel::Primitive
-                && has_scene
-                && has_primitive_selection,
+        apply_menu_states(
+            file,
+            &[
+                MenuItemState::new(MenuTag::Import, editor, editor),
+                MenuItemState::new(MenuTag::InspectShader, editor, editor),
+                MenuItemState::new(MenuTag::Save, editor, editor && dirty),
+                MenuItemState::new(MenuTag::SaveAs, editor, editor),
+            ],
         );
-        set_menu_item_state(select, MenuTag::SelectionLevel, true, editor);
+        apply_menu_states(
+            edit,
+            &[
+                MenuItemState::new(MenuTag::Undo, true, can_undo),
+                MenuItemState::new(MenuTag::Redo, true, can_redo),
+                MenuItemState::new(
+                    MenuTag::SplitPrimitives,
+                    editor,
+                    editor
+                        && selection_level == SelectionLevel::Primitive
+                        && has_scene
+                        && has_primitive_selection,
+                ),
+            ],
+        );
+        apply_menu_states(
+            select,
+            &[MenuItemState::new(MenuTag::SelectionLevel, true, editor)],
+        );
         let level_item = item_with_tag(select, MenuTag::SelectionLevel);
         let levels: id = msg_send![level_item, submenu];
-        set_menu_item_state(levels, MenuTag::MaterialSlotLevel, true, editor);
-        set_menu_item_state(levels, MenuTag::PrimitiveLevel, true, editor);
-        set_menu_item_checked(
+        apply_menu_states(
             levels,
-            MenuTag::MaterialSlotLevel,
-            editor && selection_level == SelectionLevel::MaterialSlot,
-        );
-        set_menu_item_checked(
-            levels,
-            MenuTag::PrimitiveLevel,
-            editor && selection_level == SelectionLevel::Primitive,
+            &[
+                MenuItemState::new(MenuTag::MaterialSlotLevel, true, editor)
+                    .checked(editor && selection_level == SelectionLevel::MaterialSlot),
+                MenuItemState::new(MenuTag::PrimitiveLevel, true, editor)
+                    .checked(editor && selection_level == SelectionLevel::Primitive),
+            ],
         );
         let primitive_selection = editor && selection_level == SelectionLevel::Primitive;
-        set_menu_item_state(
+        apply_menu_states(
             select,
-            MenuTag::SelectAll,
-            true,
-            primitive_selection && has_scene,
+            &[
+                MenuItemState::new(MenuTag::SelectAll, true, primitive_selection && has_scene),
+                MenuItemState::new(
+                    MenuTag::DeselectAll,
+                    true,
+                    primitive_selection && has_primitive_selection,
+                ),
+                MenuItemState::new(
+                    MenuTag::InvertSelection,
+                    true,
+                    primitive_selection && has_scene,
+                ),
+            ],
         );
-        set_menu_item_state(
-            select,
-            MenuTag::DeselectAll,
-            true,
-            primitive_selection && has_primitive_selection,
-        );
-        set_menu_item_state(
-            select,
-            MenuTag::InvertSelection,
-            true,
-            primitive_selection && has_scene,
-        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MenuItemState {
+    tag: MenuTag,
+    visible: bool,
+    enabled: bool,
+    checked: Option<bool>,
+}
+
+impl MenuItemState {
+    const fn new(tag: MenuTag, visible: bool, enabled: bool) -> Self {
+        Self {
+            tag,
+            visible,
+            enabled,
+            checked: None,
+        }
+    }
+
+    const fn checked(mut self, checked: bool) -> Self {
+        self.checked = Some(checked);
+        self
+    }
+}
+
+fn apply_menu_states(menu: id, states: &[MenuItemState]) {
+    for state in states {
+        set_menu_item_state(menu, state.tag, state.visible, state.enabled);
+        if let Some(checked) = state.checked {
+            set_menu_item_checked(menu, state.tag, checked);
+        }
     }
 }
 
