@@ -13,6 +13,7 @@ mod error;
 mod frame;
 mod renderer;
 mod scene;
+mod scheduler;
 mod source;
 
 pub use archive::discover_pmx_archive_entries;

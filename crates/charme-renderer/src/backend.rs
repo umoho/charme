@@ -41,6 +41,7 @@ use crate::{
     scene::{
         PreparedPmxScene, SelectionGeometry, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene,
     },
+    scheduler::RenderScheduler,
 };
 
 pub(crate) enum Command {
@@ -100,6 +101,39 @@ enum Completion {
     MaterialInspectorPreview { slot_index: usize },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CommandOutcome {
+    redraw: bool,
+    selection_changed: bool,
+    shutdown: bool,
+}
+
+impl CommandOutcome {
+    const fn redraw() -> Self {
+        Self {
+            redraw: true,
+            selection_changed: false,
+            shutdown: false,
+        }
+    }
+
+    const fn selection(changed: bool) -> Self {
+        Self {
+            redraw: changed,
+            selection_changed: changed,
+            shutdown: false,
+        }
+    }
+
+    const fn shutdown() -> Self {
+        Self {
+            redraw: false,
+            selection_changed: false,
+            shutdown: true,
+        }
+    }
+}
+
 pub(crate) fn spawn(
     config: RendererConfig,
     commands: Receiver<Command>,
@@ -148,14 +182,12 @@ fn run(
         .send(Ok(()))
         .map_err(|_| RendererError::WorkerStopped)?;
 
-    let mut dirty = false;
-    let mut in_flight = false;
-    let mut selection_needs_update = false;
+    let mut scheduler = RenderScheduler::default();
 
     loop {
         while let Ok(completion) = completion_rx.try_recv() {
             match completion {
-                Completion::Frame => in_flight = false,
+                Completion::Frame => scheduler.complete_frame(),
                 Completion::MaterialThumbnail { slot_index } => {
                     backend.finish_material_thumbnail(slot_index);
                 }
@@ -165,14 +197,12 @@ fn run(
             }
         }
 
-        let command = if in_flight
-            || dirty
-            || backend.pending_thumbnails != 0
+        let background_busy = backend.pending_thumbnails != 0
             || backend.pending_inspector_preview
             || backend.pending_load_tasks != 0
             || backend.requested_inspector_slot.is_some()
-            || !backend.thumbnail_queue.is_empty()
-        {
+            || !backend.thumbnail_queue.is_empty();
+        let command = if scheduler.has_pending_viewport_work() || background_busy {
             match commands.recv_timeout(Duration::from_millis(1)) {
                 Ok(command) => Some(command),
                 Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -186,178 +216,66 @@ fn run(
         };
 
         if let Some(command) = command {
-            match command {
-                Command::Resize(size) => {
-                    backend.resize(size)?;
-                    dirty = true;
-                }
-                Command::SetBackground(background) => {
-                    backend.set_background(background)?;
-                    dirty = true;
-                }
-                Command::Orbit { delta_x, delta_y } => {
-                    backend.orbit(delta_x, delta_y)?;
-                    dirty = true;
-                }
-                Command::Zoom(delta) => {
-                    backend.zoom(delta)?;
-                    dirty = true;
-                }
-                Command::ResetCamera => {
-                    backend.reset_camera()?;
-                    dirty = true;
-                }
-                Command::LoadPmx(request) => {
-                    dirty |= backend.load_pmx(request)?;
-                }
-                Command::ClearPmx => {
-                    backend.clear_pmx()?;
-                    dirty = true;
-                }
-                Command::SetMaterialParameter {
-                    slot_id,
-                    path,
-                    value,
-                } => {
-                    dirty |= backend.set_material_parameter(slot_id, path, value);
-                }
-                Command::SetSelectedMaterialSlot(slot_id) => {
-                    let changed = backend.set_selected_material_slot(slot_id);
-                    dirty |= changed;
-                    selection_needs_update |= changed;
-                }
-                Command::SetSelectedPrimitives(primitive_indices) => {
-                    let changed = backend.set_selected_primitives(primitive_indices);
-                    dirty |= changed;
-                    selection_needs_update |= changed;
-                }
-                Command::SplitSelectedPrimitivesByConnectivity(primitive_indices) => {
-                    dirty |= backend.split_selected_primitives_by_connectivity(primitive_indices);
-                }
-                Command::PickViewport {
-                    x,
-                    y,
-                    selection_action,
-                } => {
-                    backend.pick_viewport(x, y, selection_action)?;
-                }
-                Command::Redraw => dirty = true,
-                Command::RequestMaterialInspectorPreview {
-                    slot_id,
-                    slot_index,
-                } => {
-                    backend.request_material_inspector_preview(slot_id, slot_index);
-                }
-                Command::Shutdown => {
-                    backend.join_load_tasks();
-                    return Ok(());
-                }
+            let outcome = backend.handle_command(command)?;
+            if outcome.shutdown {
+                backend.join_load_tasks();
+                return Ok(());
+            }
+            if outcome.selection_changed {
+                scheduler.invalidate_selection();
+            } else if outcome.redraw {
+                scheduler.invalidate();
             }
         }
 
         loop {
             match commands.try_recv() {
-                Ok(Command::Resize(size)) => {
-                    backend.resize(size)?;
-                    dirty = true;
-                }
-                Ok(Command::SetBackground(background)) => {
-                    backend.set_background(background)?;
-                    dirty = true;
-                }
-                Ok(Command::Orbit { delta_x, delta_y }) => {
-                    backend.orbit(delta_x, delta_y)?;
-                    dirty = true;
-                }
-                Ok(Command::Zoom(delta)) => {
-                    backend.zoom(delta)?;
-                    dirty = true;
-                }
-                Ok(Command::ResetCamera) => {
-                    backend.reset_camera()?;
-                    dirty = true;
-                }
-                Ok(Command::LoadPmx(request)) => {
-                    dirty |= backend.load_pmx(request)?;
-                }
-                Ok(Command::ClearPmx) => {
-                    backend.clear_pmx()?;
-                    dirty = true;
-                }
-                Ok(Command::SetMaterialParameter {
-                    slot_id,
-                    path,
-                    value,
-                }) => {
-                    dirty |= backend.set_material_parameter(slot_id, path, value);
-                }
-                Ok(Command::SetSelectedMaterialSlot(slot_id)) => {
-                    let changed = backend.set_selected_material_slot(slot_id);
-                    dirty |= changed;
-                    selection_needs_update |= changed;
-                }
-                Ok(Command::SetSelectedPrimitives(primitive_indices)) => {
-                    let changed = backend.set_selected_primitives(primitive_indices);
-                    dirty |= changed;
-                    selection_needs_update |= changed;
-                }
-                Ok(Command::SplitSelectedPrimitivesByConnectivity(primitive_indices)) => {
-                    dirty |= backend.split_selected_primitives_by_connectivity(primitive_indices);
-                }
-                Ok(Command::PickViewport {
-                    x,
-                    y,
-                    selection_action,
-                }) => {
-                    backend.pick_viewport(x, y, selection_action)?;
-                }
-                Ok(Command::Redraw) => dirty = true,
-                Ok(Command::RequestMaterialInspectorPreview {
-                    slot_id,
-                    slot_index,
-                }) => {
-                    backend.request_material_inspector_preview(slot_id, slot_index);
-                }
-                Ok(Command::Shutdown) => {
-                    backend.join_load_tasks();
-                    return Ok(());
+                Ok(command) => {
+                    let outcome = backend.handle_command(command)?;
+                    if outcome.shutdown {
+                        backend.join_load_tasks();
+                        return Ok(());
+                    }
+                    if outcome.selection_changed {
+                        scheduler.invalidate_selection();
+                    } else if outcome.redraw {
+                        scheduler.invalidate();
+                    }
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => return Ok(()),
             }
         }
 
-        dirty |= backend.poll_load_events()?;
+        if backend.poll_load_events()? {
+            scheduler.invalidate();
+        }
 
-        if dirty && backend.size.is_empty() {
-            dirty = false;
-            selection_needs_update = false;
-        } else if dirty && !in_flight {
-            if selection_needs_update {
+        if let Some(request) = scheduler.take_frame_request(backend.size.is_empty()) {
+            if request.prepare_selection {
                 // Gizmos are materialized in Bevy's Last schedule. Coalesce all
-                // queued selection changes into one update before scheduling
-                // the readback so its first frame includes the final outline.
+                // queued selection changes before scheduling the readback.
                 backend.app.update();
-                selection_needs_update = false;
+                scheduler.app_updated();
             }
             backend.request_readback();
-            dirty = false;
-            in_flight = true;
         }
 
         // Keep viewport frames responsive while thumbnails are generated in
-        // the background. Only start the next thumbnail when the main camera
-        // has no pending redraw or readback.
-        if !dirty && !in_flight {
+        // the background. Only start previews while the main camera is idle.
+        if scheduler.viewport_is_idle() {
             backend.start_next_thumbnail_readback();
             if backend.pending_thumbnails == 0 {
                 backend.start_inspector_preview_readback();
             }
         }
 
-        if in_flight || backend.pending_thumbnails != 0 || backend.pending_inspector_preview {
+        if scheduler.frame_in_flight()
+            || backend.pending_thumbnails != 0
+            || backend.pending_inspector_preview
+        {
             backend.app.update();
-            selection_needs_update = false;
+            scheduler.app_updated();
         }
     }
 }
@@ -415,6 +333,75 @@ const MATERIAL_THUMBNAIL_LAYER: usize = 30;
 const MATERIAL_INSPECTOR_LAYER: usize = 31;
 
 impl Backend {
+    fn handle_command(&mut self, command: Command) -> Result<CommandOutcome, RendererError> {
+        let outcome = match command {
+            Command::Resize(size) => {
+                self.resize(size)?;
+                CommandOutcome::redraw()
+            }
+            Command::SetBackground(background) => {
+                self.set_background(background)?;
+                CommandOutcome::redraw()
+            }
+            Command::Orbit { delta_x, delta_y } => {
+                self.orbit(delta_x, delta_y)?;
+                CommandOutcome::redraw()
+            }
+            Command::Zoom(delta) => {
+                self.zoom(delta)?;
+                CommandOutcome::redraw()
+            }
+            Command::ResetCamera => {
+                self.reset_camera()?;
+                CommandOutcome::redraw()
+            }
+            Command::LoadPmx(request) => CommandOutcome {
+                redraw: self.load_pmx(request)?,
+                ..Default::default()
+            },
+            Command::ClearPmx => {
+                self.clear_pmx()?;
+                CommandOutcome::redraw()
+            }
+            Command::SetMaterialParameter {
+                slot_id,
+                path,
+                value,
+            } => CommandOutcome {
+                redraw: self.set_material_parameter(slot_id, path, value),
+                ..Default::default()
+            },
+            Command::SetSelectedMaterialSlot(slot_id) => {
+                CommandOutcome::selection(self.set_selected_material_slot(slot_id))
+            }
+            Command::SetSelectedPrimitives(primitive_indices) => {
+                CommandOutcome::selection(self.set_selected_primitives(primitive_indices))
+            }
+            Command::SplitSelectedPrimitivesByConnectivity(primitive_indices) => CommandOutcome {
+                redraw: self.split_selected_primitives_by_connectivity(primitive_indices),
+                ..Default::default()
+            },
+            Command::PickViewport {
+                x,
+                y,
+                selection_action,
+            } => {
+                self.pick_viewport(x, y, selection_action)?;
+                CommandOutcome::default()
+            }
+            Command::RequestMaterialInspectorPreview {
+                slot_id,
+                slot_index,
+            } => {
+                self.request_material_inspector_preview(slot_id, slot_index);
+                CommandOutcome::default()
+            }
+            Command::Redraw => CommandOutcome::redraw(),
+            Command::Shutdown => CommandOutcome::shutdown(),
+        };
+        Ok(outcome)
+    }
+
     fn new(
         config: &RendererConfig,
         events: Sender<WorkerEvent>,
