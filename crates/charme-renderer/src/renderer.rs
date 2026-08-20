@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::Path,
     sync::{Mutex, mpsc},
     thread::JoinHandle,
@@ -461,6 +461,26 @@ impl Renderer {
             slot_id: Some(slot_id),
             path: path.into(),
             value,
+        })
+    }
+
+    /// Replaces all parameter overrides on one stable PMX material slot.
+    ///
+    /// Values are validated as one unit. Rejected input leaves the currently
+    /// rendered material unchanged and produces a renderer notification.
+    pub fn sync_material_parameters_for_slot(
+        &self,
+        slot_id: MaterialSlotId,
+        parameters: BTreeMap<String, ParameterValue>,
+    ) -> Result<(), RendererError> {
+        if parameters.values().any(|value| !value.is_finite()) {
+            return Err(RendererError::InvalidConfiguration {
+                message: "material parameters must be finite".to_owned(),
+            });
+        }
+        self.send(Command::SyncMaterialParameters {
+            slot_id,
+            parameters,
         })
     }
 

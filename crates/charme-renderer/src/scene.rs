@@ -544,6 +544,7 @@ pub(crate) struct SpawnedPmxScene {
     primitive_entities: Vec<Option<Entity>>,
     primitive_component_counts: Vec<usize>,
     pub(crate) materials: Vec<Handle<CharmeMaterial>>,
+    default_material_parameters: Vec<CharmeMaterialParams>,
     pub(crate) material_slot_ids: Vec<MaterialSlotId>,
 }
 
@@ -556,6 +557,20 @@ impl SpawnedPmxScene {
             .iter()
             .position(|candidate| *candidate == slot_id)
             .and_then(|index| self.materials.get(index))
+    }
+
+    pub(crate) fn material_state_for_slot(
+        &self,
+        slot_id: MaterialSlotId,
+    ) -> Option<(&Handle<CharmeMaterial>, CharmeMaterialParams)> {
+        let index = self
+            .material_slot_ids
+            .iter()
+            .position(|candidate| *candidate == slot_id)?;
+        Some((
+            self.materials.get(index)?,
+            *self.default_material_parameters.get(index)?,
+        ))
     }
 
     pub(crate) fn split_primitives_by_connectivity(
@@ -672,15 +687,15 @@ pub(crate) fn spawn_pmx_scene(
     // assets for slots used by multiple primitives, this gives the renderer a
     // stable slot-to-material mapping for material-ball previews.
     let mut material_handles = Vec::with_capacity(prepared.model.material_records().len());
+    let mut default_material_parameters =
+        Vec::with_capacity(prepared.model.material_records().len());
     for record in prepared.model.material_records() {
+        let material = material_for_record(record, &texture_handles, &texture_has_alpha);
+        default_material_parameters.push(material.parameters);
         material_handles.push(
             app.world_mut()
                 .resource_mut::<Assets<CharmeMaterial>>()
-                .add(material_for_record(
-                    record,
-                    &texture_handles,
-                    &texture_has_alpha,
-                )),
+                .add(material),
         );
         completed += 1;
         report(completed, total);
@@ -729,6 +744,7 @@ pub(crate) fn spawn_pmx_scene(
             .add(CharmeMaterial::default());
         mesh_handles.push(mesh.clone());
         material_handles.push(material.clone());
+        default_material_parameters.push(CharmeMaterialParams::default());
         entities.push(
             app.world_mut()
                 .spawn((
@@ -760,6 +776,7 @@ pub(crate) fn spawn_pmx_scene(
             .map(PmxMaterialSlot::id)
             .collect(),
         materials: material_handles,
+        default_material_parameters,
     }
 }
 

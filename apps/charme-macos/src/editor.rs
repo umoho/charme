@@ -6,7 +6,7 @@ mod viewport;
 pub(crate) use hierarchy::HierarchyItemId;
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -33,16 +33,17 @@ use cacao::{
     view::View,
 };
 use charme_application::{
-    EditorAction, EditorController, InspectorProvider, MaterialSelectionContext, SelectionTarget,
-    ShaderParameterProvider, controls_for_material, inspect_preview_shader,
+    EditorAction, EditorController, InspectorProvider, MaterialSelectionContext,
+    PreviewSynchronizer, SelectionLevel, SelectionTarget, ShaderParameterProvider, WorkspaceState,
+    controls_for_material, inspect_preview_shader,
 };
 use charme_core::{
     CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlot, MaterialSlotId,
     ParameterValue, ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{
-    Frame, OutputSize, PmxLoadProgress, PmxLoadRequest, PmxSceneInfo, PmxSourceIdentity,
-    RendererNotification, ViewportSelectionAction, discover_pmx_archive_entries,
+    Frame, OutputSize, PmxLoadRequest, PmxSceneInfo, PmxSourceIdentity, RendererNotification,
+    ViewportSelectionAction, discover_pmx_archive_entries,
 };
 use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 
@@ -56,7 +57,7 @@ use self::{
     viewport::{NavigationGizmo, OrbitInputView, make_image},
 };
 use crate::{
-    app::{CharmeApp, MenuContext, Message, SelectionLevel},
+    app::{CharmeApp, MenuContext, Message},
     localization::{self, Key},
     preview::RenderBridge,
     shader_inspection::{self, ShaderInspection},
@@ -295,60 +296,8 @@ impl ToolbarDelegate for EditorToolbar {
     }
 }
 
-struct PendingPmxLoad {
-    request_id: u64,
-    source: PmxSourceIdentity,
-    character: Option<CharacterSource>,
-}
-
 fn pmx_character_commit_command(character: Option<CharacterSource>) -> Option<EditorCommand> {
     character.map(|character| EditorCommand::SetCharacter(Some(character)))
-}
-
-#[derive(Default)]
-struct PmxLoadTracker {
-    next_request_id: u64,
-    pending: Option<PendingPmxLoad>,
-}
-
-impl PmxLoadTracker {
-    fn begin(&mut self, source: PmxSourceIdentity, character: Option<CharacterSource>) -> u64 {
-        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
-        let request_id = self.next_request_id;
-        self.pending = Some(PendingPmxLoad {
-            request_id,
-            source,
-            character,
-        });
-        request_id
-    }
-
-    fn invalidate(&mut self) {
-        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
-        self.pending = None;
-    }
-
-    fn accepts(&self, progress: &PmxLoadProgress) -> bool {
-        self.pending.as_ref().is_some_and(|request| {
-            request.request_id == progress.request_id()
-                && request.source.path() == progress.source_identity().path()
-                && request.source.archive_entry().is_none_or(|expected| {
-                    Some(expected) == progress.source_identity().archive_entry()
-                })
-        })
-    }
-
-    fn complete(&mut self, request_id: u64, source: &PmxSourceIdentity) -> Option<PendingPmxLoad> {
-        let matches = self.pending.as_ref().is_some_and(|request| {
-            request.request_id == request_id
-                && request.source.path() == source.path()
-                && request
-                    .source
-                    .archive_entry()
-                    .is_none_or(|expected| Some(expected) == source.archive_entry())
-        });
-        matches.then(|| self.pending.take()).flatten()
-    }
 }
 
 pub(crate) struct EditorWindow {
@@ -369,13 +318,10 @@ pub(crate) struct EditorWindow {
     status: Label,
     hierarchy_label: Label,
     hierarchy: HierarchyView,
-    pmx_loads: RefCell<PmxLoadTracker>,
+    workspace: RefCell<WorkspaceState>,
+    preview_synchronizer: RefCell<PreviewSynchronizer>,
     loaded_scene: RefCell<Option<PmxSceneInfo>>,
-    loaded_scene_request_id: RefCell<Option<u64>>,
-    selection_level: Cell<SelectionLevel>,
-    selected_primitives: RefCell<Vec<usize>>,
     split_preview_primitives: RefCell<Vec<usize>>,
-    active_inspector_slot: RefCell<Option<MaterialSlotId>>,
     inspector_heading: Label,
     inspector_body: Label,
     inspector_preview: ImageView,
@@ -539,13 +485,10 @@ impl EditorWindow {
             status,
             hierarchy_label,
             hierarchy,
-            pmx_loads: RefCell::new(PmxLoadTracker::default()),
+            workspace: RefCell::new(WorkspaceState::default()),
+            preview_synchronizer: RefCell::new(PreviewSynchronizer::default()),
             loaded_scene: RefCell::new(None),
-            loaded_scene_request_id: RefCell::new(None),
-            selection_level: Cell::new(SelectionLevel::MaterialSlot),
-            selected_primitives: RefCell::new(Vec::new()),
             split_preview_primitives: RefCell::new(Vec::new()),
-            active_inspector_slot: RefCell::new(None),
             inspector_heading,
             inspector_body,
             inspector_preview,
@@ -588,12 +531,11 @@ impl EditorWindow {
     }
 
     fn reset_project_views(&self) {
-        self.selection_level.set(SelectionLevel::MaterialSlot);
+        self.workspace.borrow_mut().reset();
+        self.preview_synchronizer.borrow_mut().reset();
         self.hierarchy.set_allows_multiple_selection(false);
-        self.pmx_loads.borrow_mut().invalidate();
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
         self.active_material.replace(None);
-        self.selected_primitives.borrow_mut().clear();
         self.split_preview_primitives.borrow_mut().clear();
         self.parameter_controls.borrow_mut().clear();
         self.reflected_inspection.replace(None);
@@ -604,13 +546,11 @@ impl EditorWindow {
         self.set_inspector_preview_visible(false);
         self.set_source_visible(false);
         self.set_parameter_section_visible(false);
-        self.active_inspector_slot.replace(None);
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             bridge.set_selected_material_slot(None);
             bridge.clear_pmx();
         }
         self.loaded_scene.replace(None);
-        self.loaded_scene_request_id.replace(None);
         self.hierarchy.clear();
         self.navigation_gizmo.reset();
         self.inspector_heading
@@ -620,17 +560,16 @@ impl EditorWindow {
     }
 
     pub(crate) fn selection_level(&self) -> SelectionLevel {
-        self.selection_level.get()
+        self.workspace.borrow().selection().level()
     }
 
     pub(crate) fn set_selection_level(&self, level: SelectionLevel) {
-        if self.selection_level.get() == level {
+        if !self.workspace.borrow_mut().selection_mut().set_level(level) {
             return;
         }
-        self.selection_level.set(level);
         self.hierarchy
             .set_allows_multiple_selection(level == SelectionLevel::Primitive);
-        self.clear_selection();
+        self.render_selection();
     }
 
     pub(crate) fn has_loaded_scene(&self) -> bool {
@@ -638,11 +577,11 @@ impl EditorWindow {
     }
 
     pub(crate) fn has_primitive_selection(&self) -> bool {
-        !self.selected_primitives.borrow().is_empty()
+        !self.workspace.borrow().selection().primitives().is_empty()
     }
 
     pub(crate) fn select_all_primitives(&self) {
-        if self.selection_level.get() != SelectionLevel::Primitive {
+        if self.selection_level() != SelectionLevel::Primitive {
             return;
         }
         let scene = self.loaded_scene.borrow();
@@ -663,14 +602,14 @@ impl EditorWindow {
     }
 
     pub(crate) fn invert_primitive_selection(&self) {
-        if self.selection_level.get() != SelectionLevel::Primitive {
+        if self.selection_level() != SelectionLevel::Primitive {
             return;
         }
         let scene = self.loaded_scene.borrow();
         let Some(info) = scene.as_ref() else {
             return;
         };
-        let selected = self.selected_primitives.borrow().clone();
+        let selected = self.workspace.borrow().selection().primitives().to_vec();
         let mut indices = info
             .primitives()
             .iter()
@@ -682,10 +621,10 @@ impl EditorWindow {
     }
 
     pub(crate) fn split_selected_primitives_by_connectivity(&self) {
-        if self.selection_level.get() != SelectionLevel::Primitive {
+        if self.selection_level() != SelectionLevel::Primitive {
             return;
         }
-        let selected = self.selected_primitives.borrow().clone();
+        let selected = self.workspace.borrow().selection().primitives().to_vec();
         if selected.is_empty() {
             return;
         }
@@ -779,7 +718,22 @@ impl EditorWindow {
         App::<CharmeApp, Message>::dispatch_main(Message::Application(
             charme_application::ApplicationEvent::EditorUpdated(update.clone()),
         ));
+        self.synchronize_preview();
         Ok(update)
+    }
+
+    fn synchronize_preview(&self) {
+        let updates = self
+            .preview_synchronizer
+            .borrow_mut()
+            .synchronize(self.controller.borrow().document());
+        let bridge = self.bridge.borrow();
+        let Some(bridge) = bridge.as_ref() else {
+            return;
+        };
+        for update in updates {
+            bridge.sync_material_parameters(update.slot_id, update.parameters);
+        }
     }
 
     pub(crate) fn start_renderer(&self) {
@@ -918,7 +872,11 @@ impl EditorWindow {
         let request = PmxLoadRequest::from_path(path, archive_entry, existing_slot_ids);
         if let Some(bridge) = self.bridge.borrow().as_ref() {
             let source = request.source_identity();
-            let request_id = self.pmx_loads.borrow_mut().begin(source.clone(), character);
+            let request_id = self
+                .workspace
+                .borrow_mut()
+                .pmx_import_mut()
+                .begin(source.clone(), character);
             let request = request.with_request_id(request_id);
             App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted {
                 request_id,
@@ -1064,7 +1022,7 @@ impl EditorWindow {
             })
             .is_ok()
         {
-            if let Some(slot_id) = *self.active_inspector_slot.borrow() {
+            if let Some(slot_id) = self.workspace.borrow().selection().material_slot() {
                 let _ = self.dispatch_action(EditorAction::Command(EditorCommand::BindMaterial {
                     slot: slot_id,
                     material: Some(material_id),
@@ -1092,14 +1050,6 @@ impl EditorWindow {
             }))
             .ok()
         });
-        if updated.is_some()
-            && let (Some(slot_id), Some(bridge)) = (
-                *self.active_inspector_slot.borrow(),
-                self.bridge.borrow().as_ref(),
-            )
-        {
-            bridge.set_material_parameter(slot_id, key.to_owned(), parameter.clone());
-        }
         let formatted_value = format_parameter_value(&parameter);
         self.status.set_text(localization::format(
             if updated.is_some() {
@@ -1114,19 +1064,20 @@ impl EditorWindow {
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
             RendererNotification::PmxLoadProgress(progress) => {
-                if self.pmx_loads.borrow().accepts(&progress) {
+                if self.workspace.borrow().pmx_import().accepts(&progress) {
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadProgress { progress });
                 }
             }
             RendererNotification::PmxLoaded { request_id, info } => {
-                let Some(request) = self
-                    .pmx_loads
+                let Some(mut request) = self
+                    .workspace
                     .borrow_mut()
+                    .pmx_import_mut()
                     .complete(request_id, info.source_identity())
                 else {
                     return;
                 };
-                if let Some(mut character) = request.character {
+                if let Some(mut character) = request.take_character() {
                     if character.archive_entry.is_none() {
                         character.archive_entry = info.archive_entry().map(str::to_owned);
                     }
@@ -1148,10 +1099,8 @@ impl EditorWindow {
                 frame,
                 ..
             } => {
-                let slot_matches = self
-                    .active_inspector_slot
-                    .borrow()
-                    .is_some_and(|active| active == slot_id);
+                let slot_matches =
+                    self.workspace.borrow().selection().material_slot() == Some(slot_id);
                 let scene_matches = self.scene_matches(request_id, &source);
                 if !scene_matches || !slot_matches {
                     return;
@@ -1174,8 +1123,9 @@ impl EditorWindow {
                 message,
             } => {
                 if self
-                    .pmx_loads
+                    .workspace
                     .borrow_mut()
+                    .pmx_import_mut()
                     .complete(request_id, &source)
                     .is_some()
                 {
@@ -1245,68 +1195,43 @@ impl EditorWindow {
         slot_id: Option<MaterialSlotId>,
         primitive_index: Option<usize>,
     ) {
-        match self.selection_level.get() {
+        match self.selection_level() {
             SelectionLevel::MaterialSlot => {
-                let Some(slot_id) = slot_id else {
-                    if selection_action == ViewportSelectionAction::Replace {
-                        self.clear_selection();
-                    }
+                let changed = self
+                    .workspace
+                    .borrow_mut()
+                    .selection_mut()
+                    .apply_material_slot(selection_action, slot_id);
+                if !changed {
                     return;
-                };
-                let current_slot = *self.active_inspector_slot.borrow();
-                match selection_action {
-                    ViewportSelectionAction::Replace => {
-                        self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
-                    }
-                    ViewportSelectionAction::Toggle => {
-                        if current_slot == Some(slot_id) {
-                            self.clear_selection();
-                        } else {
-                            self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
-                        }
-                    }
-                    ViewportSelectionAction::Remove => {
-                        if current_slot == Some(slot_id) {
-                            self.clear_selection();
-                        }
-                    }
+                }
+                if let Some(slot_id) = self.workspace.borrow().selection().material_slot() {
+                    self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
+                } else {
+                    self.clear_selection();
                 }
             }
             SelectionLevel::Primitive => {
-                let Some(primitive_index) = primitive_index else {
-                    if selection_action == ViewportSelectionAction::Replace {
-                        self.clear_selection();
-                    }
+                let changed = self
+                    .workspace
+                    .borrow_mut()
+                    .selection_mut()
+                    .apply_primitive(selection_action, primitive_index);
+                if !changed {
                     return;
-                };
-                let mut selected = self.selected_primitives.borrow().clone();
-                match selection_action {
-                    ViewportSelectionAction::Replace => selected = vec![primitive_index],
-                    ViewportSelectionAction::Toggle => {
-                        if let Some(position) =
-                            selected.iter().position(|index| *index == primitive_index)
-                        {
-                            selected.remove(position);
-                        } else {
-                            selected.push(primitive_index);
-                        }
-                    }
-                    ViewportSelectionAction::Remove => {
-                        selected.retain(|index| *index != primitive_index);
-                    }
                 }
-                self.select_primitives(&mut selected);
+                let mut selected = self.workspace.borrow().selection().primitives().to_vec();
+                if selected.is_empty() {
+                    self.clear_selection();
+                } else {
+                    self.select_primitives(&mut selected);
+                }
             }
         }
     }
 
     fn scene_matches(&self, request_id: u64, source: &PmxSourceIdentity) -> bool {
-        self.loaded_scene_request_id.borrow().as_ref() == Some(&request_id)
-            && self
-                .loaded_scene
-                .borrow()
-                .as_ref()
-                .is_some_and(|scene| scene.source_identity() == source)
+        self.workspace.borrow().scene_matches(request_id, source)
     }
 
     fn show_scene_info(&self, request_id: u64, info: &PmxSceneInfo) {
@@ -1314,24 +1239,14 @@ impl EditorWindow {
         self.install_pmx_material_bindings(info);
         self.reflected_inspection
             .replace(inspect_preview_shader().ok());
-        if let Some(bridge) = self.bridge.borrow().as_ref() {
-            let document = self.controller.borrow();
-            for slot in document.document().material_slots() {
-                let Some(material_id) = slot.material() else {
-                    continue;
-                };
-                let Some(material) = document.document().material(material_id) else {
-                    continue;
-                };
-                for (path, value) in material.parameters() {
-                    bridge.set_material_parameter(slot.id(), path.clone(), value.clone());
-                }
-            }
-        }
+        self.preview_synchronizer.borrow_mut().reset();
+        self.synchronize_preview();
         self.split_preview_primitives.borrow_mut().clear();
         self.hierarchy.set_scene_with_split_primitives(info, &[]);
         self.loaded_scene.replace(Some(info.clone()));
-        self.loaded_scene_request_id.replace(Some(request_id));
+        self.workspace
+            .borrow_mut()
+            .install_scene(request_id, info.source_identity().clone());
         self.select_hierarchy_item(HierarchyItemId::Model);
         self.status.set_text(localization::format(
             if info.warnings().is_empty() {
@@ -1451,11 +1366,8 @@ impl EditorWindow {
         self.hierarchy.select_item(item);
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
-                self.selected_primitives.borrow_mut().clear();
-                self.active_inspector_slot.replace(None);
-                if let Some(bridge) = self.bridge.borrow().as_ref() {
-                    bridge.set_selected_material_slot(None);
-                }
+                self.workspace.borrow_mut().selection_mut().clear();
+                self.render_selection();
                 self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
                 self.set_source_visible(false);
@@ -1478,11 +1390,8 @@ impl EditorWindow {
                 unreachable!("component rows are informational preview nodes")
             }
             HierarchyItemId::Materials => {
-                self.selected_primitives.borrow_mut().clear();
-                self.active_inspector_slot.replace(None);
-                if let Some(bridge) = self.bridge.borrow().as_ref() {
-                    bridge.set_selected_material_slot(None);
-                }
+                self.workspace.borrow_mut().selection_mut().clear();
+                self.render_selection();
                 self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
                 self.set_source_visible(false);
@@ -1505,8 +1414,11 @@ impl EditorWindow {
                 else {
                     return;
                 };
-                self.selected_primitives.borrow_mut().clear();
-                self.active_inspector_slot.replace(Some(slot_id));
+                self.workspace
+                    .borrow_mut()
+                    .selection_mut()
+                    .select_material_slot(Some(slot_id));
+                self.render_selection();
                 let context = MaterialSelectionContext::resolve(
                     self.controller.borrow().document(),
                     SelectionTarget::MaterialSlot(slot_id),
@@ -1546,7 +1458,6 @@ impl EditorWindow {
                 self.set_parameter_section_visible(control_count != 0 && has_parameter_section);
                 self.set_inspector_preview_loading();
                 if let Some(bridge) = self.bridge.borrow().as_ref() {
-                    bridge.set_selected_material_slot(Some(slot_id));
                     bridge.request_material_inspector_preview(slot_id);
                 }
                 self.inspector_heading.set_text(slot.name());
@@ -1598,16 +1509,16 @@ impl EditorWindow {
             .map(HierarchyItemId::Primitive)
             .collect::<Vec<_>>();
         self.hierarchy.select_items(&items);
-        self.selected_primitives.replace(valid.clone());
-        self.active_inspector_slot.replace(None);
+        self.workspace
+            .borrow_mut()
+            .selection_mut()
+            .select_primitives(valid.clone());
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.set_inspector_preview_visible(false);
         self.set_source_visible(false);
         self.set_parameter_section_visible(false);
-        if let Some(bridge) = self.bridge.borrow().as_ref() {
-            bridge.set_selected_primitives(valid.clone());
-        }
+        self.render_selection();
         self.inspector_heading
             .set_text(localization::text(Key::Geometry));
         if valid.len() == 1 {
@@ -1723,9 +1634,20 @@ impl EditorWindow {
         }
     }
 
+    fn render_selection(&self) {
+        let workspace = self.workspace.borrow();
+        let selection = workspace.selection();
+        if let Some(bridge) = self.bridge.borrow().as_ref() {
+            if selection.level() == SelectionLevel::Primitive {
+                bridge.set_selected_primitives(selection.primitives().to_vec());
+            } else {
+                bridge.set_selected_material_slot(selection.material_slot());
+            }
+        }
+    }
+
     pub(crate) fn clear_selection(&self) {
-        self.selected_primitives.borrow_mut().clear();
-        self.active_inspector_slot.replace(None);
+        self.workspace.borrow_mut().selection_mut().clear();
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.set_inspector_preview_visible(false);
@@ -1736,9 +1658,7 @@ impl EditorWindow {
         self.inspector_body
             .set_text(localization::text(Key::InspectorBody));
         self.hierarchy.clear_selection();
-        if let Some(bridge) = self.bridge.borrow().as_ref() {
-            bridge.set_selected_material_slot(None);
-        }
+        self.render_selection();
     }
 
     pub(crate) fn zoom(&self, delta: f32) {
@@ -2380,75 +2300,6 @@ fn editor_separator_color() -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pmx_load_tracker_rejects_results_invalidated_by_a_new_project() {
-        let mut tracker = PmxLoadTracker::default();
-        let source = PmxSourceIdentity::file("old.pmx");
-        let request_id = tracker.begin(source.clone(), None);
-        tracker.invalidate();
-
-        assert!(tracker.complete(request_id, &source).is_none());
-    }
-
-    #[test]
-    fn pmx_load_tracker_accepts_only_the_latest_requested_load() {
-        let mut tracker = PmxLoadTracker::default();
-        let old = PmxSourceIdentity::file("old.pmx");
-        let new = PmxSourceIdentity::file("new.pmx");
-        let old_request_id = tracker.begin(old.clone(), None);
-        let new_request_id = tracker.begin(new.clone(), None);
-
-        assert!(tracker.complete(old_request_id, &old).is_none());
-        assert!(tracker.complete(new_request_id, &new).is_some());
-    }
-
-    #[test]
-    fn pmx_load_tracker_distinguishes_entries_in_the_same_archive() {
-        let mut tracker = PmxLoadTracker::default();
-        let first = PmxSourceIdentity::zip("models.zip", "A/model.pmx");
-        let second = PmxSourceIdentity::zip("models.zip", "B/model.pmx");
-        let request_id = tracker.begin(first.clone(), None);
-
-        assert!(tracker.complete(request_id, &second).is_none());
-        assert!(tracker.complete(request_id, &first).is_some());
-    }
-
-    #[test]
-    fn pmx_load_tracker_rejects_an_old_result_for_the_same_source() {
-        let mut tracker = PmxLoadTracker::default();
-        let source = PmxSourceIdentity::file("model.pmx");
-        let old_request_id = tracker.begin(source.clone(), None);
-        let new_request_id = tracker.begin(source.clone(), None);
-
-        assert!(tracker.complete(old_request_id, &source).is_none());
-        assert!(tracker.complete(new_request_id, &source).is_some());
-    }
-
-    #[test]
-    fn failed_pmx_load_does_not_commit_a_candidate_character() {
-        let mut tracker = PmxLoadTracker::default();
-        let source = PmxSourceIdentity::file("model.pmx");
-        let candidate = CharacterSource::pmx(
-            ResourcePath::absolute(PathBuf::from("/tmp/model.pmx"))
-                .expect("the fixture path should be a valid resource path"),
-        );
-        let request_id = tracker.begin(source.clone(), Some(candidate));
-        let failed_request = tracker
-            .complete(request_id, &source)
-            .expect("the current failed request should be consumed");
-
-        let controller = EditorController::new("Test Project");
-        // The failure path consumes the pending request only; it never applies
-        // its candidate character to the editor controller.
-        assert!(failed_request.character.is_some());
-        assert!(pmx_character_commit_command(None).is_none());
-
-        assert!(controller.document().character().is_none());
-        let view_model = controller.view_model();
-        assert!(!view_model.dirty);
-        assert!(!view_model.can_undo);
-    }
 
     #[test]
     fn stores_imported_pmx_relative_to_an_existing_project() {

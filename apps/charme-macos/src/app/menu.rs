@@ -7,8 +7,9 @@ use cacao::{
     foundation::{NO, NSString, YES, id, nil},
     objc::{class, msg_send, sel, sel_impl},
 };
+use charme_application::SelectionLevel;
 
-use super::{CharmeApp, MenuContext, Message, SelectionLevel, recent_projects};
+use super::{CharmeApp, MenuContext, Message, recent_projects};
 use crate::localization::{self, Key};
 
 pub(super) fn install_native_menus() {

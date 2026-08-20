@@ -16,7 +16,7 @@ use cacao::{
     notification_center::Dispatcher,
     objc::{msg_send, sel, sel_impl},
 };
-use charme_application::{ApplicationEvent, EditorAction, EditorController};
+use charme_application::{ApplicationEvent, EditorAction, EditorController, SelectionLevel};
 use charme_core::ParameterValue;
 use charme_renderer::{PmxLoadProgress, PmxSourceIdentity, ViewportSelectionAction};
 use url::Url;
@@ -40,12 +40,6 @@ use menu::{
 pub(crate) enum MenuContext {
     Startup,
     Editor,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SelectionLevel {
-    MaterialSlot,
-    Primitive,
 }
 
 pub(crate) enum Message {

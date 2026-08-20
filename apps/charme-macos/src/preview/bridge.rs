@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     sync::mpsc::{self, Sender, TryRecvError},
     thread::{self, JoinHandle},
     time::Duration,
@@ -167,14 +168,13 @@ impl RenderBridge {
         self.execute(None, Renderer::clear_pmx);
     }
 
-    pub(crate) fn set_material_parameter(
+    pub(crate) fn sync_material_parameters(
         &self,
         slot_id: MaterialSlotId,
-        path: String,
-        value: ParameterValue,
+        parameters: BTreeMap<String, ParameterValue>,
     ) {
         self.execute(None, move |renderer| {
-            renderer.set_material_parameter_for_slot(slot_id, path, value)
+            renderer.sync_material_parameters_for_slot(slot_id, parameters)
         });
     }
 

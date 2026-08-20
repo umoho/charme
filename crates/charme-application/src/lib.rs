@@ -17,7 +17,9 @@ use thiserror::Error;
 
 mod event;
 mod inspector;
+mod preview;
 mod shader;
+mod workspace;
 
 pub use event::ApplicationEvent;
 pub use inspector::{
@@ -25,9 +27,13 @@ pub use inspector::{
     MaterialRenderStateProvider, MaterialSelectionContext, MaterialSlotInspectorProvider,
     SelectionTarget, ShaderParameterProvider, TextureBindingProvider,
 };
+pub use preview::{MaterialPreviewUpdate, PreviewSynchronizer};
 pub use shader::{
     ParameterControlKind, ParameterControlSpec, ShaderInspection, controls_for_material,
     inspect_preview_shader, inspect_shader_source,
+};
+pub use workspace::{
+    PendingPmxImport, PmxImportTracker, SelectionLevel, SelectionState, WorkspaceState,
 };
 
 /// An action that can be issued by any native frontend.

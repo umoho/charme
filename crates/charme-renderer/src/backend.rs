@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError},
     thread,
@@ -59,6 +59,10 @@ pub(crate) enum Command {
         slot_id: Option<MaterialSlotId>,
         path: String,
         value: ParameterValue,
+    },
+    SyncMaterialParameters {
+        slot_id: MaterialSlotId,
+        parameters: BTreeMap<String, ParameterValue>,
     },
     SetSelectedMaterialSlot(Option<MaterialSlotId>),
     SetSelectedPrimitives(Vec<usize>),
@@ -369,6 +373,13 @@ impl Backend {
                 value,
             } => CommandOutcome {
                 redraw: self.set_material_parameter(slot_id, path, value),
+                ..Default::default()
+            },
+            Command::SyncMaterialParameters {
+                slot_id,
+                parameters,
+            } => CommandOutcome {
+                redraw: self.sync_material_parameters(slot_id, parameters),
                 ..Default::default()
             },
             Command::SetSelectedMaterialSlot(slot_id) => {
@@ -1148,6 +1159,48 @@ impl Backend {
             self.refresh_material_previews();
         }
         changed
+    }
+
+    fn sync_material_parameters(
+        &mut self,
+        slot_id: MaterialSlotId,
+        parameters: BTreeMap<String, ParameterValue>,
+    ) -> bool {
+        let Some((handle, mut packed)) = self
+            .pmx_scene
+            .as_ref()
+            .and_then(|scene| scene.material_state_for_slot(slot_id))
+            .map(|(handle, parameters)| (handle.clone(), parameters))
+        else {
+            return false;
+        };
+
+        for (path, value) in &parameters {
+            if let Err(error) = packed.set_parameter(path, value) {
+                let _ = self.events.send(WorkerEvent::Notification(
+                    RendererNotification::MaterialParameterRejected {
+                        path: path.clone(),
+                        message: error.to_string(),
+                    },
+                ));
+                return false;
+            }
+        }
+
+        let updated = {
+            let mut materials = self
+                .app
+                .world_mut()
+                .resource_mut::<Assets<CharmeMaterial>>();
+            materials.get_mut(handle.id()).is_some_and(|mut material| {
+                material.parameters = packed;
+                true
+            })
+        };
+        if updated {
+            self.refresh_material_previews();
+        }
+        updated
     }
 
     fn refresh_material_previews(&mut self) {
