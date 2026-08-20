@@ -44,8 +44,8 @@ impl ToolPalette {
             let stack: id = msg_send![class!(NSStackView), new];
             // NSUserInterfaceLayoutOrientationVertical = 1.
             let _: () = msg_send![stack, setOrientation: 1usize];
-            // NSLayoutAttributeCenterX = 3.
-            let _: () = msg_send![stack, setAlignment: 3usize];
+            // NSLayoutAttributeCenterX = 9.
+            let _: () = msg_send![stack, setAlignment: 9usize];
             let _: () = msg_send![stack, setSpacing: STACK_SPACING];
             let _: () = msg_send![stack, setTranslatesAutoresizingMaskIntoConstraints: NO];
             stack
@@ -91,9 +91,9 @@ fn make_button(entry: &ToolPaletteEntry) -> id {
         let image = symbol_image(entry.symbol_name, description);
         let action = tool_action(entry.id);
         let button: id = msg_send![class!(NSButton), buttonWithImage: image target: menu_target() action: action];
-        // NSButtonTypeToggle = 2, NSImageOnly = 2.
+        // NSButtonTypeToggle = 2, NSImageOnly = 1.
         let _: () = msg_send![button, setButtonType: 2usize];
-        let _: () = msg_send![button, setImagePosition: 2usize];
+        let _: () = msg_send![button, setImagePosition: 1usize];
         let _: () = msg_send![button, setBordered: NO];
         let _: () = msg_send![button, setState: if entry.active { 1usize } else { 0usize }];
         let tooltip = NSString::new(description);
@@ -101,8 +101,10 @@ fn make_button(entry: &ToolPaletteEntry) -> id {
         let _: () = msg_send![button, setTranslatesAutoresizingMaskIntoConstraints: NO];
         let width: id = msg_send![button, widthAnchor];
         let height: id = msg_send![button, heightAnchor];
-        let _: () = msg_send![width, constraintEqualToConstant: BUTTON_SIZE];
-        let _: () = msg_send![height, constraintEqualToConstant: BUTTON_SIZE];
+        let width_constraint: id = msg_send![width, constraintEqualToConstant: BUTTON_SIZE];
+        let height_constraint: id = msg_send![height, constraintEqualToConstant: BUTTON_SIZE];
+        let size_constraints = NSArray::new(&[width_constraint, height_constraint]);
+        let _: () = msg_send![class!(NSLayoutConstraint), activateConstraints: &*size_constraints];
         button
     }
 }
