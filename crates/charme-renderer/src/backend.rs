@@ -41,7 +41,6 @@ use crate::{
     renderer::{RendererNotification, ViewportSelectionAction},
     scene_runtime::{SpawnedPmxScene, spawn_pmx_scene},
     scheduler::RenderScheduler,
-    selection::SelectionFace,
     selection::SelectionGeometry,
 };
 
@@ -1567,21 +1566,35 @@ fn draw_selected_primitive_gizmo(
     }) {
         for component in &primitive.components {
             for edge in &component.edges {
-                // An edge is part of the wireframe when at least one adjacent
-                // face faces the camera, mimicking Blender's backface-culled
-                // selection wire. Edges bounded only by back-facing faces are
-                // hidden. Degenerate faces keep their edges visible.
-                let faces_camera = |face: &SelectionFace| {
-                    face.normal == Vec3::ZERO
-                        || face.normal.dot(camera_position - face.center) > 0.0
+                // Interior edges stay silhouette-only: they are drawn only
+                // where front- and back-facing faces meet, keeping internal
+                // mesh lines hidden. Boundary edges follow their only face
+                // and are culled when it faces away from the camera.
+                let draw_edge = if edge.faces.len() == 1 {
+                    component.faces.get(edge.faces[0]).is_none_or(|face| {
+                        face.normal == Vec3::ZERO
+                            || face.normal.dot(camera_position - face.center) > 0.0
+                    })
+                } else {
+                    let mut has_front_face = false;
+                    let mut has_back_face = false;
+                    for &face_index in &edge.faces {
+                        let Some(face) = component.faces.get(face_index) else {
+                            continue;
+                        };
+                        if face.normal == Vec3::ZERO {
+                            continue;
+                        }
+                        if face.normal.dot(camera_position - face.center) > 0.0 {
+                            has_front_face = true;
+                        } else {
+                            has_back_face = true;
+                        }
+                    }
+                    has_front_face && has_back_face
                 };
-                let has_front_face = edge
-                    .faces
-                    .iter()
-                    .filter_map(|&face_index| component.faces.get(face_index))
-                    .any(faces_camera);
 
-                if has_front_face {
+                if draw_edge {
                     gizmos.line(edge.start, edge.end, SELECTION_GIZMO_COLOR);
                 }
             }
