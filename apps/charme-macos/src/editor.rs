@@ -34,8 +34,8 @@ use cacao::{
 };
 use charme_application::{
     EditorAction, EditorController, InspectorRegistry, InspectorRow, MaterialSelectionContext,
-    PreviewSynchronizer, SelectionLevel, SelectionTarget, WorkspaceAction, WorkspaceEffect,
-    WorkspaceState, inspect_preview_shader, reconcile_pmx_materials,
+    PreviewSynchronizer, SelectionTarget, ToolRegistry, ViewportToolId, WorkspaceAction,
+    WorkspaceEffect, WorkspaceState, inspect_preview_shader, reconcile_pmx_materials,
 };
 use charme_core::{
     CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlotId, ParameterValue,
@@ -54,7 +54,7 @@ use self::{
     },
     hierarchy::HierarchyView,
     inspector::{ParameterControl, PropertyRow},
-    viewport::{NavigationGizmo, OrbitInputView, make_image},
+    viewport::{NavigationGizmo, OrbitInputView, ToolPalette, make_image},
 };
 use crate::{
     app::{CharmeApp, EditorMessage, MenuContext, Message},
@@ -69,6 +69,8 @@ const EDITOR_CONTENT_TOP_INSET: f64 = 52.0;
 const EDITOR_TOOLBAR_SEPARATOR_THICKNESS: f64 = 2.0;
 const PROJECT_TITLEBAR_HORIZONTAL_INSET: f64 = 8.0;
 const DOCK_DIVIDER_HIT_SLOP: f64 = 4.0;
+const TOOL_PALETTE_WIDTH: f64 = 36.0;
+const TOOL_PALETTE_HEIGHT: f64 = 84.0;
 const DOCK_DIVIDER_TARGET_IVAR: &str = "charmeDockDividerTarget";
 const DOCK_DIVIDER_AXIS_IVAR: &str = "charmeDockDividerAxis";
 
@@ -315,6 +317,8 @@ pub(crate) struct EditorWindow {
     image_view: ImageView,
     orbit_input: OrbitInputView,
     navigation_gizmo: NavigationGizmo,
+    tool_palette: ToolPalette,
+    tool_registry: ToolRegistry,
     status: Label,
     hierarchy_label: Label,
     hierarchy: HierarchyView,
@@ -361,6 +365,8 @@ impl EditorWindow {
         image_view.set_background_color(Color::SystemBlack);
         let orbit_input = OrbitInputView::new();
         let navigation_gizmo = NavigationGizmo::new();
+        let tool_registry = ToolRegistry::standard();
+        let tool_palette = ToolPalette::new(&tool_registry);
         let hierarchy_label = label(
             localization::text(Key::Hierarchy),
             11.0,
@@ -483,6 +489,8 @@ impl EditorWindow {
             image_view,
             orbit_input,
             navigation_gizmo,
+            tool_palette,
+            tool_registry,
             status,
             hierarchy_label,
             hierarchy,
@@ -536,6 +544,8 @@ impl EditorWindow {
         self.workspace.borrow_mut().dispatch(WorkspaceAction::Reset);
         self.preview_synchronizer.borrow_mut().reset();
         self.hierarchy.set_allows_multiple_selection(false);
+        self.tool_palette
+            .set_active(ViewportToolId::SelectMaterialSlot);
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
         self.active_material.replace(None);
         self.split_preview_primitives.borrow_mut().clear();
@@ -561,22 +571,37 @@ impl EditorWindow {
             .set_text(localization::text(Key::InspectorBody));
     }
 
-    pub(crate) fn selection_level(&self) -> SelectionLevel {
-        self.workspace.borrow().selection().level()
+    pub(crate) fn tool(&self) -> ViewportToolId {
+        self.workspace.borrow().selection().tool()
     }
 
-    pub(crate) fn set_selection_level(&self, level: SelectionLevel) {
+    pub(crate) fn set_tool(&self, tool: ViewportToolId) {
         if self
             .workspace
             .borrow_mut()
-            .dispatch(WorkspaceAction::SetSelectionLevel(level))
+            .dispatch(WorkspaceAction::SetViewportTool(tool))
             .is_empty()
         {
             return;
         }
-        self.hierarchy
-            .set_allows_multiple_selection(level == SelectionLevel::Primitive);
+        let multiple = self
+            .tool_registry
+            .by_id(tool)
+            .is_some_and(|descriptor| descriptor.allows_multiple_selection());
+        self.hierarchy.set_allows_multiple_selection(multiple);
+        self.tool_palette.set_active(tool);
         self.render_selection();
+    }
+
+    /// Cycles to the next registered tool (Tab).
+    pub(crate) fn cycle_tool(&self) {
+        let next = self.tool_registry.next_after(self.tool());
+        self.set_tool(next);
+    }
+
+    /// Returns to the primary tool (Escape).
+    pub(crate) fn reset_tool(&self) {
+        self.set_tool(ViewportToolId::SelectMaterialSlot);
     }
 
     pub(crate) fn has_loaded_scene(&self) -> bool {
@@ -588,7 +613,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn select_all_primitives(&self) {
-        if self.selection_level() != SelectionLevel::Primitive {
+        if self.tool() != ViewportToolId::SelectPrimitive {
             return;
         }
         let scene = self.loaded_scene.borrow();
@@ -609,7 +634,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn invert_primitive_selection(&self) {
-        if self.selection_level() != SelectionLevel::Primitive {
+        if self.tool() != ViewportToolId::SelectPrimitive {
             return;
         }
         let scene = self.loaded_scene.borrow();
@@ -628,7 +653,7 @@ impl EditorWindow {
     }
 
     pub(crate) fn split_selected_primitives_by_connectivity(&self) {
-        if self.selection_level() != SelectionLevel::Primitive {
+        if self.tool() != ViewportToolId::SelectPrimitive {
             return;
         }
         let selected = self.workspace.borrow().selection().primitives().to_vec();
@@ -1223,8 +1248,8 @@ impl EditorWindow {
         slot_id: Option<MaterialSlotId>,
         primitive_index: Option<usize>,
     ) {
-        match self.selection_level() {
-            SelectionLevel::MaterialSlot => {
+        match self.tool() {
+            ViewportToolId::SelectMaterialSlot => {
                 let effects =
                     self.workspace
                         .borrow_mut()
@@ -1241,7 +1266,7 @@ impl EditorWindow {
                     self.clear_selection();
                 }
             }
-            SelectionLevel::Primitive => {
+            ViewportToolId::SelectPrimitive => {
                 let effects =
                     self.workspace
                         .borrow_mut()
@@ -1398,6 +1423,7 @@ impl EditorWindow {
                 else {
                     return;
                 };
+                self.set_tool(ViewportToolId::SelectMaterialSlot);
                 self.workspace
                     .borrow_mut()
                     .dispatch(WorkspaceAction::SelectMaterialSlot(Some(slot_id)));
@@ -1479,6 +1505,7 @@ impl EditorWindow {
             .copied()
             .map(HierarchyItemId::Primitive)
             .collect::<Vec<_>>();
+        self.set_tool(ViewportToolId::SelectPrimitive);
         self.hierarchy.select_items(&items);
         self.workspace
             .borrow_mut()
@@ -1608,7 +1635,7 @@ impl EditorWindow {
         let workspace = self.workspace.borrow();
         let selection = workspace.selection();
         if let Some(bridge) = self.bridge.borrow().as_ref() {
-            if selection.level() == SelectionLevel::Primitive {
+            if selection.tool() == ViewportToolId::SelectPrimitive {
                 bridge.set_selected_primitives(selection.primitives().to_vec());
             } else {
                 bridge.set_selected_material_slot(selection.material_slot());
@@ -1799,8 +1826,15 @@ impl WindowDelegate for EditorWindow {
         }
         self.viewport.add_subview(&self.image_view);
         self.viewport.add_subview(&self.orbit_input.view);
+        self.viewport.add_subview(&self.tool_palette.view);
         self.viewport.add_subview(&self.status);
         self.viewport.add_subview(&self.navigation_gizmo.view);
+        unsafe {
+            let _: () = msg_send![
+                &*window.objc,
+                makeFirstResponder: self.orbit_input.input_view()
+            ];
+        }
         self.sidebar.add_subview(&self.hierarchy_label);
         self.sidebar.add_subview(self.hierarchy.view());
         self.inspector.add_subview(&self.inspector_label);
@@ -1866,6 +1900,23 @@ impl WindowDelegate for EditorWindow {
                 .view
                 .trailing
                 .constraint_equal_to(&self.viewport.trailing),
+            self.tool_palette
+                .view
+                .leading
+                .constraint_equal_to(&self.viewport.leading)
+                .offset(10.0),
+            self.tool_palette
+                .view
+                .center_y
+                .constraint_equal_to(&self.viewport.center_y),
+            self.tool_palette
+                .view
+                .width
+                .constraint_equal_to_constant(TOOL_PALETTE_WIDTH),
+            self.tool_palette
+                .view
+                .height
+                .constraint_equal_to_constant(TOOL_PALETTE_HEIGHT),
             self.status
                 .leading
                 .constraint_equal_to(&self.viewport.leading)

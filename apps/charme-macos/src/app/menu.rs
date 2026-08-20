@@ -7,7 +7,7 @@ use cacao::{
     foundation::{NO, NSString, YES, id, nil},
     objc::{class, msg_send, sel, sel_impl},
 };
-use charme_application::SelectionLevel;
+use charme_application::ViewportToolId;
 
 use super::{CharmeApp, EditorMessage, MenuContext, Message, recent_projects};
 use crate::localization::{self, Key};
@@ -357,8 +357,8 @@ fn build_selection_level_menu() -> id {
             MenuTag::MaterialSlotLevel,
             localization::text(Key::MaterialSlotSelectionLevel),
             sel!(charmeSelectMaterialSlot:),
-            "",
-            0,
+            "1",
+            COMMAND,
             target,
         ),
     );
@@ -368,8 +368,8 @@ fn build_selection_level_menu() -> id {
             MenuTag::PrimitiveLevel,
             localization::text(Key::PrimitiveSelectionLevel),
             sel!(charmeSelectPrimitive:),
-            "",
-            0,
+            "2",
+            COMMAND,
             target,
         ),
     );
@@ -537,7 +537,7 @@ fn menu_item_with_target(title: &str, action: Sel, key: &str, modifiers: usize, 
     }
 }
 
-fn menu_target() -> id {
+pub(crate) fn menu_target() -> id {
     static TARGET: OnceLock<usize> = OnceLock::new();
     *TARGET.get_or_init(|| unsafe {
         let target: id = msg_send![menu_target_class(), new];
@@ -643,14 +643,12 @@ extern "C" fn menu_split_selected_primitives(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::SplitSelectedPrimitives);
 }
 extern "C" fn menu_select_material_slot(_: &Object, _: Sel, _: id) {
-    App::<CharmeApp, Message>::dispatch_main(Message::SelectionLevelChanged(
-        SelectionLevel::MaterialSlot,
+    App::<CharmeApp, Message>::dispatch_main(Message::ToolChanged(
+        ViewportToolId::SelectMaterialSlot,
     ));
 }
 extern "C" fn menu_select_primitive(_: &Object, _: Sel, _: id) {
-    App::<CharmeApp, Message>::dispatch_main(Message::SelectionLevelChanged(
-        SelectionLevel::Primitive,
-    ));
+    App::<CharmeApp, Message>::dispatch_main(Message::ToolChanged(ViewportToolId::SelectPrimitive));
 }
 extern "C" fn menu_select_all(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::SelectAll);
@@ -727,7 +725,7 @@ pub(super) fn update_menu_state(
     dirty: bool,
     can_undo: bool,
     can_redo: bool,
-    selection_level: SelectionLevel,
+    tool: ViewportToolId,
     has_scene: bool,
     has_primitive_selection: bool,
 ) {
@@ -762,7 +760,7 @@ pub(super) fn update_menu_state(
                     MenuTag::SplitPrimitives,
                     editor,
                     editor
-                        && selection_level == SelectionLevel::Primitive
+                        && tool == ViewportToolId::SelectPrimitive
                         && has_scene
                         && has_primitive_selection,
                 ),
@@ -778,12 +776,12 @@ pub(super) fn update_menu_state(
             levels,
             &[
                 MenuItemState::new(MenuTag::MaterialSlotLevel, true, editor)
-                    .checked(editor && selection_level == SelectionLevel::MaterialSlot),
+                    .checked(editor && tool == ViewportToolId::SelectMaterialSlot),
                 MenuItemState::new(MenuTag::PrimitiveLevel, true, editor)
-                    .checked(editor && selection_level == SelectionLevel::Primitive),
+                    .checked(editor && tool == ViewportToolId::SelectPrimitive),
             ],
         );
-        let primitive_selection = editor && selection_level == SelectionLevel::Primitive;
+        let primitive_selection = editor && tool == ViewportToolId::SelectPrimitive;
         apply_menu_states(
             select,
             &[

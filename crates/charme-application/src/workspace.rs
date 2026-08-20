@@ -1,36 +1,28 @@
 use charme_core::{CharacterSource, MaterialSlotId};
 use charme_renderer::{PmxLoadProgress, PmxSourceIdentity, ViewportSelectionAction};
 
-/// Semantic level used when interpreting hierarchy and viewport selection.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum SelectionLevel {
-    /// Select imported material slots.
-    #[default]
-    MaterialSlot,
-    /// Select one or more source primitives.
-    Primitive,
-}
+use crate::tool::ViewportToolId;
 
 /// Platform-independent editor selection state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SelectionState {
-    level: SelectionLevel,
+    tool: ViewportToolId,
     material_slot: Option<MaterialSlotId>,
     primitives: Vec<usize>,
 }
 
 impl SelectionState {
-    /// Returns the active selection level.
-    pub const fn level(&self) -> SelectionLevel {
-        self.level
+    /// Returns the active viewport tool.
+    pub const fn tool(&self) -> ViewportToolId {
+        self.tool
     }
 
-    /// Changes the selection level and clears targets from the previous level.
-    pub fn set_level(&mut self, level: SelectionLevel) -> bool {
-        if self.level == level {
+    /// Changes the active tool and clears targets from the previous tool.
+    pub fn set_tool(&mut self, tool: ViewportToolId) -> bool {
+        if self.tool == tool {
             return false;
         }
-        self.level = level;
+        self.tool = tool;
         self.clear();
         true
     }
@@ -187,8 +179,8 @@ impl PmxImportTracker {
 pub enum WorkspaceAction {
     /// Reset transient state for a new project.
     Reset,
-    /// Change hierarchy and viewport selection level.
-    SetSelectionLevel(SelectionLevel),
+    /// Change the active hierarchy and viewport selection tool.
+    SetViewportTool(ViewportToolId),
     /// Clear all selected targets.
     ClearSelection,
     /// Select one imported material slot.
@@ -263,9 +255,9 @@ impl WorkspaceState {
                 self.reset();
                 vec![WorkspaceEffect::SelectionChanged, WorkspaceEffect::Reset]
             }
-            WorkspaceAction::SetSelectionLevel(level) => self
+            WorkspaceAction::SetViewportTool(tool) => self
                 .selection
-                .set_level(level)
+                .set_tool(tool)
                 .then_some(WorkspaceEffect::SelectionChanged)
                 .into_iter()
                 .collect(),
@@ -358,8 +350,8 @@ mod tests {
     #[test]
     fn selection_reducer_applies_toggle_and_remove() {
         let mut workspace = WorkspaceState::default();
-        workspace.dispatch(WorkspaceAction::SetSelectionLevel(
-            SelectionLevel::Primitive,
+        workspace.dispatch(WorkspaceAction::SetViewportTool(
+            ViewportToolId::SelectPrimitive,
         ));
         workspace.dispatch(WorkspaceAction::ApplyPrimitiveViewport {
             operation: ViewportSelectionAction::Toggle,

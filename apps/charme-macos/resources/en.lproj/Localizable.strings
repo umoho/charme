@@ -82,6 +82,10 @@
 "SelectionLevelMenu" = "Selection Level";
 "MaterialSlotSelectionLevel" = "Material Slot";
 "PrimitiveSelectionLevel" = "Primitive";
+"ToolMaterialSlotTooltip" = "Select material slots (⌘1)";
+"ToolPrimitiveTooltip" = "Select primitives (⌘2)";
+"ToolMaterialSlotHint" = "Click selects a material slot · ⌘ toggles · ⌥ removes";
+"ToolPrimitiveHint" = "Click selects primitives · ⌘ toggles · ⌥ removes · Tab cycles tools";
 "ViewMenu" = "View";
 "WindowMenu" = "Window";
 "BringAllToFront" = "Bring All to Front";

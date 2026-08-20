@@ -16,7 +16,7 @@ use cacao::{
     notification_center::Dispatcher,
     objc::{msg_send, sel, sel_impl},
 };
-use charme_application::{ApplicationEvent, EditorAction, EditorController, SelectionLevel};
+use charme_application::{ApplicationEvent, EditorAction, EditorController, ViewportToolId};
 use charme_core::ParameterValue;
 use charme_renderer::{
     Frame, PmxLoadProgress, PmxSourceIdentity, RendererNotification, ViewportSelectionAction,
@@ -38,6 +38,8 @@ use menu::{
     set_application_menu_name, update_menu_state,
 };
 
+pub(crate) use menu::menu_target;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MenuContext {
     Startup,
@@ -58,7 +60,7 @@ pub(crate) enum Message {
     InvertSelection,
     SplitSelectedPrimitives,
     MenuContextChanged(MenuContext),
-    SelectionLevelChanged(SelectionLevel),
+    ToolChanged(ViewportToolId),
     ChoosePmx,
     PmxLoadStarted {
         request_id: u64,
@@ -94,6 +96,10 @@ pub(crate) enum EditorMessage {
         y: f64,
         selection_action: ViewportSelectionAction,
     },
+    /// Tab pressed in the viewport: cycle the active tool.
+    CycleViewportTool,
+    /// Escape pressed in the viewport: return to the primary tool.
+    ResetViewportTool,
     Zoom(f32),
     LoadPmx(PathBuf),
     ChooseShader,
@@ -163,7 +169,7 @@ impl AppDelegate for CharmeApp {
             false,
             false,
             false,
-            SelectionLevel::MaterialSlot,
+            ViewportToolId::SelectMaterialSlot,
             false,
             false,
         );
@@ -215,7 +221,7 @@ impl Dispatcher for CharmeApp {
                 self.menu_context.set(context);
                 self.refresh_menus();
             }
-            Message::SelectionLevelChanged(level) => self.set_selection_level(level),
+            Message::ToolChanged(tool) => self.set_tool(tool),
             Message::ChoosePmx => self.choose_pmx(),
             Message::PmxLoadStarted { request_id, source } => {
                 self.show_pmx_loading(request_id, source)
@@ -284,6 +290,16 @@ impl Dispatcher for CharmeApp {
                         y,
                         selection_action,
                     } => window.viewport_clicked(x, y, selection_action),
+                    EditorMessage::CycleViewportTool => {
+                        window.cycle_tool();
+                        drop(editor);
+                        self.refresh_menus();
+                    }
+                    EditorMessage::ResetViewportTool => {
+                        window.reset_tool();
+                        drop(editor);
+                        self.refresh_menus();
+                    }
                     EditorMessage::Zoom(delta) => window.zoom(delta),
                     EditorMessage::LoadPmx(path) => window.import_pmx(path),
                     EditorMessage::ChooseShader => window.choose_shader(),
@@ -417,17 +433,17 @@ impl CharmeApp {
                 )
             })
             .unwrap_or((false, false, false, false, false));
-        let selection_level = editor
+        let tool = editor
             .as_ref()
             .and_then(|window| window.delegate.as_ref())
-            .map(|window| window.selection_level())
-            .unwrap_or(SelectionLevel::MaterialSlot);
+            .map(|window| window.tool())
+            .unwrap_or(ViewportToolId::SelectMaterialSlot);
         update_menu_state(
             self.menu_context.get(),
             dirty,
             can_undo,
             can_redo,
-            selection_level,
+            tool,
             has_scene,
             has_primitive_selection,
         );
@@ -469,10 +485,10 @@ impl CharmeApp {
         self.refresh_menus();
     }
 
-    fn set_selection_level(&self, level: SelectionLevel) {
+    fn set_tool(&self, tool: ViewportToolId) {
         let editor = self.editor.borrow();
         if let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref()) {
-            window.set_selection_level(level);
+            window.set_tool(tool);
         }
         drop(editor);
         self.refresh_menus();

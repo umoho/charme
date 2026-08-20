@@ -82,6 +82,10 @@
 "SelectionLevelMenu" = "选择级别";
 "MaterialSlotSelectionLevel" = "材质槽";
 "PrimitiveSelectionLevel" = "Primitive";
+"ToolMaterialSlotTooltip" = "选择材质槽（⌘1）";
+"ToolPrimitiveTooltip" = "选择Primitive（⌘2）";
+"ToolMaterialSlotHint" = "点击选择材质槽 · ⌘ 切换 · ⌥ 移除";
+"ToolPrimitiveHint" = "点击选择Primitive · ⌘ 切换 · ⌥ 移除 · Tab 切换工具";
 "ViewMenu" = "视图";
 "WindowMenu" = "窗口";
 "BringAllToFront" = "将所有窗口置于最前";

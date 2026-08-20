@@ -28,6 +28,9 @@ const MAGNIFICATION_ZOOM_SENSITIVITY: f32 = 1.0;
 const CONTROL_MODIFIER_FLAG: NSUInteger = 1 << 18;
 const OPTION_MODIFIER_FLAG: NSUInteger = 1 << 19;
 const COMMAND_MODIFIER_FLAG: NSUInteger = 1 << 20;
+// kVK_Tab and kVK_Escape virtual key codes.
+const KEY_TAB: u16 = 48;
+const KEY_ESCAPE: u16 = 53;
 
 pub(crate) struct OrbitInputView {
     pub(crate) view: View,
@@ -52,6 +55,11 @@ impl OrbitInputView {
             view,
             _input: ObjcProperty::from_retained(input),
         }
+    }
+
+    /// Returns the underlying input view that accepts key events.
+    pub(crate) fn input_view(&self) -> id {
+        self._input.get(|input| input as *const Object as id)
     }
 }
 
@@ -105,6 +113,11 @@ fn input_class() -> *const Class {
             sel!(acceptsFirstMouse:),
             accepts_first_mouse as extern "C" fn(&Object, Sel, id) -> bool,
         );
+        declaration.add_method(
+            sel!(acceptsFirstResponder),
+            accepts_first_responder as extern "C" fn(&Object, Sel) -> bool,
+        );
+        declaration.add_method(sel!(keyDown:), key_down as extern "C" fn(&Object, Sel, id));
         declaration.register() as *const Class as usize
     }) as *const Class
 }
@@ -228,6 +241,27 @@ fn scroll_action(
 
 extern "C" fn accepts_first_mouse(_: &Object, _: Sel, _: id) -> bool {
     YES
+}
+
+extern "C" fn accepts_first_responder(_: &Object, _: Sel) -> bool {
+    YES
+}
+
+extern "C" fn key_down(_: &Object, _: Sel, event: id) {
+    let key_code: u16 = unsafe { msg_send![event, keyCode] };
+    match key_code {
+        KEY_TAB => {
+            App::<CharmeApp, Message>::dispatch_main(Message::Editor(
+                EditorMessage::CycleViewportTool,
+            ));
+        }
+        KEY_ESCAPE => {
+            App::<CharmeApp, Message>::dispatch_main(Message::Editor(
+                EditorMessage::ResetViewportTool,
+            ));
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]

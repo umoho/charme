@@ -20,6 +20,7 @@ mod import;
 mod inspector;
 mod preview;
 mod shader;
+mod tool;
 mod workspace;
 
 pub use event::ApplicationEvent;
@@ -35,9 +36,13 @@ pub use shader::{
     ParameterControlKind, ParameterControlSpec, ShaderInspection, controls_for_material,
     inspect_preview_shader, inspect_shader_source,
 };
+pub use tool::{
+    ModifierState, SelectMaterialSlotTool, SelectPrimitiveTool, SelectionDomain, ToolPaletteEntry,
+    ToolPaletteModel, ToolRegistry, ToolShortcut, ViewportToolDescriptor, ViewportToolId,
+    default_selection_action,
+};
 pub use workspace::{
-    PendingPmxImport, SelectionLevel, SelectionState, WorkspaceAction, WorkspaceEffect,
-    WorkspaceState,
+    PendingPmxImport, SelectionState, WorkspaceAction, WorkspaceEffect, WorkspaceState,
 };
 
 /// An action that can be issued by any native frontend.

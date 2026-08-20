@@ -24,6 +24,14 @@ macro_rules! localization_keys {
                     $(Self::$key => stringify!($key)),+
                 }
             }
+
+            /// Resolves a localization resource key back to its `Key` variant.
+            pub(crate) fn from_resource_key(resource_key: &str) -> Option<Key> {
+                KEYS
+                    .iter()
+                    .copied()
+                    .find(|key| key.resource_key() == resource_key)
+            }
         }
     };
 }
@@ -111,6 +119,10 @@ localization_keys!(
     SelectionLevelMenu,
     MaterialSlotSelectionLevel,
     PrimitiveSelectionLevel,
+    ToolMaterialSlotTooltip,
+    ToolPrimitiveTooltip,
+    ToolMaterialSlotHint,
+    ToolPrimitiveHint,
     ViewMenu,
     WindowMenu,
     BringAllToFront,
