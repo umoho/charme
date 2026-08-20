@@ -62,6 +62,33 @@ macOS Bundle 打包相关修改应使用 `scripts/run-macos-app.sh --build-only`
 - Shell 脚本使用 `/bin/sh` 可用的语法，并在修改后运行 `sh -n scripts/run-macos-app.sh`。
 - 出现在 UI 中的中英文混合文本无需用空格隔开。
 
+## 设计准则
+
+### 数据流与依赖方向
+
+- 数据流保持单向：Native input → `EditorAction`/`WorkspaceAction` → `EditorController`/`WorkspaceState` → update/effect → 原生展示 + `PreviewSynchronizer` → renderer command；渲染器通知作为动作回流，不反向修改文档。
+- 编辑器文档是唯一事实来源，渲染世界是投影。文档材质值只能通过 `EditorCommand` 写入，原生视图不得直接修改渲染器；`PreviewSynchronizer` 在每次动作后从文档推导完整槽位参数更新。
+- 平台无关的瞬态状态（选择、PMX 导入追踪、预览投影、Inspector 注册表、材质对账）放在 `charme-application`，不要放进 macOS UI。
+- Bevy 与 ECS 类型不得越过 renderer/UI 边界。
+
+### 开闭原则
+
+- 扩展优先于修改：新 Inspector 分区通过注册 `InspectorProvider` 加入，不改动已有提供者；新菜单项用 `MenuTag` + `MenuItemState` 描述符声明式驱动；新状态变更通过增加 `WorkspaceAction`/`WorkspaceEffect` 变体实现。
+- 状态变更使用 reducer 风格：`dispatch(action)` 返回 `WorkspaceEffect` 列表，调用方按 effect 决定适配动作，避免各处直接修改状态。
+- 参数类型统一使用 `charme-core` 的 `ParameterValue`，反射、打包、Inspector 与渲染 ABI 共享同一类型集合，不各自发明类型。
+
+### 单一职责
+
+- 模块按关注点拆分：调度（`RenderScheduler`）、选择/拾取（`selection`）、瞬态叠加（`overlay`）、PMX 导入（`pmx_import`）与场景生成（`scene_runtime`）各自独立，不互相混入。
+- 消息按来源分类：`ApplicationEvent`（应用层）、`EditorMessage`（编辑器 UI）、`PreviewEvent`（预览传输）分开分发，不混入同一枚举。
+- `RenderBridge` 只负责调度渲染操作并把结果转发到主线程，不承担状态管理。
+
+### 健壮性
+
+- 稳定标识优先于位置/索引：菜单用 `MenuTag`、Inspector 分区用稳定 key、材质槽用 `MaterialSlotId`。
+- 异步 PMX 导入保留候选状态，成功后以原子事务提交（`reconcile_pmx_materials` 构造单个 `EditorCommand::Transaction`），过期或不匹配的结果被拒绝，不影响当前场景。
+- 编译或参数校验失败时保留最后一次成功渲染的材质，并通过渲染器通知上报，不替换当前有效材质。
+
 ## 日志规范
 
 - 运行时诊断优先使用 `tracing`，按严重程度使用 `tracing::error!`、`warn!`、`info!`、`debug!` 或 `trace!`，不使用 `eprintln!`、`print!` 或 `println!` 代替日志。
