@@ -1,12 +1,11 @@
-use std::{collections::HashMap, io, path::Path};
+use std::{io, path::Path};
 
 use bevy::{
     asset::RenderAssetUsages,
     image::{CompressedImageFormats, ImageSampler, ImageType},
-    math::Ray3d,
     prelude::{
-        AlphaMode, App, Assets, ChildOf, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
-        Resource, Transform, Vec3,
+        AlphaMode, App, Assets, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
+        Transform, Vec3,
     },
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
@@ -15,8 +14,15 @@ use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 use charme_core::MaterialSlotId;
 use charme_geometry::{PrimitiveRange, PrimitiveSplit, split_primitive};
 
+#[cfg(test)]
+use crate::selection::{
+    PrimitiveComponentSelectionGeometry, PrimitiveSelectionGeometry, SelectionGeometry,
+    selection_edges, selection_face,
+};
+
 use crate::{
     PmxLoadStage,
+    overlay::PreviewOverlays,
     source::{PmxInputSource, PmxSourceIdentity, ResolvedPmxLoadRequest},
 };
 
@@ -192,11 +198,11 @@ impl PmxSceneInfo {
 
 pub(crate) struct PreparedPmxScene {
     pub info: PmxSceneInfo,
-    model: Pmx,
-    primitive_splits: Vec<Option<PrimitiveSplit>>,
+    pub(crate) model: Pmx,
+    pub(crate) primitive_splits: Vec<Option<PrimitiveSplit>>,
     textures: Vec<DecodedTexture>,
-    bounds_min: Vec3,
-    bounds_max: Vec3,
+    pub(crate) bounds_min: Vec3,
+    pub(crate) bounds_max: Vec3,
 }
 
 impl PreparedPmxScene {
@@ -205,276 +211,6 @@ impl PreparedPmxScene {
         let translation = Vec3::new(-center.x, -self.bounds_min.y, -center.z);
         (self.bounds_min + translation, self.bounds_max + translation)
     }
-}
-
-/// CPU geometry retained for viewport picking and selected-primitive outlines.
-#[derive(Resource, Default)]
-pub(crate) struct SelectionGeometry {
-    pub(crate) scene_source: Option<PmxSourceIdentity>,
-    pub(crate) primitives: Vec<PrimitiveSelectionGeometry>,
-    selected_slot: Option<MaterialSlotId>,
-    selected_primitives: Vec<usize>,
-}
-
-pub(crate) struct PrimitiveSelectionGeometry {
-    pub(crate) primitive_index: usize,
-    pub(crate) slot_id: MaterialSlotId,
-    pub(crate) components: Vec<PrimitiveComponentSelectionGeometry>,
-}
-
-pub(crate) struct PrimitiveComponentSelectionGeometry {
-    pub(crate) faces: Vec<SelectionFace>,
-    pub(crate) edges: Vec<SelectionEdge>,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct SelectionFace {
-    pub(crate) vertices: [Vec3; 3],
-    pub(crate) normal: Vec3,
-    pub(crate) center: Vec3,
-}
-
-pub(crate) struct SelectionEdge {
-    pub(crate) start: Vec3,
-    pub(crate) end: Vec3,
-    pub(crate) faces: Vec<usize>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PickedPrimitive {
-    pub(crate) primitive_index: usize,
-    pub(crate) slot_id: MaterialSlotId,
-    pub(crate) distance: f32,
-}
-
-impl SelectionGeometry {
-    pub(crate) fn from_prepared_with_progress(
-        prepared: &PreparedPmxScene,
-        mut report: impl FnMut(usize, usize),
-    ) -> Self {
-        let center = (prepared.bounds_min + prepared.bounds_max) * 0.5;
-        let translation = Vec3::new(-center.x, -prepared.bounds_min.y, -center.z);
-        let positions = &prepared.model.geometry().positions;
-        let slots = prepared.info.material_slots();
-        let total = prepared.model.primitives().len();
-        let mut primitives = Vec::with_capacity(total);
-        report(0, total);
-
-        for (primitive_index, primitive) in prepared.model.primitives().iter().enumerate() {
-            let Some(slot_id) = slots.get(primitive.material_index).map(PmxMaterialSlot::id) else {
-                report(primitive_index + 1, total);
-                continue;
-            };
-            let Some(split) = prepared
-                .primitive_splits
-                .get(primitive_index)
-                .and_then(Option::as_ref)
-            else {
-                report(primitive_index + 1, total);
-                continue;
-            };
-            let components = split
-                .components
-                .iter()
-                .filter_map(|component| {
-                    let faces = component
-                        .indices
-                        .chunks_exact(3)
-                        .filter_map(|triangle| {
-                            let first = positions.get(triangle[0] as usize)?;
-                            let second = positions.get(triangle[1] as usize)?;
-                            let third = positions.get(triangle[2] as usize)?;
-                            Some(selection_face(
-                                Vec3::from(*first) + translation,
-                                Vec3::from(*second) + translation,
-                                Vec3::from(*third) + translation,
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    if faces.is_empty() {
-                        return None;
-                    }
-                    let edges = selection_edges(&faces);
-                    Some(PrimitiveComponentSelectionGeometry { faces, edges })
-                })
-                .collect::<Vec<_>>();
-            if !components.is_empty() {
-                primitives.push(PrimitiveSelectionGeometry {
-                    primitive_index,
-                    slot_id,
-                    components,
-                });
-            }
-            report(primitive_index + 1, total);
-        }
-
-        Self {
-            scene_source: Some(prepared.info.source_identity().clone()),
-            primitives,
-            selected_slot: None,
-            selected_primitives: Vec::new(),
-        }
-    }
-
-    pub(crate) fn set_selected_slot(&mut self, slot_id: Option<MaterialSlotId>) -> bool {
-        let selected_slot = slot_id.filter(|slot_id| {
-            self.primitives
-                .iter()
-                .any(|primitive| primitive.slot_id == *slot_id)
-        });
-        let changed = self.selected_slot != selected_slot || !self.selected_primitives.is_empty();
-        self.selected_slot = selected_slot;
-        self.selected_primitives.clear();
-        changed
-    }
-
-    pub(crate) fn set_selected_primitives(&mut self, primitive_indices: Vec<usize>) -> bool {
-        let mut selected_primitives = primitive_indices
-            .into_iter()
-            .filter(|primitive_index| {
-                self.primitives
-                    .iter()
-                    .any(|primitive| primitive.primitive_index == *primitive_index)
-            })
-            .collect::<Vec<_>>();
-        selected_primitives.sort_unstable();
-        selected_primitives.dedup();
-        let changed =
-            self.selected_primitives != selected_primitives || self.selected_slot.is_some();
-        self.selected_primitives = selected_primitives;
-        self.selected_slot = None;
-        changed
-    }
-
-    pub(crate) fn selected_slot(&self) -> Option<MaterialSlotId> {
-        self.selected_slot
-    }
-
-    pub(crate) fn selected_primitives(&self) -> &[usize] {
-        &self.selected_primitives
-    }
-
-    pub(crate) fn pick(&self, ray: Ray3d) -> Option<PickedPrimitive> {
-        let direction = *ray.direction;
-        let mut closest = None;
-        for primitive in &self.primitives {
-            for component in &primitive.components {
-                for face in &component.faces {
-                    let Some(distance) =
-                        ray_triangle_intersection(ray.origin, direction, face.vertices)
-                    else {
-                        continue;
-                    };
-                    if closest
-                        .as_ref()
-                        .is_none_or(|hit: &PickedPrimitive| distance < hit.distance)
-                    {
-                        closest = Some(PickedPrimitive {
-                            primitive_index: primitive.primitive_index,
-                            slot_id: primitive.slot_id,
-                            distance,
-                        });
-                    }
-                }
-            }
-        }
-        closest
-    }
-}
-
-fn selection_face(first: Vec3, second: Vec3, third: Vec3) -> SelectionFace {
-    let raw_normal = (second - first).cross(third - first);
-    let normal = if raw_normal.length_squared() > f32::EPSILON {
-        raw_normal.normalize()
-    } else {
-        Vec3::ZERO
-    };
-    SelectionFace {
-        vertices: [first, second, third],
-        normal,
-        center: (first + second + third) / 3.0,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct PositionKey([u32; 3]);
-
-impl From<Vec3> for PositionKey {
-    fn from(value: Vec3) -> Self {
-        Self([value.x.to_bits(), value.y.to_bits(), value.z.to_bits()])
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct EdgeKey(PositionKey, PositionKey);
-
-struct EdgeAccumulator {
-    start: Vec3,
-    end: Vec3,
-    faces: Vec<usize>,
-}
-
-fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
-    let mut edges = HashMap::<EdgeKey, EdgeAccumulator>::new();
-    for (face_index, face) in faces.iter().enumerate() {
-        for (start, end) in [
-            (face.vertices[0], face.vertices[1]),
-            (face.vertices[1], face.vertices[2]),
-            (face.vertices[2], face.vertices[0]),
-        ] {
-            let start_key = PositionKey::from(start);
-            let end_key = PositionKey::from(end);
-            let (key, start, end) = if start_key <= end_key {
-                (EdgeKey(start_key, end_key), start, end)
-            } else {
-                (EdgeKey(end_key, start_key), end, start)
-            };
-            let edge = edges.entry(key).or_insert_with(|| EdgeAccumulator {
-                start,
-                end,
-                faces: Vec::new(),
-            });
-            if !edge.faces.contains(&face_index) {
-                edge.faces.push(face_index);
-            }
-        }
-    }
-
-    edges
-        .into_values()
-        .map(|edge| SelectionEdge {
-            start: edge.start,
-            end: edge.end,
-            faces: edge.faces,
-        })
-        .collect()
-}
-
-fn ray_triangle_intersection(origin: Vec3, direction: Vec3, vertices: [Vec3; 3]) -> Option<f32> {
-    const EPSILON: f32 = 1e-6;
-    let edge_one = vertices[1] - vertices[0];
-    let edge_two = vertices[2] - vertices[0];
-    let perpendicular = direction.cross(edge_two);
-    let determinant = edge_one.dot(perpendicular);
-    if determinant.abs() < EPSILON {
-        return None;
-    }
-
-    let inverse_determinant = determinant.recip();
-    let origin_offset = origin - vertices[0];
-    let u = inverse_determinant * origin_offset.dot(perpendicular);
-    if !(0.0..=1.0).contains(&u) {
-        return None;
-    }
-
-    let cross = origin_offset.cross(edge_one);
-    let v = inverse_determinant * direction.dot(cross);
-    if v < 0.0 || u + v > 1.0 {
-        return None;
-    }
-
-    let distance = inverse_determinant * edge_two.dot(cross);
-    (distance > EPSILON).then_some(distance)
 }
 
 struct DecodedTexture {
@@ -543,6 +279,7 @@ pub(crate) struct SpawnedPmxScene {
     meshes: Vec<Handle<Mesh>>,
     primitive_entities: Vec<Option<Entity>>,
     primitive_component_counts: Vec<usize>,
+    overlays: PreviewOverlays,
     pub(crate) materials: Vec<Handle<CharmeMaterial>>,
     default_material_parameters: Vec<CharmeMaterialParams>,
     pub(crate) material_slot_ids: Vec<MaterialSlotId>,
@@ -578,50 +315,18 @@ impl SpawnedPmxScene {
         app: &mut App,
         primitive_indices: &[usize],
     ) -> bool {
-        let mut primitive_indices = primitive_indices.to_vec();
-        primitive_indices.sort_unstable();
-        primitive_indices.dedup();
-
-        let mut changed = false;
-        for primitive_index in primitive_indices {
-            let Some(Some(original_entity)) = self.primitive_entities.get(primitive_index) else {
-                continue;
-            };
-            let Some(&component_count) = self.primitive_component_counts.get(primitive_index)
-            else {
-                continue;
-            };
-            if component_count <= 1 {
-                continue;
-            }
-
-            // Connected components have the same material and transform, so
-            // replacing one primitive draw with a draw per component produces
-            // identical pixels but can increase render work by hundreds of
-            // times. Keep the original batched mesh and represent the temporary
-            // split with lightweight child entities instead.
-            for component_index in 0..component_count {
-                let entity = app
-                    .world_mut()
-                    .spawn((
-                        Name::new(format!(
-                            "PMX Primitive {primitive_index} Component {component_index}"
-                        )),
-                        ChildOf(*original_entity),
-                    ))
-                    .id();
-                self.entities.push(entity);
-            }
-
-            self.primitive_entities[primitive_index] = None;
-            changed = true;
-        }
-        changed
+        self.overlays.show_connectivity(
+            app,
+            &self.primitive_entities,
+            &self.primitive_component_counts,
+            primitive_indices,
+        )
     }
 }
 
 impl SpawnedPmxScene {
     pub fn despawn(self, app: &mut App) {
+        self.overlays.despawn(app);
         for entity in self.entities {
             let _ = app.world_mut().despawn(entity);
         }
@@ -769,6 +474,7 @@ pub(crate) fn spawn_pmx_scene(
             .iter()
             .map(|split| split.as_ref().map_or(0, |split| split.components.len()))
             .collect(),
+        overlays: PreviewOverlays::default(),
         material_slot_ids: prepared
             .info
             .material_slots()

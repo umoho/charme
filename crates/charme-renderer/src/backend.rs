@@ -38,10 +38,9 @@ use crate::{
     BackgroundColor, Frame, OutputSize, PixelFormat, PmxLoadProgress, PmxLoadRequest, PmxLoadStage,
     PmxSourceIdentity, RendererConfig, RendererError,
     renderer::{RendererNotification, ViewportSelectionAction},
-    scene::{
-        PreparedPmxScene, SelectionGeometry, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene,
-    },
+    scene::{PreparedPmxScene, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene},
     scheduler::RenderScheduler,
+    selection::SelectionGeometry,
 };
 
 pub(crate) enum Command {

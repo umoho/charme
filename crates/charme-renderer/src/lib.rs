@@ -11,9 +11,11 @@ mod backend;
 mod config;
 mod error;
 mod frame;
+mod overlay;
 mod renderer;
 mod scene;
 mod scheduler;
+mod selection;
 mod source;
 
 pub use archive::discover_pmx_archive_entries;
