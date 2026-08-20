@@ -58,7 +58,7 @@ fn fragment() -> @location(0) vec4<f32> {
     let block = &interface.parameter_blocks[0];
     let mut buffer = block.create_buffer();
     buffer.set("exposure", ParameterValue::F32(1.5))?;
-    buffer.set("tint", ParameterValue::F32Vector(vec![1.0, 0.8, 0.6]))?;
+    buffer.set("tint", ParameterValue::Vec3([1.0, 0.8, 0.6]))?;
     println!("uniform bytes: {:?}", buffer.bytes());
 
     Ok(())

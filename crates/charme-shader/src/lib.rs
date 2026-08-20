@@ -12,6 +12,7 @@ mod packer;
 mod reflection;
 mod scanner;
 
+pub use charme_core::ParameterValue;
 pub use composer::{
     ComposeStage, ShaderComposeError, ShaderComposer, ShaderDefValue, ShaderDefs, ShaderSource,
 };
@@ -19,7 +20,7 @@ pub use metadata::{
     MetadataBlock, MetadataEntry, MetadataParseError, MetadataPath, MetadataValue,
     parse_metadata_block,
 };
-pub use packer::{ParameterBuffer, ParameterValue, ParameterWriteError};
+pub use packer::{ParameterBuffer, ParameterWriteError};
 pub use reflection::{
     EntryPoint, InterfaceDiagnostic, InterfaceDiagnosticKind, ParameterBlock, ParameterField,
     ParameterType, ReflectError, ReflectStage, ReflectedMetadata, Resource, ResourceKind,

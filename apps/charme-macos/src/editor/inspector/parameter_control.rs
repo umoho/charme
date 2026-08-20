@@ -153,6 +153,12 @@ impl ParameterControl {
             ParameterValue::Vec2(values) => format_values_f32(values),
             ParameterValue::Vec3(values) => format_values_f32(values),
             ParameterValue::Vec4(values) => format_color_f32(values),
+            ParameterValue::IVec2(values) => format!("{values:?}"),
+            ParameterValue::IVec3(values) => format!("{values:?}"),
+            ParameterValue::IVec4(values) => format!("{values:?}"),
+            ParameterValue::UVec2(values) => format!("{values:?}"),
+            ParameterValue::UVec3(values) => format!("{values:?}"),
+            ParameterValue::UVec4(values) => format!("{values:?}"),
         };
         label.set_text(text);
     }

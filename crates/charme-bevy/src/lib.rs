@@ -27,6 +27,83 @@ pub const CHARME_PARAMETER_LANES: usize = 16;
 /// Number of bytes in the fixed material parameter ABI.
 pub const CHARME_PARAMETER_BYTES: usize = CHARME_PARAMETER_LANES * 16;
 
+/// Value representation used by one fixed ABI field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AbiParameterKind {
+    /// One finite `f32` component.
+    F32,
+    /// One bit-cast `u32` component.
+    U32,
+    /// Four finite `f32` components.
+    Vec4,
+}
+
+impl AbiParameterKind {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::U32 => "u32",
+            Self::Vec4 => "vec4",
+        }
+    }
+}
+
+/// Declarative location of one field in the fixed material ABI.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AbiParameterField {
+    /// Stable reflected path used by documents and editor controls.
+    pub path: &'static str,
+    /// Accepted core value type.
+    pub kind: AbiParameterKind,
+    /// Zero-based `vec4` lane.
+    pub lane: usize,
+    /// First component within the lane.
+    pub component: usize,
+}
+
+/// First-version fixed ABI schema shared by default initialization and writes.
+pub const CHARME_PARAMETER_FIELDS: &[AbiParameterField] = &[
+    AbiParameterField {
+        path: "material.roughness",
+        kind: AbiParameterKind::F32,
+        lane: 0,
+        component: 0,
+    },
+    AbiParameterField {
+        path: "material.rim_strength",
+        kind: AbiParameterKind::F32,
+        lane: 0,
+        component: 1,
+    },
+    // Compatibility path currently controls the Blinn-Phong highlight.
+    AbiParameterField {
+        path: "material.outline_width",
+        kind: AbiParameterKind::F32,
+        lane: 0,
+        component: 2,
+    },
+    AbiParameterField {
+        path: "material.toon_bands",
+        kind: AbiParameterKind::U32,
+        lane: 0,
+        component: 3,
+    },
+    AbiParameterField {
+        path: "material.base_tint",
+        kind: AbiParameterKind::Vec4,
+        lane: 1,
+        component: 0,
+    },
+];
+
+const CHARME_PARAMETER_DEFAULTS: &[ParameterValue] = &[
+    ParameterValue::F32(0.45),
+    ParameterValue::F32(0.65),
+    ParameterValue::F32(1.25),
+    ParameterValue::U32(3),
+    ParameterValue::Vec4([0.82, 0.86, 1.0, 1.0]),
+];
+
 /// The fixed, GPU-compatible parameter block used by Charme materials.
 ///
 /// The first two lanes are currently assigned as follows:
@@ -41,17 +118,27 @@ pub struct CharmeMaterialParams {
 
 impl Default for CharmeMaterialParams {
     fn default() -> Self {
-        Self::from_values(
-            [0.45, 0.65, 1.25, f32::from_bits(3)],
-            [0.82, 0.86, 1.0, 1.0],
-        )
+        let mut parameters = Self {
+            lanes: [Vec4::ZERO; CHARME_PARAMETER_LANES],
+        };
+        for (field, value) in CHARME_PARAMETER_FIELDS
+            .iter()
+            .zip(CHARME_PARAMETER_DEFAULTS)
+        {
+            parameters
+                .write_field(*field, value)
+                .expect("fixed ABI defaults must match their field schema");
+        }
+        parameters
     }
 }
 
 impl CharmeMaterialParams {
     /// Creates the default ABI block with a caller-provided base tint.
     pub fn with_tint(tint: [f32; 4]) -> Self {
-        Self::from_values([0.45, 0.65, 1.25, f32::from_bits(3)], tint)
+        let mut parameters = Self::default();
+        parameters.lanes[1] = Vec4::from_array(tint);
+        parameters
     }
 
     /// Creates a block from the first control lane and tint lane.
@@ -103,44 +190,53 @@ impl CharmeMaterialParams {
         path: &str,
         value: &ParameterValue,
     ) -> Result<(), ParameterError> {
-        let field = path.strip_prefix("material.").unwrap_or(path);
-        match (field, value) {
-            ("roughness", ParameterValue::F32(value)) => self.lanes[0][0] = checked(*value)?,
-            ("rim_strength", ParameterValue::F32(value)) => self.lanes[0][1] = checked(*value)?,
-            // The third lane remains addressable as `outline_width` for document
-            // compatibility, but currently controls the Blinn-Phong highlight.
-            ("outline_width", ParameterValue::F32(value)) => self.lanes[0][2] = checked(*value)?,
-            ("toon_bands", ParameterValue::U32(value)) => self.lanes[0][3] = f32::from_bits(*value),
-            ("base_tint", ParameterValue::Vec4(value)) => {
-                for component in value {
-                    checked(*component)?;
+        let short_path = path.strip_prefix("material.").unwrap_or(path);
+        let field = CHARME_PARAMETER_FIELDS
+            .iter()
+            .find(|field| {
+                field.path == path || field.path.strip_prefix("material.") == Some(short_path)
+            })
+            .copied()
+            .ok_or_else(|| ParameterError::Unknown {
+                path: path.to_owned(),
+            })?;
+        self.write_field(field, value).map_err(|error| match error {
+            ParameterError::TypeMismatch {
+                expected, actual, ..
+            } => ParameterError::TypeMismatch {
+                path: path.to_owned(),
+                expected,
+                actual,
+            },
+            error => error,
+        })
+    }
+
+    fn write_field(
+        &mut self,
+        field: AbiParameterField,
+        value: &ParameterValue,
+    ) -> Result<(), ParameterError> {
+        match (field.kind, value) {
+            (AbiParameterKind::F32, ParameterValue::F32(value)) => {
+                self.lanes[field.lane][field.component] = checked(*value)?;
+            }
+            (AbiParameterKind::U32, ParameterValue::U32(value)) => {
+                self.lanes[field.lane][field.component] = f32::from_bits(*value);
+            }
+            (AbiParameterKind::Vec4, ParameterValue::Vec4(values)) => {
+                for value in values {
+                    checked(*value)?;
                 }
-                self.lanes[1] = Vec4::from_array(*value);
+                for (offset, value) in values.iter().enumerate() {
+                    self.lanes[field.lane][field.component + offset] = *value;
+                }
             }
-            ("roughness" | "rim_strength" | "outline_width", value) => {
+            (kind, value) => {
                 return Err(ParameterError::TypeMismatch {
-                    path: path.to_owned(),
-                    expected: "f32",
+                    path: field.path.to_owned(),
+                    expected: kind.name(),
                     actual: kind_name(value),
-                });
-            }
-            ("toon_bands", value) => {
-                return Err(ParameterError::TypeMismatch {
-                    path: path.to_owned(),
-                    expected: "u32",
-                    actual: kind_name(value),
-                });
-            }
-            ("base_tint", value) => {
-                return Err(ParameterError::TypeMismatch {
-                    path: path.to_owned(),
-                    expected: "vec4",
-                    actual: kind_name(value),
-                });
-            }
-            _ => {
-                return Err(ParameterError::Unknown {
-                    path: path.to_owned(),
                 });
             }
         }
@@ -188,6 +284,12 @@ fn kind_name(value: &ParameterValue) -> &'static str {
         ParameterValue::Vec2(_) => "vec2",
         ParameterValue::Vec3(_) => "vec3",
         ParameterValue::Vec4(_) => "vec4",
+        ParameterValue::IVec2(_) => "ivec2",
+        ParameterValue::IVec3(_) => "ivec3",
+        ParameterValue::IVec4(_) => "ivec4",
+        ParameterValue::UVec2(_) => "uvec2",
+        ParameterValue::UVec3(_) => "uvec3",
+        ParameterValue::UVec4(_) => "uvec4",
     }
 }
 
@@ -275,6 +377,25 @@ pub enum ParameterBytesError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_abi_schema_has_unique_in_bounds_fields() {
+        let mut paths = std::collections::HashSet::new();
+        for field in CHARME_PARAMETER_FIELDS {
+            assert!(paths.insert(field.path));
+            assert!(field.lane < CHARME_PARAMETER_LANES);
+            let width = if field.kind == AbiParameterKind::Vec4 {
+                4
+            } else {
+                1
+            };
+            assert!(field.component + width <= 4);
+        }
+        assert_eq!(
+            CHARME_PARAMETER_FIELDS.len(),
+            CHARME_PARAMETER_DEFAULTS.len()
+        );
+    }
 
     #[test]
     fn fixed_abi_round_trips_and_preserves_integer_bits() {

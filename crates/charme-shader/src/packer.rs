@@ -1,3 +1,5 @@
+use charme_core::ParameterValue;
+
 use crate::{ParameterBlock, ParameterField, ParameterType, ScalarType};
 
 /// Mutable, zero-initialized host bytes for one reflected parameter block.
@@ -43,17 +45,6 @@ impl ParameterBuffer {
         };
         write_value(&mut self.bytes, field, path, value)
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ParameterValue {
-    Bool(bool),
-    F32(f32),
-    I32(i32),
-    U32(u32),
-    F32Vector(Vec<f32>),
-    I32Vector(Vec<i32>),
-    U32Vector(Vec<u32>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,21 +120,63 @@ fn write_value(
                 scalar: ScalarType::F32,
                 length,
             },
-            ParameterValue::F32Vector(values),
+            ParameterValue::Vec2(values),
+        ) => encode_vector(path, *length, ScalarType::F32, values, f32::to_le_bytes)?,
+        (
+            ParameterType::Vector {
+                scalar: ScalarType::F32,
+                length,
+            },
+            ParameterValue::Vec3(values),
+        ) => encode_vector(path, *length, ScalarType::F32, values, f32::to_le_bytes)?,
+        (
+            ParameterType::Vector {
+                scalar: ScalarType::F32,
+                length,
+            },
+            ParameterValue::Vec4(values),
         ) => encode_vector(path, *length, ScalarType::F32, values, f32::to_le_bytes)?,
         (
             ParameterType::Vector {
                 scalar: ScalarType::I32,
                 length,
             },
-            ParameterValue::I32Vector(values),
+            ParameterValue::IVec2(values),
+        ) => encode_vector(path, *length, ScalarType::I32, values, i32::to_le_bytes)?,
+        (
+            ParameterType::Vector {
+                scalar: ScalarType::I32,
+                length,
+            },
+            ParameterValue::IVec3(values),
+        ) => encode_vector(path, *length, ScalarType::I32, values, i32::to_le_bytes)?,
+        (
+            ParameterType::Vector {
+                scalar: ScalarType::I32,
+                length,
+            },
+            ParameterValue::IVec4(values),
         ) => encode_vector(path, *length, ScalarType::I32, values, i32::to_le_bytes)?,
         (
             ParameterType::Vector {
                 scalar: ScalarType::U32,
                 length,
             },
-            ParameterValue::U32Vector(values),
+            ParameterValue::UVec2(values),
+        ) => encode_vector(path, *length, ScalarType::U32, values, u32::to_le_bytes)?,
+        (
+            ParameterType::Vector {
+                scalar: ScalarType::U32,
+                length,
+            },
+            ParameterValue::UVec3(values),
+        ) => encode_vector(path, *length, ScalarType::U32, values, u32::to_le_bytes)?,
+        (
+            ParameterType::Vector {
+                scalar: ScalarType::U32,
+                length,
+            },
+            ParameterValue::UVec4(values),
         ) => encode_vector(path, *length, ScalarType::U32, values, u32::to_le_bytes)?,
         (ParameterType::Unsupported { description }, _) => {
             return Err(ParameterWriteError::UnsupportedField {
@@ -155,7 +188,7 @@ fn write_value(
             return Err(ParameterWriteError::TypeMismatch {
                 path: path.to_owned(),
                 expected: expected.clone(),
-                actual: actual.kind_name(),
+                actual: kind_name(&actual),
             });
         }
     };
@@ -175,11 +208,11 @@ fn write_value(
     Ok(())
 }
 
-fn encode_vector<T: Copy, const WIDTH: usize>(
+fn encode_vector<T: Copy, const WIDTH: usize, const LENGTH: usize>(
     path: &str,
     expected_length: u8,
     scalar: ScalarType,
-    values: Vec<T>,
+    values: [T; LENGTH],
     encode: impl Fn(T) -> [u8; WIDTH],
 ) -> Result<Vec<u8>, ParameterWriteError> {
     if values.len() != expected_length as usize {
@@ -198,16 +231,18 @@ fn encode_vector<T: Copy, const WIDTH: usize>(
         .collect())
 }
 
-impl ParameterValue {
-    fn kind_name(&self) -> &'static str {
-        match self {
-            Self::Bool(_) => "bool",
-            Self::F32(_) => "f32",
-            Self::I32(_) => "i32",
-            Self::U32(_) => "u32",
-            Self::F32Vector(_) => "f32 vector",
-            Self::I32Vector(_) => "i32 vector",
-            Self::U32Vector(_) => "u32 vector",
+fn kind_name(value: &ParameterValue) -> &'static str {
+    match value {
+        ParameterValue::Bool(_) => "bool",
+        ParameterValue::F32(_) => "f32",
+        ParameterValue::I32(_) => "i32",
+        ParameterValue::U32(_) => "u32",
+        ParameterValue::Vec2(_) | ParameterValue::Vec3(_) | ParameterValue::Vec4(_) => "f32 vector",
+        ParameterValue::IVec2(_) | ParameterValue::IVec3(_) | ParameterValue::IVec4(_) => {
+            "i32 vector"
+        }
+        ParameterValue::UVec2(_) | ParameterValue::UVec3(_) | ParameterValue::UVec4(_) => {
+            "u32 vector"
         }
     }
 }

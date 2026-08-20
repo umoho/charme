@@ -2088,6 +2088,12 @@ fn format_parameter_value(value: &ParameterValue) -> String {
             "[{:.3}, {:.3}, {:.3}, {:.3}]",
             values[0], values[1], values[2], values[3]
         ),
+        ParameterValue::IVec2(values) => format!("{values:?}"),
+        ParameterValue::IVec3(values) => format!("{values:?}"),
+        ParameterValue::IVec4(values) => format!("{values:?}"),
+        ParameterValue::UVec2(values) => format!("{values:?}"),
+        ParameterValue::UVec3(values) => format!("{values:?}"),
+        ParameterValue::UVec4(values) => format!("{values:?}"),
     }
 }
 

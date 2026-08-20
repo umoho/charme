@@ -67,7 +67,7 @@ fn fragment() -> @location(0) vec4<f32> {
     let mut buffer = block.create_buffer();
     buffer.set("roughness", ParameterValue::F32(0.25)).unwrap();
     buffer
-        .set("tint", ParameterValue::F32Vector(vec![1.0, 0.5, 0.25]))
+        .set("tint", ParameterValue::Vec3([1.0, 0.5, 0.25]))
         .unwrap();
     buffer.set("mode", ParameterValue::U32(2)).unwrap();
 
