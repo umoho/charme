@@ -6,6 +6,8 @@ Charme 是基于 Bevy 和 PMX 的原生角色材质编辑器，采用 Cargo work
 
 - `apps/charme-macos`：macOS 原生应用壳。
 - `crates/charme-core`：编辑器文档模型、命令、撤销/重做和持久化。
+- `crates/charme-geometry`：与渲染器无关的索引网格拓扑算法（如 primitive 连通分量分析），不依赖 Bevy、PMX 或平台 UI。
+- `crates/charme-application`：平台无关的应用层，含 `EditorController`、`WorkspaceState`、`PreviewSynchronizer` 与 Inspector 注册表。
 - `crates/charme-shader`：WGSL 组合、反射、校验和 uniform 打包。
 - `crates/charme-bevy`：可复用的 Bevy 材质运行时。
 - `crates/charme-renderer`：预览渲染器和 PMX 场景集成。
