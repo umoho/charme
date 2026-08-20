@@ -23,9 +23,10 @@ mod workspace;
 
 pub use event::ApplicationEvent;
 pub use inspector::{
-    InspectorProvider, InspectorSection, MaterialInstanceInspectorProvider,
-    MaterialRenderStateProvider, MaterialSelectionContext, MaterialSlotInspectorProvider,
-    SelectionTarget, ShaderParameterProvider, TextureBindingProvider,
+    InspectorModel, InspectorProvider, InspectorRegistry, InspectorRow, InspectorSection,
+    MaterialInstanceInspectorProvider, MaterialRenderStateProvider, MaterialSelectionContext,
+    MaterialSlotInspectorProvider, SelectionTarget, ShaderParameterProvider,
+    TextureBindingProvider,
 };
 pub use preview::{MaterialPreviewUpdate, PreviewSynchronizer};
 pub use shader::{

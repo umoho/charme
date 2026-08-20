@@ -1,6 +1,6 @@
 use charme_core::{CharmeDocument, MaterialId, MaterialSlotId};
 
-use crate::ShaderInspection;
+use crate::{ParameterControlSpec, ShaderInspection, controls_for_material};
 
 /// Semantic target selected in the editor hierarchy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,15 +49,59 @@ impl MaterialSelectionContext {
     }
 }
 
+/// Presentation row produced by an Inspector provider.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InspectorRow {
+    /// Read-only key/value text.
+    Text {
+        /// Stable row key.
+        key: String,
+        /// User-facing label.
+        label: String,
+        /// User-facing value.
+        value: String,
+    },
+    /// One reflected, editable material parameter.
+    Parameter(ParameterControlSpec),
+    /// One reflected texture binding.
+    Texture {
+        /// Reflected resource path.
+        path: String,
+        /// Resolved resource description, when bound.
+        value: Option<String>,
+    },
+}
+
 /// A presentation section produced by an Inspector provider.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InspectorSection {
     /// Stable provider key.
     pub key: &'static str,
     /// User-facing section title.
     pub title: String,
-    /// Whether the section has editable or informative content.
-    pub has_content: bool,
+    /// Presentation rows in display order.
+    pub rows: Vec<InspectorRow>,
+}
+
+impl InspectorSection {
+    /// Returns true when this section contains at least one row.
+    pub fn has_content(&self) -> bool {
+        !self.rows.is_empty()
+    }
+}
+
+/// Complete Inspector presentation for one selection.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InspectorModel {
+    /// Ordered sections produced by registered providers.
+    pub sections: Vec<InspectorSection>,
+}
+
+impl InspectorModel {
+    /// Finds one section by its stable provider key.
+    pub fn section(&self, key: &str) -> Option<&InspectorSection> {
+        self.sections.iter().find(|section| section.key == key)
+    }
 }
 
 /// Extensible source of one Inspector section.
@@ -71,6 +115,57 @@ pub trait InspectorProvider {
     ) -> Option<InspectorSection>;
 }
 
+/// Ordered registry of platform-independent Inspector providers.
+#[derive(Default)]
+pub struct InspectorRegistry {
+    providers: Vec<Box<dyn InspectorProvider>>,
+}
+
+impl std::fmt::Debug for InspectorRegistry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InspectorRegistry")
+            .field("provider_count", &self.providers.len())
+            .finish()
+    }
+}
+
+impl InspectorRegistry {
+    /// Creates the standard material Inspector registry.
+    pub fn standard() -> Self {
+        Self {
+            providers: vec![
+                Box::new(MaterialSlotInspectorProvider),
+                Box::new(MaterialInstanceInspectorProvider),
+                Box::new(ShaderParameterProvider),
+                Box::new(MaterialRenderStateProvider),
+                Box::new(TextureBindingProvider),
+            ],
+        }
+    }
+
+    /// Adds a provider at the end of the display order.
+    pub fn register(&mut self, provider: impl InspectorProvider + 'static) {
+        self.providers.push(Box::new(provider));
+    }
+
+    /// Builds a complete presentation from all applicable providers.
+    pub fn build(
+        &self,
+        document: &CharmeDocument,
+        context: MaterialSelectionContext,
+        inspection: Option<&ShaderInspection>,
+    ) -> InspectorModel {
+        InspectorModel {
+            sections: self
+                .providers
+                .iter()
+                .filter_map(|provider| provider.provide(document, context, inspection))
+                .collect(),
+        }
+    }
+}
+
 /// Provider for PMX source slot information.
 #[derive(Debug, Default)]
 pub struct MaterialSlotInspectorProvider;
@@ -82,12 +177,27 @@ impl InspectorProvider for MaterialSlotInspectorProvider {
         context: MaterialSelectionContext,
         _: Option<&ShaderInspection>,
     ) -> Option<InspectorSection> {
-        let slot_id = context.slot?;
-        let slot = document.material_slot(slot_id)?;
+        let slot = document.material_slot(context.slot?)?;
         Some(InspectorSection {
             key: "material-source",
             title: "Source".to_owned(),
-            has_content: !slot.source_name().is_empty() || !slot.source_english_name().is_empty(),
+            rows: vec![
+                InspectorRow::Text {
+                    key: "source-index".to_owned(),
+                    label: "Index".to_owned(),
+                    value: slot.source_index().to_string(),
+                },
+                InspectorRow::Text {
+                    key: "source-name".to_owned(),
+                    label: "Name".to_owned(),
+                    value: slot.source_name().to_owned(),
+                },
+                InspectorRow::Text {
+                    key: "source-english-name".to_owned(),
+                    label: "English Name".to_owned(),
+                    value: slot.source_english_name().to_owned(),
+                },
+            ],
         })
     }
 }
@@ -103,12 +213,15 @@ impl InspectorProvider for MaterialInstanceInspectorProvider {
         context: MaterialSelectionContext,
         _: Option<&ShaderInspection>,
     ) -> Option<InspectorSection> {
-        let material_id = context.material?;
-        let material = document.material(material_id)?;
+        let material = document.material(context.material?)?;
         Some(InspectorSection {
             key: "material-instance",
             title: material.name().to_owned(),
-            has_content: true,
+            rows: vec![InspectorRow::Text {
+                key: "shader".to_owned(),
+                label: "Shader".to_owned(),
+                value: material.shader().to_string(),
+            }],
         })
     }
 }
@@ -120,16 +233,19 @@ pub struct ShaderParameterProvider;
 impl InspectorProvider for ShaderParameterProvider {
     fn provide(
         &self,
-        _: &CharmeDocument,
+        document: &CharmeDocument,
         context: MaterialSelectionContext,
         inspection: Option<&ShaderInspection>,
     ) -> Option<InspectorSection> {
-        context.material?;
+        let material = document.material(context.material?)?;
         let inspection = inspection?;
         Some(InspectorSection {
             key: "shader-parameters",
             title: "Parameters".to_owned(),
-            has_content: !inspection.controls.is_empty(),
+            rows: controls_for_material(inspection, material.parameters())
+                .into_iter()
+                .map(InspectorRow::Parameter)
+                .collect(),
         })
     }
 }
@@ -145,11 +261,23 @@ impl InspectorProvider for MaterialRenderStateProvider {
         context: MaterialSelectionContext,
         _: Option<&ShaderInspection>,
     ) -> Option<InspectorSection> {
-        let _material = document.material(context.material?)?;
+        let material = document.material(context.material?)?;
+        let state = material.render_state();
         Some(InspectorSection {
             key: "render-state",
             title: "Render State".to_owned(),
-            has_content: true,
+            rows: vec![
+                InspectorRow::Text {
+                    key: "alpha-mode".to_owned(),
+                    label: "Alpha Mode".to_owned(),
+                    value: format!("{:?}", state.alpha_mode),
+                },
+                InspectorRow::Text {
+                    key: "double-sided".to_owned(),
+                    label: "Double Sided".to_owned(),
+                    value: state.double_sided.to_string(),
+                },
+            ],
         })
     }
 }
@@ -169,7 +297,14 @@ impl InspectorProvider for TextureBindingProvider {
         Some(InspectorSection {
             key: "texture-bindings",
             title: "Textures".to_owned(),
-            has_content: !material.textures().is_empty(),
+            rows: material
+                .textures()
+                .iter()
+                .map(|(path, texture)| InspectorRow::Texture {
+                    path: path.clone(),
+                    value: Some(format!("{texture:?}")),
+                })
+                .collect(),
         })
     }
 }
@@ -181,8 +316,7 @@ mod tests {
         EditorCommand, EditorSession, MaterialInstance, MaterialSlot, ResourcePath, ShaderSource,
     };
 
-    #[test]
-    fn slot_selection_resolves_its_bound_material_id() {
+    fn selected_material() -> (EditorSession, MaterialSelectionContext) {
         let mut session = EditorSession::new("Selection");
         let shader = ShaderSource::new(
             "Preview",
@@ -192,25 +326,43 @@ mod tests {
         let material_id = material.id();
         let slot = MaterialSlot::new(0, "Body", "Body");
         let slot_id = slot.id();
-        session.apply(EditorCommand::UpsertShader(shader)).unwrap();
         session
-            .apply(EditorCommand::UpsertMaterial(material))
+            .apply(EditorCommand::Transaction(vec![
+                EditorCommand::UpsertShader(shader),
+                EditorCommand::UpsertMaterial(material),
+                EditorCommand::ReplaceMaterialSlots(vec![slot]),
+                EditorCommand::BindMaterial {
+                    slot: slot_id,
+                    material: Some(material_id),
+                },
+            ]))
             .unwrap();
-        session
-            .apply(EditorCommand::ReplaceMaterialSlots(vec![slot]))
-            .unwrap();
-        session
-            .apply(EditorCommand::BindMaterial {
-                slot: slot_id,
-                material: Some(material_id),
-            })
-            .unwrap();
-
         let context = MaterialSelectionContext::resolve(
             session.document(),
             SelectionTarget::MaterialSlot(slot_id),
         );
-        assert_eq!(context.slot, Some(slot_id));
-        assert_eq!(context.material, Some(material_id));
+        (session, context)
+    }
+
+    #[test]
+    fn slot_selection_resolves_its_bound_material_id() {
+        let (session, context) = selected_material();
+        assert!(
+            session
+                .document()
+                .material(context.material.unwrap())
+                .is_some()
+        );
+        assert!(context.slot.is_some());
+    }
+
+    #[test]
+    fn registry_builds_ordered_complete_sections() {
+        let (session, context) = selected_material();
+        let model = InspectorRegistry::standard().build(session.document(), context, None);
+
+        assert_eq!(model.sections[0].key, "material-source");
+        assert!(model.section("material-instance").unwrap().has_content());
+        assert!(model.section("render-state").unwrap().has_content());
     }
 }

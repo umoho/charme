@@ -33,9 +33,8 @@ use cacao::{
     view::View,
 };
 use charme_application::{
-    EditorAction, EditorController, InspectorProvider, MaterialSelectionContext,
-    PreviewSynchronizer, SelectionLevel, SelectionTarget, ShaderParameterProvider, WorkspaceState,
-    controls_for_material, inspect_preview_shader,
+    EditorAction, EditorController, InspectorRegistry, InspectorRow, MaterialSelectionContext,
+    PreviewSynchronizer, SelectionLevel, SelectionTarget, WorkspaceState, inspect_preview_shader,
 };
 use charme_core::{
     CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlot, MaterialSlotId,
@@ -337,6 +336,7 @@ pub(crate) struct EditorWindow {
     parameter_section: Label,
     parameter_panel: View,
     parameter_controls: RefCell<Vec<ParameterControl>>,
+    inspector_registry: InspectorRegistry,
     reflected_inspection: RefCell<Option<ShaderInspection>>,
     pub(crate) controller: RefCell<EditorController>,
     active_material: RefCell<Option<MaterialId>>,
@@ -504,6 +504,7 @@ impl EditorWindow {
             parameter_section,
             parameter_panel,
             parameter_controls: RefCell::new(Vec::new()),
+            inspector_registry: InspectorRegistry::standard(),
             reflected_inspection: RefCell::new(None),
             controller: RefCell::new(EditorController::new(localization::text(
                 Key::UntitledCharacter,
@@ -1424,36 +1425,24 @@ impl EditorWindow {
                     SelectionTarget::MaterialSlot(slot_id),
                 );
                 self.active_material.replace(context.material);
-                let controls = {
-                    let inspection = self.reflected_inspection.borrow();
-                    let document = self.controller.borrow();
-                    inspection
-                        .as_ref()
-                        .zip(
-                            context
-                                .material
-                                .and_then(|id| document.document().material(id)),
-                        )
-                        .map(|(inspection, material)| {
-                            controls_for_material(inspection, material.parameters())
-                        })
-                        .unwrap_or_default()
-                };
-                let control_count = self.install_parameter_controls(&controls);
-                let has_parameter_section = self
-                    .reflected_inspection
-                    .borrow()
-                    .as_ref()
-                    .and_then(|inspection| {
-                        ShaderParameterProvider
-                            .provide(
-                                self.controller.borrow().document(),
-                                context,
-                                Some(inspection),
-                            )
-                            .map(|section| section.has_content)
+                let inspector_model = self.inspector_registry.build(
+                    self.controller.borrow().document(),
+                    context,
+                    self.reflected_inspection.borrow().as_ref(),
+                );
+                let controls = inspector_model
+                    .section("shader-parameters")
+                    .into_iter()
+                    .flat_map(|section| &section.rows)
+                    .filter_map(|row| match row {
+                        InspectorRow::Parameter(control) => Some(control.clone()),
+                        InspectorRow::Text { .. } | InspectorRow::Texture { .. } => None,
                     })
-                    .unwrap_or(false);
+                    .collect::<Vec<_>>();
+                let control_count = self.install_parameter_controls(&controls);
+                let has_parameter_section = inspector_model
+                    .section("shader-parameters")
+                    .is_some_and(|section| section.has_content());
                 self.set_source_visible(true);
                 self.set_parameter_section_visible(control_count != 0 && has_parameter_section);
                 self.set_inspector_preview_loading();
