@@ -1260,7 +1260,12 @@ impl EditorWindow {
                 if effects.is_empty() {
                     return;
                 }
-                if let Some(slot_id) = self.workspace.borrow().selection().material_slot() {
+                // Copy the selection out of the RefCell guard before mutating
+                // workspace state again: a `Ref` created in an `if let`
+                // scrutinee stays alive for the whole statement, and the body
+                // re-borrows `workspace` through `select_hierarchy_item`.
+                let selected_slot = self.workspace.borrow().selection().material_slot();
+                if let Some(slot_id) = selected_slot {
                     self.select_hierarchy_item(HierarchyItemId::MaterialSlot(slot_id));
                 } else {
                     self.clear_selection();
