@@ -59,6 +59,11 @@ impl SpawnedPmxScene {
             primitive_indices,
         )
     }
+
+    /// Returns the entity of each PMX primitive, in primitive order.
+    pub(crate) fn primitive_entities(&self) -> &[Option<Entity>] {
+        &self.primitive_entities
+    }
 }
 
 impl SpawnedPmxScene {

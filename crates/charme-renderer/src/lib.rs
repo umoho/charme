@@ -18,6 +18,7 @@ mod scene;
 mod scene_runtime;
 mod scheduler;
 mod selection;
+mod selection_wire;
 mod source;
 
 pub use archive::discover_pmx_archive_entries;

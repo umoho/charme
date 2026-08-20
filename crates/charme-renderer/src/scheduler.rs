@@ -42,7 +42,8 @@ impl RenderScheduler {
         self.frame_in_flight
     }
 
-    /// Records that Bevy has advanced far enough to materialize pending gizmos.
+    /// Records that Bevy has advanced far enough to materialize pending
+    /// selection wireframe changes.
     pub(crate) fn app_updated(&mut self) {
         self.selection_dirty = false;
     }

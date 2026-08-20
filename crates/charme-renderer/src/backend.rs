@@ -8,27 +8,25 @@ use std::{
 
 use bevy::{
     DefaultPlugins,
-    app::{App, PluginGroup, PluginsState, PostUpdate},
+    app::{App, PluginGroup, PluginsState},
     asset::{Assets, RenderAssetUsages},
     camera::{
         Camera, Camera3d, ClearColorConfig, Projection, RenderTarget, visibility::RenderLayers,
     },
     core_pipeline::tonemapping::Tonemapping,
-    ecs::schedule::IntoScheduleConfigs,
-    gizmos::prelude::{DefaultGizmoConfigGroup, GizmoConfigStore, Gizmos},
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::VertexAttributeValues,
     prelude::{
         Color, Commands, Component, Cuboid, DirectionalLight, Entity, GlobalTransform, Mesh,
-        Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat, Res, Sphere,
-        StandardMaterial, Transform, Vec2, Vec3,
+        Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat, Sphere, StandardMaterial,
+        Transform, Vec2, Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
+        extract_component::ExtractComponent,
         gpu_readback::{Readback, ReadbackComplete},
         render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
     },
-    transform::TransformSystems,
 };
 
 use charme_bevy::{CharmeMaterial, CharmeMaterialPlugin, ParameterError};
@@ -42,6 +40,10 @@ use crate::{
     scene_runtime::{SpawnedPmxScene, spawn_pmx_scene},
     scheduler::RenderScheduler,
     selection::SelectionGeometry,
+    selection_wire::{
+        SELECTION_WIRE_LAYER, SelectionWire, SelectionWireMaskHandle, install_selection_wire,
+        spawn_selection_wire,
+    },
 };
 
 pub(crate) enum Command {
@@ -257,8 +259,8 @@ fn run(
 
         if let Some(request) = scheduler.take_frame_request(backend.size.is_empty()) {
             if request.prepare_selection {
-                // Gizmos are materialized in Bevy's Last schedule. Coalesce all
-                // queued selection changes before scheduling the readback.
+                // The selection wire mesh is rebuilt in PostUpdate. Coalesce
+                // all queued selection changes before scheduling the readback.
                 backend.app.update();
                 scheduler.app_updated();
             }
@@ -290,6 +292,7 @@ struct Backend {
     pixel_format: PixelFormat,
     target: bevy::prelude::Handle<Image>,
     camera: Entity,
+    selection_wire: SelectionWire,
     placeholder_entities: Vec<Entity>,
     placeholder_materials: Vec<bevy::prelude::Handle<CharmeMaterial>>,
     pmx_scene: Option<SpawnedPmxScene>,
@@ -433,10 +436,8 @@ impl Backend {
                 .build(),
         );
         app.add_plugins(CharmeMaterialPlugin);
-        app.init_resource::<SelectionGeometry>().add_systems(
-            PostUpdate,
-            draw_selected_primitive_gizmo.after(TransformSystems::Propagate),
-        );
+        install_selection_wire(&mut app);
+        app.init_resource::<SelectionGeometry>();
 
         while app.plugins_state() == PluginsState::Adding {
             thread::yield_now();
@@ -444,21 +445,16 @@ impl Backend {
         app.finish();
         app.cleanup();
 
-        if let Some(mut configs) = app.world_mut().get_resource_mut::<GizmoConfigStore>() {
-            let (config, _) = configs.config_mut::<DefaultGizmoConfigGroup>();
-            // A depth bias of -1.0 places gizmo lines at the near plane, so
-            // the selection wireframe always draws in front of the scene. This
-            // keeps the wireframe visible through occluding geometry, like
-            // Blender's selection wire overlay.
-            config.depth_bias = -1.0;
-            config.line.width = 2.5;
-        }
-
         if app.get_sub_app(RenderApp).is_none() {
             return Err(RendererError::DeviceUnavailable);
         }
 
         let texture_size = usable_texture_size(config.output_size);
+        // The mask camera must render before the main camera so the composite
+        // node samples the current frame's mask. Cameras are sorted by
+        // (order, target); both cameras use order 0, so creating the mask
+        // target first keeps the mask camera ahead.
+        let selection_wire = spawn_selection_wire(&mut app, texture_size);
         let target = add_target_image(&mut app, texture_size, config.pixel_format);
         let thumbnail_mesh = app
             .world_mut()
@@ -472,6 +468,10 @@ impl Backend {
             !config.output_size.is_empty(),
             orbit,
         );
+
+        app.world_mut().insert_resource(selection_wire.clone());
+        app.world_mut()
+            .insert_resource(SelectionWireMaskHandle(selection_wire.mask_target.clone()));
 
         let thumbnail_preview = spawn_material_preview_studio(
             &mut app,
@@ -488,8 +488,11 @@ impl Backend {
             true,
         );
 
-        // Make the image and camera visible to the render world before reporting
-        // successful initialization.
+        // Make the image and camera visible to the render world before
+        // reporting successful initialization. The first update extracts the
+        // freshly created render targets; the second one produces a complete
+        // frame so the first readback never captures an unrendered target.
+        app.update();
         app.update();
 
         Ok(Self {
@@ -498,6 +501,7 @@ impl Backend {
             pixel_format: config.pixel_format,
             target,
             camera,
+            selection_wire,
             placeholder_entities,
             placeholder_materials,
             pmx_scene: None,
@@ -541,6 +545,15 @@ impl Backend {
             return Ok(());
         }
 
+        // Recreate the mask target first so its asset index stays below the
+        // main target's and the mask camera keeps rendering first.
+        self.selection_wire.resize(&mut self.app, size);
+        self.app
+            .world_mut()
+            .insert_resource(SelectionWireMaskHandle(
+                self.selection_wire.mask_target.clone(),
+            ));
+
         let target = add_target_image(&mut self.app, size, self.pixel_format);
         let world = self.app.world_mut();
         {
@@ -581,17 +594,63 @@ impl Backend {
     }
 
     fn set_selected_material_slot(&mut self, slot_id: Option<MaterialSlotId>) -> bool {
-        self.app
+        let changed = self
+            .app
             .world_mut()
             .resource_mut::<SelectionGeometry>()
-            .set_selected_slot(slot_id)
+            .set_selected_slot(slot_id);
+        if changed {
+            self.sync_selection_render_layers();
+        }
+        changed
     }
 
     fn set_selected_primitives(&mut self, primitive_indices: Vec<usize>) -> bool {
-        self.app
+        let changed = self
+            .app
             .world_mut()
             .resource_mut::<SelectionGeometry>()
-            .set_selected_primitives(primitive_indices)
+            .set_selected_primitives(primitive_indices);
+        if changed {
+            self.sync_selection_render_layers();
+        }
+        changed
+    }
+
+    fn sync_selection_render_layers(&mut self) {
+        let Some(scene) = &self.pmx_scene else {
+            return;
+        };
+        let selected = {
+            let geometry = self.app.world().resource::<SelectionGeometry>();
+            let selected_primitives = geometry.selected_primitives();
+            let selected_slot = geometry.selected_slot();
+            geometry
+                .primitives
+                .iter()
+                .filter(|primitive| {
+                    selected_primitives.contains(&primitive.primitive_index)
+                        || selected_primitives.is_empty()
+                            && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
+                })
+                .map(|primitive| primitive.primitive_index)
+                .collect::<std::collections::HashSet<_>>()
+        };
+        let mask_layers = RenderLayers::from_layers(&[0, SELECTION_WIRE_LAYER]);
+        let world = self.app.world_mut();
+        for (index, entity) in scene.primitive_entities().iter().enumerate() {
+            let Some(entity) = entity else {
+                continue;
+            };
+            let Some(mut layers) = world.get_mut::<RenderLayers>(*entity) else {
+                continue;
+            };
+            *layers = if selected.contains(&index) {
+                mask_layers.clone()
+            } else {
+                RenderLayers::default()
+            };
+        }
     }
 
     fn split_selected_primitives_by_connectivity(&mut self, primitive_indices: Vec<usize>) -> bool {
@@ -1540,67 +1599,10 @@ impl OrbitState {
     }
 }
 
-#[derive(Component)]
-struct MainPreviewCamera;
-
-const SELECTION_GIZMO_COLOR: Color = Color::srgba(1.0, 0.42, 0.02, 1.0);
-
-fn draw_selected_primitive_gizmo(
-    selection: Res<SelectionGeometry>,
-    cameras: bevy::prelude::Query<&GlobalTransform, bevy::prelude::With<MainPreviewCamera>>,
-    mut gizmos: Gizmos,
-) {
-    let Some(camera_transform) = cameras.iter().next() else {
-        return;
-    };
-    let camera_position = camera_transform.translation();
-    let selected_primitives = selection.selected_primitives();
-    let selected_slot = selection.selected_slot();
-    if selected_primitives.is_empty() && selected_slot.is_none() {
-        return;
-    }
-    for primitive in selection.primitives.iter().filter(|primitive| {
-        selected_primitives.contains(&primitive.primitive_index)
-            || selected_primitives.is_empty()
-                && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
-    }) {
-        for component in &primitive.components {
-            for edge in &component.edges {
-                // Interior edges stay silhouette-only: they are drawn only
-                // where front- and back-facing faces meet, keeping internal
-                // mesh lines hidden. Boundary edges follow their only face
-                // and are culled when it faces away from the camera.
-                let draw_edge = if edge.faces.len() == 1 {
-                    component.faces.get(edge.faces[0]).is_none_or(|face| {
-                        face.normal == Vec3::ZERO
-                            || face.normal.dot(camera_position - face.center) > 0.0
-                    })
-                } else {
-                    let mut has_front_face = false;
-                    let mut has_back_face = false;
-                    for &face_index in &edge.faces {
-                        let Some(face) = component.faces.get(face_index) else {
-                            continue;
-                        };
-                        if face.normal == Vec3::ZERO {
-                            continue;
-                        }
-                        if face.normal.dot(camera_position - face.center) > 0.0 {
-                            has_front_face = true;
-                        } else {
-                            has_back_face = true;
-                        }
-                    }
-                    has_front_face && has_back_face
-                };
-
-                if draw_edge {
-                    gizmos.line(edge.start, edge.end, SELECTION_GIZMO_COLOR);
-                }
-            }
-        }
-    }
-}
+/// Marks the main preview camera so the selection wire systems and the
+/// composite node can identify it in both worlds.
+#[derive(Component, ExtractComponent, Clone)]
+pub(crate) struct MainPreviewCamera;
 
 fn spawn_scene(
     app: &mut App,
