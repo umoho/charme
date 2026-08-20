@@ -96,6 +96,11 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].slot_id, slot_id);
         assert_eq!(updates[0].parameters.len(), 1);
+
+        session.undo().unwrap();
+        let updates = synchronizer.synchronize(session.document());
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].parameters.is_empty());
     }
 
     #[test]

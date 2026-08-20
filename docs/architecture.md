@@ -40,11 +40,15 @@ layout, and runtime value packing. It may use Naga but does not depend on Bevy.
 ### `charme-application`
 
 Owns the platform-independent application layer shared by native frontends.
-`EditorController` coordinates actions against `EditorSession`, while
-`EditorViewModel`, shader inspection projections, and application events expose
-presentation-ready state without native widget types. It depends on core,
-shader tooling, and the renderer's public event types, but not on cacao, AppKit,
-or another platform UI framework.
+`EditorController` coordinates document actions against `EditorSession`.
+`WorkspaceState` applies transient `WorkspaceAction`s and emits
+`WorkspaceEffect`s for selection and asynchronous PMX import operations.
+`PreviewSynchronizer` incrementally projects authoritative material state into
+complete per-slot renderer updates, including Undo/Redo and removed overrides.
+The Inspector registry composes provider-owned presentation sections and rows.
+Shader inspection and view models expose presentation-ready state without
+native widget types. The crate depends on core, shader tooling, and renderer
+contract types, but not on cacao, AppKit, or another platform UI framework.
 
 ### `charme-bevy`
 
@@ -61,7 +65,12 @@ embeds the runtime shader so consumers do not need Charme's editor assets.
 
 Owns the editor-only Bevy application, PMX preview scene, cameras, lighting,
 offscreen targets, frame readback, thumbnails, and the command/event bridge.
-It is not part of the exported runtime dependency set.
+Its worker has one command execution path. `RenderScheduler` owns coalesced
+viewport invalidation and readback state; background previews only start while
+the viewport is idle. PMX scene assets, CPU selection/picking geometry, and
+transient preview overlays live in separate modules. Complete material override
+updates are validated before replacing the currently rendered ABI block. It is
+not part of the exported runtime dependency set.
 
 ### Platform applications
 
@@ -69,7 +78,29 @@ Each operating system gets a native application package. The macOS frontend is
 implemented first. Future Windows and Linux frontends should consume the shared
 application actions and view models plus the renderer API, without requiring a
 shared widget abstraction. Native UI messages remain platform adapters around
-those application-level actions.
+those application-level actions. The macOS frontend separates application
+events, native editor messages, and preview transport events. `RenderBridge`
+only schedules renderer operations and forwards results to the main thread.
+
+## State and effect flow
+
+```text
+Native input
+    -> EditorAction / WorkspaceAction
+    -> EditorController / WorkspaceState
+    -> EditorUpdate / WorkspaceEffect
+    -> native presentation + PreviewSynchronizer
+    -> renderer command
+
+Renderer notification
+    -> preview transport event
+    -> WorkspaceAction when it changes application state
+    -> native presentation effect
+```
+
+Document material values are written only through `EditorCommand`. Native views
+do not separately mutate the renderer; `PreviewSynchronizer` derives complete
+slot parameter state from the document after every editor action.
 
 ## Dependency policy
 
