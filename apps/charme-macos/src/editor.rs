@@ -34,8 +34,8 @@ use cacao::{
 };
 use charme_application::{
     EditorAction, EditorController, InspectorRegistry, InspectorRow, MaterialSelectionContext,
-    PreviewSynchronizer, SelectionLevel, SelectionTarget, WorkspaceState, inspect_preview_shader,
-    reconcile_pmx_materials,
+    PreviewSynchronizer, SelectionLevel, SelectionTarget, WorkspaceAction, WorkspaceEffect,
+    WorkspaceState, inspect_preview_shader, reconcile_pmx_materials,
 };
 use charme_core::{
     CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlotId, ParameterValue,
@@ -533,7 +533,7 @@ impl EditorWindow {
     }
 
     fn reset_project_views(&self) {
-        self.workspace.borrow_mut().reset();
+        self.workspace.borrow_mut().dispatch(WorkspaceAction::Reset);
         self.preview_synchronizer.borrow_mut().reset();
         self.hierarchy.set_allows_multiple_selection(false);
         App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished { request_id: None });
@@ -566,7 +566,12 @@ impl EditorWindow {
     }
 
     pub(crate) fn set_selection_level(&self, level: SelectionLevel) {
-        if !self.workspace.borrow_mut().selection_mut().set_level(level) {
+        if self
+            .workspace
+            .borrow_mut()
+            .dispatch(WorkspaceAction::SetSelectionLevel(level))
+            .is_empty()
+        {
             return;
         }
         self.hierarchy
@@ -872,19 +877,24 @@ impl EditorWindow {
             .and_then(CharacterSource::archive_entry)
             .map(str::to_owned);
         let request = PmxLoadRequest::from_path(path, archive_entry, existing_slot_ids);
-        if let Some(bridge) = self.bridge.borrow().as_ref() {
-            let source = request.source_identity();
-            let request_id = self
-                .workspace
-                .borrow_mut()
-                .pmx_import_mut()
-                .begin(source.clone(), character);
-            let request = request.with_request_id(request_id);
+        let source = request.source_identity();
+        let effects = self
+            .workspace
+            .borrow_mut()
+            .dispatch(WorkspaceAction::BeginPmxImport {
+                source: source.clone(),
+                character,
+            });
+        let request_id = effects.into_iter().find_map(|effect| match effect {
+            WorkspaceEffect::PmxImportStarted { request_id, .. } => Some(request_id),
+            _ => None,
+        });
+        if let (Some(request_id), Some(bridge)) = (request_id, self.bridge.borrow().as_ref()) {
             App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadStarted {
                 request_id,
                 source,
             });
-            bridge.load_pmx(request);
+            bridge.load_pmx(request.with_request_id(request_id));
         }
     }
 
@@ -1068,17 +1078,28 @@ impl EditorWindow {
     pub(crate) fn handle_renderer_notification(&self, notification: RendererNotification) {
         match notification {
             RendererNotification::PmxLoadProgress(progress) => {
-                if self.workspace.borrow().pmx_import().accepts(&progress) {
+                let effects = self
+                    .workspace
+                    .borrow_mut()
+                    .dispatch(WorkspaceAction::PmxProgress(progress));
+                if let Some(WorkspaceEffect::PmxProgressAccepted(progress)) =
+                    effects.into_iter().next()
+                {
                     App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadProgress { progress });
                 }
             }
             RendererNotification::PmxLoaded { request_id, info } => {
-                let Some(mut request) = self
-                    .workspace
-                    .borrow_mut()
-                    .pmx_import_mut()
-                    .complete(request_id, info.source_identity())
-                else {
+                let effects =
+                    self.workspace
+                        .borrow_mut()
+                        .dispatch(WorkspaceAction::CompletePmxImport {
+                            request_id,
+                            source: info.source_identity().clone(),
+                        });
+                let Some(mut request) = effects.into_iter().find_map(|effect| match effect {
+                    WorkspaceEffect::PmxImportCompleted(request) => Some(request),
+                    _ => None,
+                }) else {
                     return;
                 };
                 if let Some(mut character) = request.take_character() {
@@ -1126,13 +1147,16 @@ impl EditorWindow {
                 source,
                 message,
             } => {
-                if self
+                let completed = self
                     .workspace
                     .borrow_mut()
-                    .pmx_import_mut()
-                    .complete(request_id, &source)
-                    .is_some()
-                {
+                    .dispatch(WorkspaceAction::CompletePmxImport {
+                        request_id,
+                        source: source.clone(),
+                    })
+                    .into_iter()
+                    .any(|effect| matches!(effect, WorkspaceEffect::PmxImportCompleted(_)));
+                if completed {
                     tracing::error!(
                         path = %source.path().display(),
                         archive_entry = ?source.archive_entry(),
@@ -1201,12 +1225,14 @@ impl EditorWindow {
     ) {
         match self.selection_level() {
             SelectionLevel::MaterialSlot => {
-                let changed = self
-                    .workspace
-                    .borrow_mut()
-                    .selection_mut()
-                    .apply_material_slot(selection_action, slot_id);
-                if !changed {
+                let effects =
+                    self.workspace
+                        .borrow_mut()
+                        .dispatch(WorkspaceAction::ApplyMaterialViewport {
+                            operation: selection_action,
+                            hit: slot_id,
+                        });
+                if effects.is_empty() {
                     return;
                 }
                 if let Some(slot_id) = self.workspace.borrow().selection().material_slot() {
@@ -1216,12 +1242,14 @@ impl EditorWindow {
                 }
             }
             SelectionLevel::Primitive => {
-                let changed = self
-                    .workspace
-                    .borrow_mut()
-                    .selection_mut()
-                    .apply_primitive(selection_action, primitive_index);
-                if !changed {
+                let effects =
+                    self.workspace
+                        .borrow_mut()
+                        .dispatch(WorkspaceAction::ApplyPrimitiveViewport {
+                            operation: selection_action,
+                            hit: primitive_index,
+                        });
+                if effects.is_empty() {
                     return;
                 }
                 let mut selected = self.workspace.borrow().selection().primitives().to_vec();
@@ -1318,7 +1346,9 @@ impl EditorWindow {
         self.hierarchy.select_item(item);
         match item {
             HierarchyItemId::Scene | HierarchyItemId::Model => {
-                self.workspace.borrow_mut().selection_mut().clear();
+                self.workspace
+                    .borrow_mut()
+                    .dispatch(WorkspaceAction::ClearSelection);
                 self.render_selection();
                 self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
@@ -1342,7 +1372,9 @@ impl EditorWindow {
                 unreachable!("component rows are informational preview nodes")
             }
             HierarchyItemId::Materials => {
-                self.workspace.borrow_mut().selection_mut().clear();
+                self.workspace
+                    .borrow_mut()
+                    .dispatch(WorkspaceAction::ClearSelection);
                 self.render_selection();
                 self.active_material.replace(None);
                 self.set_inspector_preview_visible(false);
@@ -1368,8 +1400,7 @@ impl EditorWindow {
                 };
                 self.workspace
                     .borrow_mut()
-                    .selection_mut()
-                    .select_material_slot(Some(slot_id));
+                    .dispatch(WorkspaceAction::SelectMaterialSlot(Some(slot_id)));
                 self.render_selection();
                 let context = MaterialSelectionContext::resolve(
                     self.controller.borrow().document(),
@@ -1451,8 +1482,7 @@ impl EditorWindow {
         self.hierarchy.select_items(&items);
         self.workspace
             .borrow_mut()
-            .selection_mut()
-            .select_primitives(valid.clone());
+            .dispatch(WorkspaceAction::SelectPrimitives(valid.clone()));
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.set_inspector_preview_visible(false);
@@ -1587,7 +1617,9 @@ impl EditorWindow {
     }
 
     pub(crate) fn clear_selection(&self) {
-        self.workspace.borrow_mut().selection_mut().clear();
+        self.workspace
+            .borrow_mut()
+            .dispatch(WorkspaceAction::ClearSelection);
         self.active_material.replace(None);
         self.parameter_controls.borrow_mut().clear();
         self.set_inspector_preview_visible(false);

@@ -36,7 +36,8 @@ pub use shader::{
     inspect_preview_shader, inspect_shader_source,
 };
 pub use workspace::{
-    PendingPmxImport, PmxImportTracker, SelectionLevel, SelectionState, WorkspaceState,
+    PendingPmxImport, SelectionLevel, SelectionState, WorkspaceAction, WorkspaceEffect,
+    WorkspaceState,
 };
 
 /// An action that can be issued by any native frontend.

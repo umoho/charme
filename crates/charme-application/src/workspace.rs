@@ -141,14 +141,13 @@ impl PendingPmxImport {
 
 /// Tracks the latest PMX import and rejects stale progress or completion events.
 #[derive(Debug, Default)]
-pub struct PmxImportTracker {
+struct PmxImportTracker {
     next_request_id: u64,
     pending: Option<PendingPmxImport>,
 }
 
 impl PmxImportTracker {
-    /// Starts a request and returns its monotonically increasing identifier.
-    pub fn begin(&mut self, source: PmxSourceIdentity, character: Option<CharacterSource>) -> u64 {
+    fn begin(&mut self, source: PmxSourceIdentity, character: Option<CharacterSource>) -> u64 {
         self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
         let request_id = self.next_request_id;
         self.pending = Some(PendingPmxImport {
@@ -159,22 +158,19 @@ impl PmxImportTracker {
         request_id
     }
 
-    /// Invalidates any pending request.
-    pub fn invalidate(&mut self) {
+    fn invalidate(&mut self) {
         self.pending = None;
         self.next_request_id = self.next_request_id.wrapping_add(1);
     }
 
-    /// Returns true when progress belongs to the active request.
-    pub fn accepts(&self, progress: &PmxLoadProgress) -> bool {
+    fn accepts(&self, progress: &PmxLoadProgress) -> bool {
         self.pending.as_ref().is_some_and(|pending| {
             pending.request_id == progress.request_id()
                 && sources_match(&pending.source, progress.source_identity())
         })
     }
 
-    /// Completes and returns the active request when identity and ID match.
-    pub fn complete(
+    fn complete(
         &mut self,
         request_id: u64,
         source: &PmxSourceIdentity,
@@ -186,6 +182,71 @@ impl PmxImportTracker {
     }
 }
 
+/// Semantic action applied to transient workspace state.
+#[derive(Debug)]
+pub enum WorkspaceAction {
+    /// Reset transient state for a new project.
+    Reset,
+    /// Change hierarchy and viewport selection level.
+    SetSelectionLevel(SelectionLevel),
+    /// Clear all selected targets.
+    ClearSelection,
+    /// Select one imported material slot.
+    SelectMaterialSlot(Option<MaterialSlotId>),
+    /// Replace selected primitive indices.
+    SelectPrimitives(Vec<usize>),
+    /// Apply one viewport operation to a material-slot hit.
+    ApplyMaterialViewport {
+        /// Selection operation supplied by the viewport.
+        operation: ViewportSelectionAction,
+        /// Picked slot, if any.
+        hit: Option<MaterialSlotId>,
+    },
+    /// Apply one viewport operation to a primitive hit.
+    ApplyPrimitiveViewport {
+        /// Selection operation supplied by the viewport.
+        operation: ViewportSelectionAction,
+        /// Picked primitive, if any.
+        hit: Option<usize>,
+    },
+    /// Start a PMX import operation.
+    BeginPmxImport {
+        /// Requested source identity.
+        source: PmxSourceIdentity,
+        /// Candidate document character committed only on success.
+        character: Option<CharacterSource>,
+    },
+    /// Accept or reject PMX loading progress.
+    PmxProgress(PmxLoadProgress),
+    /// Complete a PMX import operation.
+    CompletePmxImport {
+        /// Renderer request identifier.
+        request_id: u64,
+        /// Completed source identity.
+        source: PmxSourceIdentity,
+    },
+}
+
+/// Side effect emitted after a workspace action.
+#[derive(Debug)]
+pub enum WorkspaceEffect {
+    /// Selection state changed and its UI/renderer projections should refresh.
+    SelectionChanged,
+    /// A PMX request started and should be submitted to the renderer.
+    PmxImportStarted {
+        /// Application-owned request identifier.
+        request_id: u64,
+        /// Requested source identity.
+        source: PmxSourceIdentity,
+    },
+    /// Progress belongs to the active PMX request.
+    PmxProgressAccepted(PmxLoadProgress),
+    /// A matching PMX request completed.
+    PmxImportCompleted(PendingPmxImport),
+    /// Transient project state was reset.
+    Reset,
+}
+
 /// Application-owned transient workspace state shared by native frontends.
 #[derive(Debug, Default)]
 pub struct WorkspaceState {
@@ -195,24 +256,72 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
+    /// Applies one semantic workspace action and returns required adapter effects.
+    pub fn dispatch(&mut self, action: WorkspaceAction) -> Vec<WorkspaceEffect> {
+        match action {
+            WorkspaceAction::Reset => {
+                self.reset();
+                vec![WorkspaceEffect::SelectionChanged, WorkspaceEffect::Reset]
+            }
+            WorkspaceAction::SetSelectionLevel(level) => self
+                .selection
+                .set_level(level)
+                .then_some(WorkspaceEffect::SelectionChanged)
+                .into_iter()
+                .collect(),
+            WorkspaceAction::ClearSelection => self
+                .selection
+                .clear()
+                .then_some(WorkspaceEffect::SelectionChanged)
+                .into_iter()
+                .collect(),
+            WorkspaceAction::SelectMaterialSlot(slot) => self
+                .selection
+                .select_material_slot(slot)
+                .then_some(WorkspaceEffect::SelectionChanged)
+                .into_iter()
+                .collect(),
+            WorkspaceAction::SelectPrimitives(primitives) => self
+                .selection
+                .select_primitives(primitives)
+                .then_some(WorkspaceEffect::SelectionChanged)
+                .into_iter()
+                .collect(),
+            WorkspaceAction::ApplyMaterialViewport { operation, hit } => self
+                .selection
+                .apply_material_slot(operation, hit)
+                .then_some(WorkspaceEffect::SelectionChanged)
+                .into_iter()
+                .collect(),
+            WorkspaceAction::ApplyPrimitiveViewport { operation, hit } => self
+                .selection
+                .apply_primitive(operation, hit)
+                .then_some(WorkspaceEffect::SelectionChanged)
+                .into_iter()
+                .collect(),
+            WorkspaceAction::BeginPmxImport { source, character } => {
+                let request_id = self.pmx_import.begin(source.clone(), character);
+                vec![WorkspaceEffect::PmxImportStarted { request_id, source }]
+            }
+            WorkspaceAction::PmxProgress(progress) => {
+                if self.pmx_import.accepts(&progress) {
+                    vec![WorkspaceEffect::PmxProgressAccepted(progress)]
+                } else {
+                    Vec::new()
+                }
+            }
+            WorkspaceAction::CompletePmxImport { request_id, source } => self
+                .pmx_import
+                .complete(request_id, &source)
+                .map(WorkspaceEffect::PmxImportCompleted)
+                .into_iter()
+                .collect(),
+        }
+    }
+
     /// Returns current selection state.
     pub const fn selection(&self) -> &SelectionState {
         &self.selection
-    }
-
-    /// Mutably borrows current selection state.
-    pub fn selection_mut(&mut self) -> &mut SelectionState {
-        &mut self.selection
-    }
-
-    /// Returns the PMX import tracker.
-    pub const fn pmx_import(&self) -> &PmxImportTracker {
-        &self.pmx_import
-    }
-
-    /// Mutably borrows the PMX import tracker.
-    pub fn pmx_import_mut(&mut self) -> &mut PmxImportTracker {
-        &mut self.pmx_import
     }
 
     /// Records the scene installed by the renderer.
@@ -248,26 +357,76 @@ mod tests {
 
     #[test]
     fn selection_reducer_applies_toggle_and_remove() {
-        let mut state = SelectionState::default();
-        state.set_level(SelectionLevel::Primitive);
-        state.apply_primitive(ViewportSelectionAction::Toggle, Some(3));
-        state.apply_primitive(ViewportSelectionAction::Toggle, Some(1));
-        assert_eq!(state.primitives(), &[1, 3]);
+        let mut workspace = WorkspaceState::default();
+        workspace.dispatch(WorkspaceAction::SetSelectionLevel(
+            SelectionLevel::Primitive,
+        ));
+        workspace.dispatch(WorkspaceAction::ApplyPrimitiveViewport {
+            operation: ViewportSelectionAction::Toggle,
+            hit: Some(3),
+        });
+        workspace.dispatch(WorkspaceAction::ApplyPrimitiveViewport {
+            operation: ViewportSelectionAction::Toggle,
+            hit: Some(1),
+        });
+        assert_eq!(workspace.selection().primitives(), &[1, 3]);
 
-        state.apply_primitive(ViewportSelectionAction::Remove, Some(3));
-        assert_eq!(state.primitives(), &[1]);
+        let effects = workspace.dispatch(WorkspaceAction::ApplyPrimitiveViewport {
+            operation: ViewportSelectionAction::Remove,
+            hit: Some(3),
+        });
+        assert!(matches!(
+            effects.as_slice(),
+            [WorkspaceEffect::SelectionChanged]
+        ));
+        assert_eq!(workspace.selection().primitives(), &[1]);
     }
 
     #[test]
     fn import_tracker_accepts_only_the_latest_request() {
-        let mut tracker = PmxImportTracker::default();
+        let mut workspace = WorkspaceState::default();
         let old_source = PmxSourceIdentity::file("old.pmx");
-        let old = tracker.begin(old_source.clone(), None);
+        let old = workspace
+            .dispatch(WorkspaceAction::BeginPmxImport {
+                source: old_source.clone(),
+                character: None,
+            })
+            .into_iter()
+            .find_map(|effect| match effect {
+                WorkspaceEffect::PmxImportStarted { request_id, .. } => Some(request_id),
+                _ => None,
+            })
+            .unwrap();
         let new_source = PmxSourceIdentity::file("new.pmx");
-        let new = tracker.begin(new_source.clone(), None);
+        let new = workspace
+            .dispatch(WorkspaceAction::BeginPmxImport {
+                source: new_source.clone(),
+                character: None,
+            })
+            .into_iter()
+            .find_map(|effect| match effect {
+                WorkspaceEffect::PmxImportStarted { request_id, .. } => Some(request_id),
+                _ => None,
+            })
+            .unwrap();
 
-        assert!(tracker.complete(old, &old_source).is_none());
-        assert!(tracker.complete(new, &new_source).is_some());
+        assert!(
+            workspace
+                .dispatch(WorkspaceAction::CompletePmxImport {
+                    request_id: old,
+                    source: old_source,
+                })
+                .is_empty()
+        );
+        assert!(matches!(
+            workspace
+                .dispatch(WorkspaceAction::CompletePmxImport {
+                    request_id: new,
+                    source: new_source,
+                })
+                .as_slice(),
+            [WorkspaceEffect::PmxImportCompleted(_)]
+        ));
     }
 
     #[test]
