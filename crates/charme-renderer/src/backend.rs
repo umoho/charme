@@ -41,6 +41,7 @@ use crate::{
     renderer::{RendererNotification, ViewportSelectionAction},
     scene_runtime::{SpawnedPmxScene, spawn_pmx_scene},
     scheduler::RenderScheduler,
+    selection::SelectionFace,
     selection::SelectionGeometry,
 };
 
@@ -446,7 +447,11 @@ impl Backend {
 
         if let Some(mut configs) = app.world_mut().get_resource_mut::<GizmoConfigStore>() {
             let (config, _) = configs.config_mut::<DefaultGizmoConfigGroup>();
-            config.depth_bias = -0.1;
+            // A depth bias of -1.0 places gizmo lines at the near plane, so
+            // the selection wireframe always draws in front of the scene. This
+            // keeps the wireframe visible through occluding geometry, like
+            // Blender's selection wire overlay.
+            config.depth_bias = -1.0;
             config.line.width = 2.5;
         }
 
@@ -1562,28 +1567,21 @@ fn draw_selected_primitive_gizmo(
     }) {
         for component in &primitive.components {
             for edge in &component.edges {
-                let draw_edge = if edge.faces.len() == 1 {
-                    true
-                } else {
-                    let mut has_front_face = false;
-                    let mut has_back_face = false;
-                    for &face_index in &edge.faces {
-                        let Some(face) = component.faces.get(face_index) else {
-                            continue;
-                        };
-                        if face.normal == Vec3::ZERO {
-                            continue;
-                        }
-                        if face.normal.dot(camera_position - face.center) > 0.0 {
-                            has_front_face = true;
-                        } else {
-                            has_back_face = true;
-                        }
-                    }
-                    has_front_face && has_back_face
+                // An edge is part of the wireframe when at least one adjacent
+                // face faces the camera, mimicking Blender's backface-culled
+                // selection wire. Edges bounded only by back-facing faces are
+                // hidden. Degenerate faces keep their edges visible.
+                let faces_camera = |face: &SelectionFace| {
+                    face.normal == Vec3::ZERO
+                        || face.normal.dot(camera_position - face.center) > 0.0
                 };
+                let has_front_face = edge
+                    .faces
+                    .iter()
+                    .filter_map(|&face_index| component.faces.get(face_index))
+                    .any(faces_camera);
 
-                if draw_edge {
+                if has_front_face {
                     gizmos.line(edge.start, edge.end, SELECTION_GIZMO_COLOR);
                 }
             }
