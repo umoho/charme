@@ -16,12 +16,14 @@ use charme_core::{
 use thiserror::Error;
 
 mod event;
+mod import;
 mod inspector;
 mod preview;
 mod shader;
 mod workspace;
 
 pub use event::ApplicationEvent;
+pub use import::reconcile_pmx_materials;
 pub use inspector::{
     InspectorModel, InspectorProvider, InspectorRegistry, InspectorRow, InspectorSection,
     MaterialInstanceInspectorProvider, MaterialRenderStateProvider, MaterialSelectionContext,

@@ -35,10 +35,11 @@ use cacao::{
 use charme_application::{
     EditorAction, EditorController, InspectorRegistry, InspectorRow, MaterialSelectionContext,
     PreviewSynchronizer, SelectionLevel, SelectionTarget, WorkspaceState, inspect_preview_shader,
+    reconcile_pmx_materials,
 };
 use charme_core::{
-    CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlot, MaterialSlotId,
-    ParameterValue, ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
+    CharacterSource, EditorCommand, MaterialId, MaterialInstance, MaterialSlotId, ParameterValue,
+    ResourcePath, ResourcePathError, ShaderSource as DocumentShaderSource,
 };
 use charme_renderer::{
     Frame, OutputSize, PmxLoadRequest, PmxSceneInfo, PmxSourceIdentity, RendererNotification,
@@ -1239,7 +1240,20 @@ impl EditorWindow {
 
     fn show_scene_info(&self, request_id: u64, info: &PmxSceneInfo) {
         self.navigation_gizmo.reset();
-        self.install_pmx_material_bindings(info);
+        let material_command = {
+            let controller = self.controller.borrow();
+            reconcile_pmx_materials(controller.document(), info)
+        };
+        match material_command {
+            Ok(command) => {
+                if let Err(error) = self.dispatch_action(EditorAction::Command(command)) {
+                    tracing::error!(error = %error, "Failed to reconcile imported materials");
+                }
+            }
+            Err(error) => {
+                tracing::error!(error = %error, "Failed to create preview material resource path");
+            }
+        }
         self.reflected_inspection
             .replace(inspect_preview_shader().ok());
         self.preview_synchronizer.borrow_mut().reset();
@@ -1267,71 +1281,6 @@ impl EditorWindow {
                 ),
             ],
         ));
-    }
-
-    fn install_pmx_material_bindings(&self, info: &PmxSceneInfo) {
-        let Ok(shader_path) =
-            ResourcePath::project_relative("assets/shaders/preview_material.wgsl")
-        else {
-            return;
-        };
-        let (existing_shader, existing_materials) = {
-            let controller = self.controller.borrow();
-            let document = controller.document();
-            let shader = document
-                .shaders()
-                .iter()
-                .find(|shader| shader.path() == &shader_path)
-                .map(DocumentShaderSource::id);
-            let materials = info
-                .material_slots()
-                .iter()
-                .map(|slot| {
-                    document
-                        .material_slot(slot.id())
-                        .and_then(MaterialSlot::material)
-                        .filter(|material| document.material(*material).is_some())
-                })
-                .collect::<Vec<_>>();
-            (shader, materials)
-        };
-
-        let mut commands = Vec::new();
-        let shader_id = existing_shader.unwrap_or_else(|| {
-            let shader = DocumentShaderSource::new("Preview Material", shader_path);
-            let id = shader.id();
-            commands.push(EditorCommand::UpsertShader(shader));
-            id
-        });
-        let material_ids = info
-            .material_slots()
-            .iter()
-            .zip(existing_materials)
-            .map(|(slot, existing)| {
-                existing.unwrap_or_else(|| {
-                    let material = MaterialInstance::new(slot.name(), shader_id);
-                    let id = material.id();
-                    commands.push(EditorCommand::UpsertMaterial(material));
-                    id
-                })
-            })
-            .collect::<Vec<_>>();
-        let slots = info
-            .material_slots()
-            .iter()
-            .zip(material_ids)
-            .map(|(slot, material)| {
-                MaterialSlot::with_id(
-                    slot.id(),
-                    slot.index() as u32,
-                    slot.name(),
-                    slot.english_name(),
-                    Some(material),
-                )
-            })
-            .collect();
-        commands.push(EditorCommand::ReplaceMaterialSlots(slots));
-        let _ = self.dispatch_action(EditorAction::Command(EditorCommand::Transaction(commands)));
     }
 
     pub(crate) fn handle_hierarchy_selection_changed(&self, items: Vec<HierarchyItemId>) {
