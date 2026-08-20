@@ -8,23 +8,21 @@
 //
 // Depth handling: the mask camera's depth buffer contains only the selected
 // object (written by the depth prepass of the mask schedule), so the hardware
-// depth test of the mesh pipeline provides "occluded by itself, never by
+// depth test of the line pipeline provides "occluded by itself, never by
 // other objects" for free. `DEPTH_BIAS` pushes the line slightly towards the
 // camera so that fragments lying exactly on the object surface pass the depth
 // comparison.
-//
-// The material uses `AlphaMode::Mask`, so fragments below the cutoff are
-// discarded and surviving fragments write straight color plus coverage alpha
-// into the linear (Rgba8Unorm) mask target without blending.
 #import bevy_render::view::View
+
+// View uniform from the pipeline's view bind group.
+@group(0) @binding(0) var<uniform> view: View;
 
 const LINE_WIDTH_PX: f32 = 2.5;
 const DEPTH_BIAS: f32 = -0.1;
 const LINE_COLOR: vec4<f32> = vec4(1.0, 0.42, 0.02, 1.0);
 const NEAR_PLANE_EPSILON: f32 = 4.88e-04;
 // Half of the feather distance in pixels: the outermost pixels of the quad
-// fade out to fake anti-aliasing on the mask camera (which renders without
-// MSAA).
+// fade out to fake anti-aliasing on the mask camera.
 const EDGE_FEATHER_PX: f32 = 0.75;
 
 struct VertexInput {
@@ -52,8 +50,8 @@ fn vertex(vertex: VertexInput) -> VertexOutput {
 
     // Selection geometry is stored in world space with the same translation
     // applied to the PMX scene, so no model transform is needed here.
-    var clip_a = view.view_proj * vec4(vertex.position_a, 1.0);
-    var clip_b = view.view_proj * vec4(vertex.position_b, 1.0);
+    var clip_a = view.clip_from_world * vec4(vertex.position_a, 1.0);
+    var clip_b = view.clip_from_world * vec4(vertex.position_b, 1.0);
 
     // Manual near plane clipping to avoid errors when doing the perspective
     // divide inside this shader.

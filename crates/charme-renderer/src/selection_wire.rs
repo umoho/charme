@@ -11,8 +11,8 @@
 //!
 //! * The mask camera runs a custom render schedule containing only the depth
 //!   prepass (writing the selected object's depth into the mask view depth
-//!   buffer), an alpha-mask-only pass drawing the wireframe line quads, and
-//!   the upscaling blit that writes the mask image.
+//!   buffer), a line pass that draws the wireframe quads directly, and the
+//!   upscaling blit that writes the mask image.
 //! * Because no other geometry renders into the mask camera, the hardware
 //!   depth test of the line pipeline provides self-occlusion for free while
 //!   other objects can never occlude the wireframe.
@@ -21,14 +21,13 @@
 
 use bevy::{
     app::{App, PostUpdate},
-    asset::{Asset, Handle, RenderAssetUsages, embedded_path, load_embedded_asset},
+    asset::{Handle, RenderAssetUsages, load_embedded_asset},
     camera::{
         Camera, Camera3d, ClearColorConfig, Projection, RenderTarget, Viewport,
-        visibility::{NoFrustumCulling, RenderLayers},
+        visibility::RenderLayers,
     },
     core_pipeline::{
         FullscreenShader,
-        core_3d::AlphaMask3d,
         prepass::{DepthPrepass, node::early_prepass},
         schedule::{Core3d, Core3dSystems},
         tonemapping::{Tonemapping, tonemapping},
@@ -41,38 +40,37 @@ use bevy::{
         world::World,
     },
     image::Image,
-    log::error,
     math::Vec3,
-    mesh::{Mesh, MeshVertexAttribute},
-    pbr::{Material, MaterialPlugin, MeshMaterial3d},
     prelude::{
-        AlphaMode, Assets, Color, Commands, Component, Entity, GlobalTransform, Local, Mesh3d,
-        Query, Res, ResMut, Resource, Transform, Visibility,
+        Assets, Color, Commands, Component, Entity, GlobalTransform, Local, Query, Res, ResMut,
+        Resource, Transform,
     },
-    reflect::TypePath,
     render::{
         GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
         camera::{CameraRenderGraph, ExtractedCamera},
-        extract_component::ExtractComponentPlugin,
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
-        render_phase::ViewBinnedRenderPhases,
         render_resource::{
-            AsBindGroup, BindGroup, BindGroupEntries, BindGroupLayoutDescriptor,
-            BindGroupLayoutEntries, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-            Extent3d, FilterMode, FragmentState, LoadOp, MultisampleState, Operations,
-            PipelineCache, PrimitiveState, PrimitiveTopology, RenderPassColorAttachment,
-            RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-            SamplerDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines,
-            StoreOp, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
-            TextureViewId, VertexFormat,
-            binding_types::{sampler, texture_2d},
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
+            BufferId, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
+            ColorWrites, CompareFunction, DepthStencilState, Extent3d, FilterMode, FragmentState,
+            LoadOp, MultisampleState, Operations, PipelineCache, PrimitiveState,
+            RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
+            SamplerBindingType, SamplerDescriptor, ShaderStages, SpecializedRenderPipeline,
+            SpecializedRenderPipelines, StoreOp, TextureDimension, TextureFormat,
+            TextureSampleType, TextureUsages, TextureViewId, VertexAttribute, VertexFormat,
+            VertexStepMode,
+            binding_types::{sampler, texture_2d, uniform_buffer},
         },
         renderer::{RenderContext, RenderDevice, ViewQuery},
         texture::GpuImage,
-        view::{ExtractedView, ViewDepthTexture, ViewTarget},
+        view::{
+            ExtractedView, Msaa, ViewDepthTexture, ViewTarget, ViewUniform, ViewUniformOffset,
+            ViewUniforms,
+        },
     },
-    shader::{Shader, ShaderRef},
+    shader::Shader,
     transform::TransformSystems,
     utils::default,
 };
@@ -87,16 +85,16 @@ use crate::{
 pub(crate) const SELECTION_WIRE_LAYER: usize = 1;
 
 /// Marker for the selection mask camera.
-#[derive(Component)]
+#[derive(Component, ExtractComponent, Clone)]
 struct SelectionMaskCamera;
-
-/// Marker for the wireframe line mesh entity.
-#[derive(Component)]
-struct SelectionWireLineEntity;
 
 /// Marker for the main camera's composite pipeline.
 #[derive(Component)]
 struct ViewSelectionWireCompositePipeline(CachedRenderPipelineId);
+
+/// Marker for a view's line pipeline.
+#[derive(Component)]
+struct ViewSelectionWireLinePipeline(CachedRenderPipelineId);
 
 /// Whether the composite pass has wireframe lines to draw this frame.
 #[derive(Resource, ExtractResource, Clone, Debug, Default)]
@@ -107,16 +105,17 @@ pub(crate) struct SelectionWireActive(bool);
 #[derive(Resource, ExtractResource, Clone, Debug, Default)]
 pub(crate) struct SelectionWireMaskHandle(pub(crate) Handle<Image>);
 
+/// The classified wireframe line segments, extracted for the line pass.
+#[derive(Resource, ExtractResource, Clone, Debug, Default, PartialEq)]
+pub(crate) struct SelectionWireLines {
+    lines: Vec<(Vec3, Vec3)>,
+}
+
 /// Main-world handles describing the selection wireframe setup.
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct SelectionWire {
     pub(crate) mask_target: Handle<Image>,
     pub(crate) mask_camera: Entity,
-    /// Retained for debugging; systems find the line entity by its marker.
-    pub(crate) _line_entity: Entity,
-    pub(crate) line_mesh: Handle<Mesh>,
-    /// Retained so the material asset stays alive.
-    pub(crate) _line_material: Handle<SelectionWireMaterial>,
 }
 
 impl Default for SelectionWire {
@@ -124,49 +123,7 @@ impl Default for SelectionWire {
         Self {
             mask_target: Handle::default(),
             mask_camera: Entity::PLACEHOLDER,
-            _line_entity: Entity::PLACEHOLDER,
-            line_mesh: Handle::default(),
-            _line_material: Handle::default(),
         }
-    }
-}
-
-/// Wireframe line material.
-///
-/// The mask camera's schedule skips the opaque and transparent passes, so only
-/// alpha-mask materials reach the mask color target. PMX materials never use
-/// [`AlphaMode::Mask`], which makes this phase exclusive to the wireframe.
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Default)]
-pub(crate) struct SelectionWireMaterial {
-    /// Unused binding keeping the material bind group layout non-empty.
-    #[uniform(0)]
-    _unused: u32,
-}
-
-impl Material for SelectionWireMaterial {
-    fn vertex_shader() -> ShaderRef {
-        ShaderRef::Path(
-            bevy::asset::AssetPath::from_path_buf(embedded_path!("selection_wire_lines.wgsl"))
-                .with_source("embedded"),
-        )
-    }
-
-    fn fragment_shader() -> ShaderRef {
-        ShaderRef::Path(
-            bevy::asset::AssetPath::from_path_buf(embedded_path!("selection_wire_lines.wgsl"))
-                .with_source("embedded"),
-        )
-    }
-
-    fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Mask(0.5)
-    }
-
-    fn enable_prepass() -> bool {
-        // The line mesh uses a custom vertex layout that the default prepass
-        // shader does not support. The mask camera's depth prepass only needs
-        // the selected object's depth, so lines skip it entirely.
-        false
     }
 }
 
@@ -174,11 +131,8 @@ impl Material for SelectionWireMaterial {
 #[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
 struct SelectionWireMaskGraph;
 
-const SELECTION_WIRE_POSITION_B: MeshVertexAttribute =
-    MeshVertexAttribute::new("Vertex_Position_B", 1, VertexFormat::Float32x3);
-
-const SELECTION_WIRE_CORNER: MeshVertexAttribute =
-    MeshVertexAttribute::new("Vertex_Corner", 2, VertexFormat::Uint32);
+const LINE_VERTEX_SIZE: u64 = 28; // vec3 + vec3 + u32
+const LINE_CORNERS: [u32; 6] = [0, 1, 2, 3, 4, 5];
 
 /// Registers the selection wireframe systems, resources, and render schedule.
 ///
@@ -186,13 +140,15 @@ const SELECTION_WIRE_CORNER: MeshVertexAttribute =
 /// schedule and the composite node.
 pub(crate) fn install_selection_wire(app: &mut App) {
     app.add_plugins((
-        MaterialPlugin::<SelectionWireMaterial>::default(),
         ExtractResourcePlugin::<SelectionWireActive>::default(),
         ExtractResourcePlugin::<SelectionWireMaskHandle>::default(),
+        ExtractResourcePlugin::<SelectionWireLines>::default(),
         ExtractComponentPlugin::<MainPreviewCamera>::default(),
+        ExtractComponentPlugin::<SelectionMaskCamera>::default(),
     ))
     .init_resource::<SelectionWireActive>()
     .init_resource::<SelectionWireMaskHandle>()
+    .init_resource::<SelectionWireLines>()
     .init_resource::<SelectionWire>()
     .add_systems(
         PostUpdate,
@@ -206,7 +162,15 @@ pub(crate) fn install_selection_wire(app: &mut App) {
         render_app
             .add_schedule(selection_wire_mask_schedule())
             .init_gpu_resource::<SpecializedRenderPipelines<SelectionWireCompositePipeline>>()
-            .add_systems(RenderStartup, init_selection_wire_composite_pipeline)
+            .init_gpu_resource::<SpecializedRenderPipelines<SelectionWireLinePipeline>>()
+            .init_resource::<SelectionWireGpuBuffer>()
+            .add_systems(
+                RenderStartup,
+                (
+                    init_selection_wire_composite_pipeline,
+                    init_selection_wire_line_pipeline,
+                ),
+            )
             .add_systems(
                 Core3d,
                 selection_wire_composite
@@ -215,7 +179,12 @@ pub(crate) fn install_selection_wire(app: &mut App) {
             )
             .add_systems(
                 Render,
-                prepare_view_selection_wire_composite_pipelines.in_set(RenderSystems::Prepare),
+                (
+                    prepare_view_selection_wire_composite_pipelines,
+                    prepare_view_selection_wire_line_pipelines,
+                    prepare_selection_wire_gpu_buffer,
+                )
+                    .in_set(RenderSystems::Prepare),
             );
     }
 
@@ -223,34 +192,10 @@ pub(crate) fn install_selection_wire(app: &mut App) {
     bevy::asset::embedded_asset!(app, "selection_wire_composite.wgsl");
 }
 
-/// Spawns the mask camera, the line entity, and the mask render target.
+/// Spawns the mask camera and the mask render target.
 pub(crate) fn spawn_selection_wire(app: &mut App, size: OutputSize) -> SelectionWire {
     let mask_target = add_selection_mask_target(app, size);
     let world = app.world_mut();
-    let line_material = world
-        .resource_mut::<Assets<SelectionWireMaterial>>()
-        .add(SelectionWireMaterial::default());
-    let line_mesh = {
-        // MAIN_WORLD keeps the CPU vertex data writable after extraction, so
-        // the system can re-upload lines when the selection changes.
-        let mut mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-        );
-        write_line_mesh(&mut mesh, &[]);
-        world.resource_mut::<Assets<Mesh>>().add(mesh)
-    };
-    let line_entity = world
-        .spawn((
-            SelectionWireLineEntity,
-            Mesh3d(line_mesh.clone()),
-            MeshMaterial3d(line_material.clone()),
-            RenderLayers::layer(SELECTION_WIRE_LAYER),
-            NoFrustumCulling,
-            Transform::IDENTITY,
-            Visibility::Hidden,
-        ))
-        .id();
 
     // The camera state is copied from the main camera by the sync system on
     // the first update, so defaults are fine for the initial spawn.
@@ -281,9 +226,6 @@ pub(crate) fn spawn_selection_wire(app: &mut App, size: OutputSize) -> Selection
     SelectionWire {
         mask_target,
         mask_camera,
-        _line_entity: line_entity,
-        line_mesh,
-        _line_material: line_material,
     }
 }
 
@@ -342,13 +284,12 @@ fn sync_selection_mask_camera(
     mask_camera.is_active = camera.is_active;
 }
 
-/// Rebuilds the wireframe line mesh when the selection or the camera changes.
+/// Reclassifies the selected wireframe edges when the selection or the camera
+/// changes.
 fn update_selection_wire(
     selection: Res<SelectionGeometry>,
     main_camera: Query<bevy::ecs::change_detection::Ref<GlobalTransform>, With<MainPreviewCamera>>,
-    wire: Res<SelectionWire>,
-    mut line_visibility: Query<&mut Visibility, With<SelectionWireLineEntity>>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    mut lines_resource: ResMut<SelectionWireLines>,
     mut active: ResMut<SelectionWireActive>,
 ) {
     let Ok(camera_transform) = main_camera.single() else {
@@ -358,18 +299,8 @@ fn update_selection_wire(
         return;
     }
     let lines = selection_wire_lines(&selection, camera_transform.translation());
-    if let Some(mut mesh) = meshes.get_mut(&wire.line_mesh) {
-        write_line_mesh(&mut mesh, &lines);
-    }
-    let has_lines = !lines.is_empty();
-    if let Ok(mut visibility) = line_visibility.single_mut() {
-        *visibility = if has_lines {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
-    }
-    active.0 = has_lines;
+    active.0 = !lines.is_empty();
+    lines_resource.lines = lines;
 }
 
 /// Classifies the selected wireframe edges for the current camera position.
@@ -428,31 +359,6 @@ fn faces_camera(face: &SelectionFace, camera_position: Vec3) -> bool {
     face.normal == Vec3::ZERO || face.normal.dot(camera_position - face.center) > 0.0
 }
 
-/// Writes six quad vertices per line segment into the mesh.
-fn write_line_mesh(mesh: &mut Mesh, lines: &[(Vec3, Vec3)]) {
-    // Keep a degenerate sub-pixel line so the mesh always has vertices; the
-    // line entity is hidden while the selection is empty.
-    let fallback = [(Vec3::new(0.0, -1.0e3, 0.0), Vec3::new(1.0e-6, -1.0e3, 0.0))];
-    let lines = if lines.is_empty() {
-        &fallback[..]
-    } else {
-        lines
-    };
-    let mut positions_a = Vec::with_capacity(lines.len() * 6);
-    let mut positions_b = Vec::with_capacity(lines.len() * 6);
-    let mut corners = Vec::with_capacity(lines.len() * 6);
-    for &(start, end) in lines {
-        for corner in 0..6u32 {
-            positions_a.push(start.to_array());
-            positions_b.push(end.to_array());
-            corners.push(corner);
-        }
-    }
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions_a);
-    mesh.insert_attribute(SELECTION_WIRE_POSITION_B, positions_b);
-    mesh.insert_attribute(SELECTION_WIRE_CORNER, corners);
-}
-
 fn new_selection_mask_image(size: OutputSize) -> Image {
     let mut image = Image::new_uninit(
         Extent3d {
@@ -461,8 +367,8 @@ fn new_selection_mask_image(size: OutputSize) -> Image {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        // Linear storage: the line material writes straight color values and
-        // the composite node reads them back without an sRGB round trip.
+        // Linear storage: the line pass writes straight color values and the
+        // composite node reads them back without an sRGB round trip.
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
@@ -483,39 +389,235 @@ fn selection_wire_mask_schedule() -> Schedule {
         auto_insert_apply_deferred: false,
         ..Default::default()
     });
-    // Depth prepass (selected object only) -> wireframe line quads (alpha
-    // mask phase only, so transparent PMX materials never reach the mask) ->
-    // write the mask to its image.
-    schedule.add_systems((early_prepass, selection_wire_alpha_mask_pass, upscaling).chain());
+    // Depth prepass (selected object only) -> wireframe line quads (drawn
+    // directly; no other material reaches the mask color target) -> write the
+    // mask to its image.
+    schedule.add_systems((early_prepass, selection_wire_line_pass, upscaling).chain());
     schedule
 }
 
-/// Renders only the alpha-mask phase into the mask color target.
+/// GPU buffer holding the expanded line quad vertices.
+#[derive(Resource, Default)]
+struct SelectionWireGpuBuffer {
+    buffer: Option<Buffer>,
+    vertex_count: u32,
+    cached_lines: Vec<(Vec3, Vec3)>,
+}
+
+/// Rebuilds the line vertex buffer when the classified lines change.
+fn prepare_selection_wire_gpu_buffer(
+    lines: Res<SelectionWireLines>,
+    render_device: Res<RenderDevice>,
+    mut gpu: ResMut<SelectionWireGpuBuffer>,
+) {
+    if lines.lines == gpu.cached_lines {
+        return;
+    }
+    gpu.cached_lines = lines.lines.clone();
+    if lines.lines.is_empty() {
+        gpu.buffer = None;
+        gpu.vertex_count = 0;
+        return;
+    }
+
+    let mut data = Vec::with_capacity(lines.lines.len() * 6 * LINE_VERTEX_SIZE as usize);
+    for &(start, end) in &lines.lines {
+        for corner in LINE_CORNERS {
+            data.extend_from_slice(&start.to_array().map(f32::to_le_bytes).concat());
+            data.extend_from_slice(&end.to_array().map(f32::to_le_bytes).concat());
+            data.extend_from_slice(&corner.to_le_bytes());
+        }
+    }
+    let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("selection_wire_lines"),
+        contents: &data,
+        usage: BufferUsages::VERTEX,
+    });
+    gpu.vertex_count = (lines.lines.len() * 6) as u32;
+    gpu.buffer = Some(buffer);
+}
+
+/// Pipeline drawing the wireframe line quads.
+#[derive(Resource)]
+struct SelectionWireLinePipeline {
+    view_layout: BindGroupLayoutDescriptor,
+    vertex_shader: Handle<Shader>,
+    fragment_shader: Handle<Shader>,
+}
+
+fn init_selection_wire_line_pipeline(
+    asset_server: Res<bevy::asset::AssetServer>,
+    mut commands: Commands,
+) {
+    commands.insert_resource(SelectionWireLinePipeline {
+        view_layout: BindGroupLayoutDescriptor::new(
+            "selection_wire_line_view_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::VERTEX,
+                (uniform_buffer::<ViewUniform>(true),),
+            ),
+        ),
+        vertex_shader: load_embedded_asset!(asset_server.as_ref(), "selection_wire_lines.wgsl"),
+        fragment_shader: load_embedded_asset!(asset_server.as_ref(), "selection_wire_lines.wgsl"),
+    });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SelectionWireLinePipelineKey {
+    format: TextureFormat,
+    msaa_samples: u32,
+}
+
+impl SpecializedRenderPipeline for SelectionWireLinePipeline {
+    type Key = SelectionWireLinePipelineKey;
+
+    fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("selection_wire_line_pipeline".into()),
+            layout: vec![self.view_layout.clone()],
+            immediate_size: 0,
+            vertex: bevy::render::render_resource::VertexState {
+                shader: self.vertex_shader.clone(),
+                shader_defs: Vec::new(),
+                entry_point: Some("vertex".into()),
+                buffers: vec![bevy::mesh::VertexBufferLayout {
+                    array_stride: LINE_VERTEX_SIZE,
+                    step_mode: VertexStepMode::Vertex,
+                    attributes: vec![
+                        VertexAttribute {
+                            format: VertexFormat::Float32x3,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        VertexAttribute {
+                            format: VertexFormat::Float32x3,
+                            offset: 12,
+                            shader_location: 1,
+                        },
+                        VertexAttribute {
+                            format: VertexFormat::Uint32,
+                            offset: 24,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+            },
+            fragment: Some(FragmentState {
+                shader: self.fragment_shader.clone(),
+                shader_defs: Vec::new(),
+                entry_point: Some("fragment".into()),
+                targets: vec![Some(ColorTargetState {
+                    format: key.format,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState::default(),
+            depth_stencil: Some(DepthStencilState {
+                format: TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(CompareFunction::GreaterEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: MultisampleState {
+                count: key.msaa_samples,
+                ..Default::default()
+            },
+            zero_initialize_workgroup_memory: true,
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn prepare_view_selection_wire_line_pipelines(
+    mut commands: Commands,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<SelectionWireLinePipeline>>,
+    pipeline: Res<SelectionWireLinePipeline>,
+    views: Query<(Entity, &ExtractedView, &Msaa), (With<ViewTarget>, With<SelectionMaskCamera>)>,
+) {
+    for (entity, view, msaa) in &views {
+        let pipeline_id = pipelines.specialize(
+            &pipeline_cache,
+            &pipeline,
+            SelectionWireLinePipelineKey {
+                format: view.target_format,
+                msaa_samples: msaa.samples(),
+            },
+        );
+        commands
+            .entity(entity)
+            .insert(ViewSelectionWireLinePipeline(pipeline_id));
+    }
+}
+
+#[derive(Default)]
+struct SelectionWireLineBindGroupCache(Option<(BufferId, u32, BindGroup)>);
+
+/// Renders the wireframe line quads into the mask color target.
 ///
 /// The mask camera's depth buffer already holds the selected object's depth
-/// from the prepass, so the line pipeline's hardware depth test hides line
-/// fragments behind the object's own surface.
-fn selection_wire_alpha_mask_pass(
+/// from the prepass, so the hardware depth test hides line fragments behind
+/// the object's own surface.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn selection_wire_line_pass(
     world: &World,
     view: ViewQuery<(
         &ExtractedCamera,
         &ExtractedView,
         &ViewTarget,
         &ViewDepthTexture,
+        &ViewUniformOffset,
+        Option<&ViewSelectionWireLinePipeline>,
     )>,
-    alpha_mask_phases: Res<ViewBinnedRenderPhases<AlphaMask3d>>,
+    pipeline_cache: Res<PipelineCache>,
+    gpu: Res<SelectionWireGpuBuffer>,
+    view_uniforms: Res<ViewUniforms>,
+    mut cache: Local<SelectionWireLineBindGroupCache>,
     mut ctx: RenderContext,
 ) {
-    let view_entity = view.entity();
-    let (camera, extracted_view, target, depth) = view.into_inner();
-    let Some(alpha_mask_phase) = alpha_mask_phases.get(&extracted_view.retained_view_entity) else {
+    let (camera, _extracted_view, target, depth, view_uniform_offset, view_pipeline) =
+        view.into_inner();
+    let Some(view_pipeline) = view_pipeline else {
         return;
+    };
+    let render_pipeline = pipeline_cache.get_render_pipeline(view_pipeline.0);
+
+    // Prepare the bind group before starting the pass so `ctx` stays free.
+    let bind_group = if render_pipeline.is_some() && gpu.buffer.is_some() {
+        let view_uniforms_buffer = view_uniforms.uniforms.buffer().unwrap();
+        match &cache.0 {
+            Some((buffer_id, offset, bind_group))
+                if *buffer_id == view_uniforms_buffer.id()
+                    && *offset == view_uniform_offset.offset =>
+            {
+                Some(bind_group.clone())
+            }
+            _ => {
+                let bind_group = ctx.render_device().create_bind_group(
+                    "selection_wire_line_view_bind_group",
+                    &pipeline_cache.get_bind_group_layout(
+                        &world.resource::<SelectionWireLinePipeline>().view_layout,
+                    ),
+                    &BindGroupEntries::single(&view_uniforms.uniforms),
+                );
+                cache.0 = Some((
+                    view_uniforms_buffer.id(),
+                    view_uniform_offset.offset,
+                    bind_group.clone(),
+                ));
+                Some(bind_group)
+            }
+        }
+    } else {
+        None
     };
 
     // Always begin the pass: the first color attachment use each frame clears
     // the mask, even when there is nothing to draw.
     let mut render_pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
-        label: Some("selection_wire_alpha_mask_pass"),
+        label: Some("selection_wire_line_pass"),
         color_attachments: &[Some(target.get_color_attachment())],
         depth_stencil_attachment: Some(depth.get_attachment(StoreOp::Store)),
         timestamp_writes: None,
@@ -525,10 +627,14 @@ fn selection_wire_alpha_mask_pass(
     if let Some(viewport) = Viewport::from_viewport_and_override(camera.viewport.as_ref(), None) {
         render_pass.set_camera_viewport(&viewport);
     }
-    if !alpha_mask_phase.is_empty()
-        && let Err(err) = alpha_mask_phase.render(&mut render_pass, world, view_entity)
+
+    if let (Some(buffer), Some(render_pipeline), Some(bind_group)) =
+        (gpu.buffer.as_ref(), render_pipeline, bind_group.as_ref())
     {
-        error!("Error encountered while rendering the selection wire phase {err:?}");
+        render_pass.set_render_pipeline(render_pipeline);
+        render_pass.set_bind_group(0, bind_group, &[view_uniform_offset.offset]);
+        render_pass.set_vertex_buffer(0, buffer.slice(..));
+        render_pass.draw(0..gpu.vertex_count, 0..1);
     }
     drop(render_pass);
 }
