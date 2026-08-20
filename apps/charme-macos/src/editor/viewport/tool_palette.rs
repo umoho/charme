@@ -44,7 +44,11 @@ impl ToolPalette {
             let stack: id = msg_send![class!(NSStackView), new];
             // NSUserInterfaceLayoutOrientationVertical = 1.
             let _: () = msg_send![stack, setOrientation: 1usize];
-            // NSLayoutAttributeCenterX = 9.
+            // NSLayoutAttributeCenterX = 9. The alignment attribute must belong to
+            // the axis perpendicular to the orientation: a vertical-axis attribute
+            // such as 3 (NSLayoutAttributeTop) makes NSStackView silently flip the
+            // orientation back to horizontal, which pushed later buttons out of
+            // the narrow palette and clipped them.
             let _: () = msg_send![stack, setAlignment: 9usize];
             let _: () = msg_send![stack, setSpacing: STACK_SPACING];
             let _: () = msg_send![stack, setTranslatesAutoresizingMaskIntoConstraints: NO];
@@ -91,7 +95,9 @@ fn make_button(entry: &ToolPaletteEntry) -> id {
         let image = symbol_image(entry.symbol_name, description);
         let action = tool_action(entry.id);
         let button: id = msg_send![class!(NSButton), buttonWithImage: image target: menu_target() action: action];
-        // NSButtonTypeToggle = 2, NSImageOnly = 1.
+        // NSButtonTypeToggle = 2, NSImageOnly = 1. NSImagePosition value 2 is
+        // NSImageLeft, which reserves title space and bloats the button's
+        // intrinsic width (measured ~50pt for a 15pt symbol).
         let _: () = msg_send![button, setButtonType: 2usize];
         let _: () = msg_send![button, setImagePosition: 1usize];
         let _: () = msg_send![button, setBordered: NO];
@@ -99,6 +105,13 @@ fn make_button(entry: &ToolPaletteEntry) -> id {
         let tooltip = NSString::new(description);
         let _: () = msg_send![button, setToolTip: &*tooltip];
         let _: () = msg_send![button, setTranslatesAutoresizingMaskIntoConstraints: NO];
+        // The size constraints must be activated rather than merely created:
+        // NSStackView derives its own intrinsic content size from the arranged
+        // subviews' constraints (two 26pt buttons + 4pt spacing = 26x56). Beware
+        // that the stack still positions buttons by their `fittingSize`, which for
+        // an unbordered NSButton is cell-based and exceeds the constraints; the
+        // frames overflow the stack slightly, but symbols stay centered and the
+        // 36x84 palette does not clip them.
         let width: id = msg_send![button, widthAnchor];
         let height: id = msg_send![button, heightAnchor];
         let width_constraint: id = msg_send![width, constraintEqualToConstant: BUTTON_SIZE];
