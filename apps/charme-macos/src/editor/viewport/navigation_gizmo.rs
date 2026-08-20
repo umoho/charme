@@ -28,7 +28,7 @@ use core_graphics::{
 };
 
 use crate::{
-    app::{CharmeApp, Message},
+    app::{CharmeApp, EditorMessage, Message},
     ui::label,
 };
 
@@ -478,19 +478,21 @@ fn input_class() -> &'static Class {
 extern "C" fn mouse_down(view: &Object, _: Sel, event: id) {
     let window_point: CGPoint = unsafe { msg_send![event, locationInWindow] };
     let point: CGPoint = unsafe { msg_send![view, convertPoint: window_point fromView: nil] };
-    App::<CharmeApp, Message>::dispatch_main(Message::NavigationGizmoMouseDown {
-        x: point.x,
-        y: point.y,
-    });
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(
+        EditorMessage::NavigationGizmoMouseDown {
+            x: point.x,
+            y: point.y,
+        },
+    ));
 }
 
 extern "C" fn mouse_dragged(_: &Object, _: Sel, event: id) {
     let delta_x: f64 = unsafe { msg_send![event, deltaX] };
     let delta_y: f64 = unsafe { msg_send![event, deltaY] };
-    App::<CharmeApp, Message>::dispatch_main(Message::Orbit {
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::Orbit {
         delta_x: -(delta_x as f32) * 0.01,
         delta_y: -(delta_y as f32) * 0.01,
-    });
+    }));
 }
 
 extern "C" fn accepts_first_mouse(_: &Object, _: Sel, _: id) -> bool {

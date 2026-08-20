@@ -18,7 +18,7 @@ use cacao::{
 use charme_core::ParameterValue;
 
 use crate::{
-    app::{CharmeApp, Message},
+    app::{CharmeApp, EditorMessage, Message},
     shader_inspection::{ParameterControlKind, ParameterControlSpec},
 };
 
@@ -451,10 +451,10 @@ extern "C" fn parameter_changed(control: &Object, _: Sel, sender: id) {
             ParameterValue::U32(value)
         }
     };
-    App::<CharmeApp, Message>::dispatch_main(Message::ParameterChanged {
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::ParameterChanged {
         key: target.key.clone(),
         value,
-    });
+    }));
 }
 
 fn color_values(sender: id) -> [f32; 4] {

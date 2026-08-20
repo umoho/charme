@@ -9,7 +9,7 @@ use cacao::{
 };
 use charme_application::SelectionLevel;
 
-use super::{CharmeApp, MenuContext, Message, recent_projects};
+use super::{CharmeApp, EditorMessage, MenuContext, Message, recent_projects};
 use crate::localization::{self, Key};
 
 pub(super) fn install_native_menus() {
@@ -142,18 +142,24 @@ fn build_file_menu() -> id {
         );
         add_item(
             menu,
-            submenu_item(
+            tagged_submenu_item(
+                MenuTag::RecentProjects,
                 localization::text(Key::RecentProjectsMenu),
                 build_recent_menu(),
             ),
         );
         add_item(
             menu,
-            submenu_item(localization::text(Key::ImportMenu), build_import_menu()),
+            tagged_submenu_item(
+                MenuTag::Import,
+                localization::text(Key::ImportMenu),
+                build_import_menu(),
+            ),
         );
         add_item(
             menu,
-            menu_item_with_target(
+            tagged_menu_item_with_target(
+                MenuTag::InspectShader,
                 localization::text(Key::InspectShaderMenu),
                 sel!(charmeChooseShader:),
                 "",
@@ -164,7 +170,8 @@ fn build_file_menu() -> id {
         add_separator(menu);
         add_item(
             menu,
-            menu_item_with_target(
+            tagged_menu_item_with_target(
+                MenuTag::Save,
                 localization::text(Key::SaveProjectMenu),
                 sel!(charmeSaveProject:),
                 "s",
@@ -174,7 +181,8 @@ fn build_file_menu() -> id {
         );
         add_item(
             menu,
-            menu_item_with_target(
+            tagged_menu_item_with_target(
+                MenuTag::SaveAs,
                 localization::text(Key::SaveAsProjectMenu),
                 sel!(charmeChooseSaveProject:),
                 "s",
@@ -220,7 +228,8 @@ fn build_edit_menu() -> id {
         let target = menu_target();
         add_item(
             menu,
-            menu_item_with_target(
+            tagged_menu_item_with_target(
+                MenuTag::Undo,
                 localization::text(Key::Undo),
                 sel!(charmeUndo:),
                 "z",
@@ -230,7 +239,8 @@ fn build_edit_menu() -> id {
         );
         add_item(
             menu,
-            menu_item_with_target(
+            tagged_menu_item_with_target(
+                MenuTag::Redo,
                 localization::text(Key::Redo),
                 sel!(charmeRedo:),
                 "z",
@@ -241,7 +251,8 @@ fn build_edit_menu() -> id {
         add_separator(menu);
         add_item(
             menu,
-            menu_item_with_target(
+            tagged_menu_item_with_target(
+                MenuTag::SplitPrimitives,
                 localization::text(Key::SplitSelectedPrimitives),
                 sel!(charmeSplitSelectedPrimitives:),
                 "",
@@ -294,7 +305,8 @@ fn build_select_menu() -> id {
     let target = menu_target();
     add_item(
         menu,
-        submenu_item(
+        tagged_submenu_item(
+            MenuTag::SelectionLevel,
             localization::text(Key::SelectionLevelMenu),
             build_selection_level_menu(),
         ),
@@ -302,7 +314,8 @@ fn build_select_menu() -> id {
     add_separator(menu);
     add_item(
         menu,
-        menu_item_with_target(
+        tagged_menu_item_with_target(
+            MenuTag::SelectAll,
             localization::text(Key::SelectAll),
             sel!(charmeSelectAll:),
             "",
@@ -312,7 +325,8 @@ fn build_select_menu() -> id {
     );
     add_item(
         menu,
-        menu_item_with_target(
+        tagged_menu_item_with_target(
+            MenuTag::DeselectAll,
             localization::text(Key::DeselectAll),
             sel!(charmeDeselectAll:),
             "",
@@ -322,7 +336,8 @@ fn build_select_menu() -> id {
     );
     add_item(
         menu,
-        menu_item_with_target(
+        tagged_menu_item_with_target(
+            MenuTag::InvertSelection,
             localization::text(Key::InvertSelection),
             sel!(charmeInvertSelection:),
             "",
@@ -338,7 +353,8 @@ fn build_selection_level_menu() -> id {
     let target = menu_target();
     add_item(
         menu,
-        menu_item_with_target(
+        tagged_menu_item_with_target(
+            MenuTag::MaterialSlotLevel,
             localization::text(Key::MaterialSlotSelectionLevel),
             sel!(charmeSelectMaterialSlot:),
             "",
@@ -348,7 +364,8 @@ fn build_selection_level_menu() -> id {
     );
     add_item(
         menu,
-        menu_item_with_target(
+        tagged_menu_item_with_target(
+            MenuTag::PrimitiveLevel,
             localization::text(Key::PrimitiveSelectionLevel),
             sel!(charmeSelectPrimitive:),
             "",
@@ -429,6 +446,29 @@ fn add_submenu(parent: id, title: &str, submenu: id) {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(isize)]
+enum MenuTag {
+    RecentProjects = 100,
+    Import,
+    InspectShader,
+    Save,
+    SaveAs,
+    Undo,
+    Redo,
+    SplitPrimitives,
+    SelectionLevel,
+    MaterialSlotLevel,
+    PrimitiveLevel,
+    SelectAll,
+    DeselectAll,
+    InvertSelection,
+}
+
+fn tagged_submenu_item(tag: MenuTag, title: &str, submenu: id) -> id {
+    tag_item(submenu_item(title, submenu), tag)
+}
+
 fn submenu_item(title: &str, submenu: id) -> id {
     unsafe {
         let title = NSString::new(title);
@@ -460,6 +500,27 @@ const SHIFT: usize = 1 << 17;
 
 fn menu_item(title: &str, action: Sel, key: &str, modifiers: usize, target: id) -> id {
     menu_item_with_target(title, action, key, modifiers, target)
+}
+
+fn tagged_menu_item_with_target(
+    tag: MenuTag,
+    title: &str,
+    action: Sel,
+    key: &str,
+    modifiers: usize,
+    target: id,
+) -> id {
+    tag_item(
+        menu_item_with_target(title, action, key, modifiers, target),
+        tag,
+    )
+}
+
+fn tag_item(item: id, tag: MenuTag) -> id {
+    unsafe {
+        let _: () = msg_send![item, setTag: tag as isize];
+    }
+    item
 }
 
 fn menu_item_with_target(title: &str, action: Sel, key: &str, modifiers: usize, target: id) -> id {
@@ -564,7 +625,7 @@ extern "C" fn menu_choose_pmx(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::ChoosePmx);
 }
 extern "C" fn menu_choose_shader(_: &Object, _: Sel, _: id) {
-    App::<CharmeApp, Message>::dispatch_main(Message::ChooseShader);
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::ChooseShader));
 }
 extern "C" fn menu_save_project(_: &Object, _: Sel, _: id) {
     App::<CharmeApp, Message>::dispatch_main(Message::SaveProject);
@@ -618,7 +679,7 @@ pub(super) fn refresh_recent_projects_menu() {
         let main_menu: id = msg_send![app, mainMenu];
         let file_item: id = msg_send![main_menu, itemAtIndex: 1usize];
         let file_menu: id = msg_send![file_item, submenu];
-        let recent_item: id = msg_send![file_menu, itemAtIndex: 2usize];
+        let recent_item = item_with_tag(file_menu, MenuTag::RecentProjects);
         let submenu = build_recent_menu();
         let _: () = msg_send![recent_item, setSubmenu: submenu];
         let _: () = msg_send![recent_item, setEnabled: YES];
@@ -683,54 +744,68 @@ pub(super) fn update_menu_state(
         let select_item: id = msg_send![main_menu, itemAtIndex: 3usize];
         let select: id = msg_send![select_item, submenu];
         let editor = context == MenuContext::Editor;
-        set_menu_item_state(file, 3, editor, editor);
-        set_menu_item_state(file, 4, editor, editor);
-        set_menu_item_state(file, 6, editor, editor && dirty);
-        set_menu_item_state(file, 7, editor, editor);
-        set_menu_item_state(edit, 0, true, can_undo);
-        set_menu_item_state(edit, 1, true, can_redo);
+        set_menu_item_state(file, MenuTag::Import, editor, editor);
+        set_menu_item_state(file, MenuTag::InspectShader, editor, editor);
+        set_menu_item_state(file, MenuTag::Save, editor, editor && dirty);
+        set_menu_item_state(file, MenuTag::SaveAs, editor, editor);
+        set_menu_item_state(edit, MenuTag::Undo, true, can_undo);
+        set_menu_item_state(edit, MenuTag::Redo, true, can_redo);
         set_menu_item_state(
             edit,
-            3,
+            MenuTag::SplitPrimitives,
             editor,
             editor
                 && selection_level == SelectionLevel::Primitive
                 && has_scene
                 && has_primitive_selection,
         );
-        set_menu_item_state(select, 0, true, editor);
-        let level_item: id = msg_send![select, itemAtIndex: 0usize];
+        set_menu_item_state(select, MenuTag::SelectionLevel, true, editor);
+        let level_item = item_with_tag(select, MenuTag::SelectionLevel);
         let levels: id = msg_send![level_item, submenu];
-        set_menu_item_state(levels, 0, true, editor);
-        set_menu_item_state(levels, 1, true, editor);
+        set_menu_item_state(levels, MenuTag::MaterialSlotLevel, true, editor);
+        set_menu_item_state(levels, MenuTag::PrimitiveLevel, true, editor);
         set_menu_item_checked(
             levels,
-            0,
+            MenuTag::MaterialSlotLevel,
             editor && selection_level == SelectionLevel::MaterialSlot,
         );
         set_menu_item_checked(
             levels,
-            1,
+            MenuTag::PrimitiveLevel,
             editor && selection_level == SelectionLevel::Primitive,
         );
         let primitive_selection = editor && selection_level == SelectionLevel::Primitive;
-        set_menu_item_state(select, 2, true, primitive_selection && has_scene);
         set_menu_item_state(
             select,
-            3,
+            MenuTag::SelectAll,
+            true,
+            primitive_selection && has_scene,
+        );
+        set_menu_item_state(
+            select,
+            MenuTag::DeselectAll,
             true,
             primitive_selection && has_primitive_selection,
         );
-        set_menu_item_state(select, 4, true, primitive_selection && has_scene);
+        set_menu_item_state(
+            select,
+            MenuTag::InvertSelection,
+            true,
+            primitive_selection && has_scene,
+        );
     }
 }
 
-fn set_menu_item_state(menu: id, index: usize, visible: bool, enabled: bool) {
+fn item_with_tag(menu: id, tag: MenuTag) -> id {
+    if menu.is_null() {
+        return nil;
+    }
+    unsafe { msg_send![menu, itemWithTag: tag as isize] }
+}
+
+fn set_menu_item_state(menu: id, tag: MenuTag, visible: bool, enabled: bool) {
     unsafe {
-        if menu.is_null() {
-            return;
-        }
-        let item: id = msg_send![menu, itemAtIndex: index];
+        let item = item_with_tag(menu, tag);
         if item.is_null() {
             return;
         }
@@ -739,12 +814,9 @@ fn set_menu_item_state(menu: id, index: usize, visible: bool, enabled: bool) {
     }
 }
 
-fn set_menu_item_checked(menu: id, index: usize, checked: bool) {
+fn set_menu_item_checked(menu: id, tag: MenuTag, checked: bool) {
     unsafe {
-        if menu.is_null() {
-            return;
-        }
-        let item: id = msg_send![menu, itemAtIndex: index];
+        let item = item_with_tag(menu, tag);
         if item.is_null() {
             return;
         }

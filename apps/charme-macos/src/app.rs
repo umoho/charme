@@ -18,7 +18,9 @@ use cacao::{
 };
 use charme_application::{ApplicationEvent, EditorAction, EditorController, SelectionLevel};
 use charme_core::ParameterValue;
-use charme_renderer::{PmxLoadProgress, PmxSourceIdentity, ViewportSelectionAction};
+use charme_renderer::{
+    Frame, PmxLoadProgress, PmxSourceIdentity, RendererNotification, ViewportSelectionAction,
+};
 use url::Url;
 
 #[cfg(feature = "debug-ui")]
@@ -57,22 +59,7 @@ pub(crate) enum Message {
     SplitSelectedPrimitives,
     MenuContextChanged(MenuContext),
     SelectionLevelChanged(SelectionLevel),
-    Orbit {
-        delta_x: f32,
-        delta_y: f32,
-    },
-    NavigationGizmoMouseDown {
-        x: f64,
-        y: f64,
-    },
-    ViewportClicked {
-        x: f64,
-        y: f64,
-        selection_action: ViewportSelectionAction,
-    },
-    Zoom(f32),
     ChoosePmx,
-    LoadPmx(PathBuf),
     PmxLoadStarted {
         request_id: u64,
         source: PmxSourceIdentity,
@@ -88,6 +75,27 @@ pub(crate) enum Message {
         source: PmxSourceIdentity,
         message: String,
     },
+    Editor(EditorMessage),
+    Application(ApplicationEvent),
+    Preview(PreviewEvent),
+}
+
+pub(crate) enum EditorMessage {
+    Orbit {
+        delta_x: f32,
+        delta_y: f32,
+    },
+    NavigationGizmoMouseDown {
+        x: f64,
+        y: f64,
+    },
+    ViewportClicked {
+        x: f64,
+        y: f64,
+        selection_action: ViewportSelectionAction,
+    },
+    Zoom(f32),
+    LoadPmx(PathBuf),
     ChooseShader,
     InspectShader(PathBuf),
     ParameterChanged {
@@ -95,7 +103,12 @@ pub(crate) enum Message {
         value: ParameterValue,
     },
     HierarchySelectionChanged(Vec<HierarchyItemId>),
-    Application(ApplicationEvent),
+}
+
+pub(crate) enum PreviewEvent {
+    FrameReady { frame: Frame, scale: f64 },
+    Renderer(RendererNotification),
+    Failed(String),
 }
 
 struct ActivePmxLoadingSheet {
@@ -217,73 +230,72 @@ impl Dispatcher for CharmeApp {
             Message::Application(ApplicationEvent::EditorUpdated(_)) => {
                 self.refresh_menus();
             }
-            other => {
+            Message::Application(event) => {
                 let editor = self.editor.borrow();
                 let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref())
                 else {
                     return;
                 };
-                match other {
-                    Message::Application(event) => match event {
-                        ApplicationEvent::FrameReady { frame, scale } => {
-                            window.display(frame, scale)
-                        }
-                        ApplicationEvent::ShaderInspected { path, result } => {
-                            window.show_shader_result(path, result);
-                        }
-                        ApplicationEvent::Renderer(notification) => {
-                            window.handle_renderer_notification(notification);
-                            drop(editor);
-                            self.refresh_menus();
-                        }
-                        ApplicationEvent::Failed(error) => {
-                            App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished {
-                                request_id: None,
-                            });
-                            window.show_error(&error);
-                        }
-                        _ => {}
-                    },
-                    Message::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
-                    Message::NavigationGizmoMouseDown { x, y } => {
+                match event {
+                    ApplicationEvent::ShaderInspected { path, result } => {
+                        window.show_shader_result(path, result);
+                    }
+                    ApplicationEvent::Failed(error) => window.show_error(&error),
+                    ApplicationEvent::EditorUpdated(_) => unreachable!(
+                        "editor updates are handled before resolving the editor window"
+                    ),
+                    _ => {}
+                }
+            }
+            Message::Preview(event) => {
+                let editor = self.editor.borrow();
+                let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref())
+                else {
+                    return;
+                };
+                match event {
+                    PreviewEvent::FrameReady { frame, scale } => window.display(frame, scale),
+                    PreviewEvent::Renderer(notification) => {
+                        window.handle_renderer_notification(notification);
+                        drop(editor);
+                        self.refresh_menus();
+                    }
+                    PreviewEvent::Failed(error) => {
+                        App::<CharmeApp, Message>::dispatch_main(Message::PmxLoadFinished {
+                            request_id: None,
+                        });
+                        window.show_error(&error);
+                    }
+                }
+            }
+            Message::Editor(message) => {
+                let editor = self.editor.borrow();
+                let Some(window) = editor.as_ref().and_then(|window| window.delegate.as_ref())
+                else {
+                    return;
+                };
+                match message {
+                    EditorMessage::Orbit { delta_x, delta_y } => window.orbit(delta_x, delta_y),
+                    EditorMessage::NavigationGizmoMouseDown { x, y } => {
                         window.navigation_gizmo_mouse_down(x, y);
                     }
-                    Message::ViewportClicked {
+                    EditorMessage::ViewportClicked {
                         x,
                         y,
                         selection_action,
                     } => window.viewport_clicked(x, y, selection_action),
-                    Message::Zoom(delta) => window.zoom(delta),
-                    Message::LoadPmx(path) => window.import_pmx(path),
-                    Message::ChooseShader => window.choose_shader(),
-                    Message::InspectShader(path) => window.inspect_shader(path),
-                    Message::ParameterChanged { key, value } => {
+                    EditorMessage::Zoom(delta) => window.zoom(delta),
+                    EditorMessage::LoadPmx(path) => window.import_pmx(path),
+                    EditorMessage::ChooseShader => window.choose_shader(),
+                    EditorMessage::InspectShader(path) => window.inspect_shader(path),
+                    EditorMessage::ParameterChanged { key, value } => {
                         window.set_parameter_value(&key, value);
                     }
-                    Message::HierarchySelectionChanged(items) => {
+                    EditorMessage::HierarchySelectionChanged(items) => {
                         window.handle_hierarchy_selection_changed(items);
                         drop(editor);
                         self.refresh_menus();
                     }
-                    Message::ChooseProject
-                    | Message::OpenProject(_)
-                    | Message::NewProject
-                    | Message::SaveProject
-                    | Message::ChooseSaveProject
-                    | Message::SaveProjectAs(_)
-                    | Message::Undo
-                    | Message::Redo
-                    | Message::SelectAll
-                    | Message::DeselectAll
-                    | Message::InvertSelection
-                    | Message::SplitSelectedPrimitives
-                    | Message::MenuContextChanged(_)
-                    | Message::SelectionLevelChanged(_)
-                    | Message::ChoosePmx
-                    | Message::PmxLoadStarted { .. }
-                    | Message::PmxLoadProgress { .. }
-                    | Message::PmxLoadFinished { .. }
-                    | Message::PmxLoadFailed { .. } => unreachable!(),
                 }
             }
         }
@@ -475,7 +487,9 @@ impl CharmeApp {
         set_model_file_types(&panel);
         panel.show(|urls| {
             if let Some(url) = urls.first() {
-                App::<CharmeApp, Message>::dispatch_main(Message::LoadPmx(url.pathbuf()));
+                App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::LoadPmx(
+                    url.pathbuf(),
+                )));
             }
         });
     }

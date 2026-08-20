@@ -56,7 +56,7 @@ use self::{
     viewport::{NavigationGizmo, OrbitInputView, make_image},
 };
 use crate::{
-    app::{CharmeApp, MenuContext, Message},
+    app::{CharmeApp, EditorMessage, MenuContext, Message},
     localization::{self, Key},
     preview::RenderBridge,
     shader_inspection::{self, ShaderInspection},
@@ -895,7 +895,9 @@ impl EditorWindow {
         panel.set_message(localization::text(Key::ChooseShaderMessage));
         panel.show(|urls| {
             if let Some(url) = urls.first() {
-                App::<CharmeApp, Message>::dispatch_main(Message::InspectShader(url.pathbuf()));
+                App::<CharmeApp, Message>::dispatch_main(Message::Editor(
+                    EditorMessage::InspectShader(url.pathbuf()),
+                ));
             }
         });
     }

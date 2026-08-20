@@ -16,7 +16,7 @@ use cacao::{
 use charme_renderer::ViewportSelectionAction;
 use core_graphics::geometry::CGPoint;
 
-use crate::app::{CharmeApp, Message};
+use crate::app::{CharmeApp, EditorMessage, Message};
 
 const DOWN_X_IVAR: &str = "charmeOrbitDownX";
 const DOWN_Y_IVAR: &str = "charmeOrbitDownY";
@@ -134,10 +134,10 @@ extern "C" fn mouse_dragged(view: &mut Object, _: Sel, event: id) {
 
     let delta_x: f64 = unsafe { msg_send![event, deltaX] };
     let delta_y: f64 = unsafe { msg_send![event, deltaY] };
-    App::<CharmeApp, Message>::dispatch_main(Message::Orbit {
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::Orbit {
         delta_x: -(delta_x as f32) * 0.01,
         delta_y: -(delta_y as f32) * 0.01,
-    });
+    }));
 }
 
 extern "C" fn mouse_up(view: &Object, _: Sel, event: id) {
@@ -156,11 +156,11 @@ extern "C" fn mouse_up(view: &Object, _: Sel, event: id) {
     } else {
         ViewportSelectionAction::Replace
     };
-    App::<CharmeApp, Message>::dispatch_main(Message::ViewportClicked {
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::ViewportClicked {
         x: point.x,
         y: point.y,
         selection_action,
-    });
+    }));
 }
 
 extern "C" fn scroll_wheel(_: &Object, _: Sel, event: id) {
@@ -176,10 +176,13 @@ extern "C" fn scroll_wheel(_: &Object, _: Sel, event: id) {
 
     match action {
         ScrollAction::Orbit { delta_x, delta_y } => {
-            App::<CharmeApp, Message>::dispatch_main(Message::Orbit { delta_x, delta_y });
+            App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::Orbit {
+                delta_x,
+                delta_y,
+            }));
         }
         ScrollAction::Zoom(delta) => {
-            App::<CharmeApp, Message>::dispatch_main(Message::Zoom(delta));
+            App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::Zoom(delta)));
         }
     }
 }
@@ -189,9 +192,9 @@ extern "C" fn magnify_with_event(_: &Object, _: Sel, event: id) {
     if magnification == 0.0 {
         return;
     }
-    App::<CharmeApp, Message>::dispatch_main(Message::Zoom(
+    App::<CharmeApp, Message>::dispatch_main(Message::Editor(EditorMessage::Zoom(
         -(magnification as f32) * MAGNIFICATION_ZOOM_SENSITIVITY,
-    ));
+    )));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

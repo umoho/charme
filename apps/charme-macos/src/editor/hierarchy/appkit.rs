@@ -16,7 +16,7 @@ use cacao::{
 use charme_core::MaterialSlotId;
 
 use super::model::{HierarchyItemId, HierarchySnapshot};
-use crate::app::{Message, dispatch};
+use crate::app::{EditorMessage, Message, dispatch};
 
 const STATE_IVAR: &str = "charmeHierarchyState";
 const ITEM_INDEX_IVAR: &str = "charmeHierarchyItemIndex";
@@ -462,7 +462,9 @@ extern "C" fn selection_did_change(delegate: &Object, _: Sel, notification: id) 
     .flatten();
 
     if let Some(selection) = selection {
-        dispatch(Message::HierarchySelectionChanged(selection));
+        dispatch(Message::Editor(EditorMessage::HierarchySelectionChanged(
+            selection,
+        )));
     }
 }
 
