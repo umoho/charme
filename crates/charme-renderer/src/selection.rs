@@ -6,10 +6,7 @@ use bevy::{
 };
 use charme_core::MaterialSlotId;
 
-use crate::{
-    scene::{PmxMaterialSlot, PreparedPmxScene},
-    source::PmxSourceIdentity,
-};
+use crate::{pmx_import::PreparedPmxScene, scene::PmxMaterialSlot, source::PmxSourceIdentity};
 
 /// CPU geometry retained for viewport picking and selected-primitive outlines.
 #[derive(Resource, Default)]

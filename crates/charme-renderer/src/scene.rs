@@ -1,41 +1,32 @@
-use std::{io, path::Path};
+use std::path::Path;
 
-use bevy::{
-    asset::RenderAssetUsages,
-    image::{CompressedImageFormats, ImageSampler, ImageType},
-    prelude::{
-        AlphaMode, App, Assets, Entity, Handle, Image, Mesh, Mesh3d, MeshMaterial3d, Name,
-        Transform, Vec3,
-    },
-    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
-};
-use bevy_pmx::{Pmx, PmxImportContext, PmxMaterialRecord, PmxResolvedPath, import_pmx, parse_pmx};
-use charme_bevy::{CharmeMaterial, CharmeMaterialParams};
 use charme_core::MaterialSlotId;
-use charme_geometry::{PrimitiveRange, PrimitiveSplit, split_primitive};
+
+use crate::source::PmxSourceIdentity;
 
 #[cfg(test)]
-use crate::selection::{
-    PrimitiveComponentSelectionGeometry, PrimitiveSelectionGeometry, SelectionGeometry,
-    selection_edges, selection_face,
-};
-
 use crate::{
-    PmxLoadStage,
-    overlay::PreviewOverlays,
-    source::{PmxInputSource, PmxSourceIdentity, ResolvedPmxLoadRequest},
+    pmx_import::{build_primitive_splits, primitive_component_infos},
+    selection::{
+        PrimitiveComponentSelectionGeometry, PrimitiveSelectionGeometry, SelectionGeometry,
+        selection_edges, selection_face,
+    },
 };
+#[cfg(test)]
+use bevy::prelude::Vec3;
+#[cfg(test)]
+use bevy_pmx::Pmx;
 
 /// A PMX material slot exposed to the editor UI.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxMaterialSlot {
-    id: MaterialSlotId,
-    index: usize,
-    name: String,
-    english_name: String,
-    diffuse_texture: Option<String>,
-    sphere_texture: Option<String>,
-    toon_texture: Option<String>,
+    pub(crate) id: MaterialSlotId,
+    pub(crate) index: usize,
+    pub(crate) name: String,
+    pub(crate) english_name: String,
+    pub(crate) diffuse_texture: Option<String>,
+    pub(crate) sphere_texture: Option<String>,
+    pub(crate) toon_texture: Option<String>,
 }
 
 impl PmxMaterialSlot {
@@ -78,10 +69,10 @@ impl PmxMaterialSlot {
 /// UI-facing summary of one connected component within a PMX primitive.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxPrimitiveComponentInfo {
-    index: usize,
-    triangle_count: usize,
-    index_count: usize,
-    vertex_count: usize,
+    pub(crate) index: usize,
+    pub(crate) triangle_count: usize,
+    pub(crate) index_count: usize,
+    pub(crate) vertex_count: usize,
 }
 
 impl PmxPrimitiveComponentInfo {
@@ -109,10 +100,10 @@ impl PmxPrimitiveComponentInfo {
 /// UI-facing summary of one indexed PMX primitive.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxPrimitiveInfo {
-    index: usize,
-    index_count: usize,
-    material_slot_id: Option<MaterialSlotId>,
-    components: Vec<PmxPrimitiveComponentInfo>,
+    pub(crate) index: usize,
+    pub(crate) index_count: usize,
+    pub(crate) material_slot_id: Option<MaterialSlotId>,
+    pub(crate) components: Vec<PmxPrimitiveComponentInfo>,
 }
 
 impl PmxPrimitiveInfo {
@@ -140,13 +131,13 @@ impl PmxPrimitiveInfo {
 /// UI-facing summary of a loaded PMX scene.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PmxSceneInfo {
-    source: PmxSourceIdentity,
-    name: String,
-    vertex_count: usize,
-    index_count: usize,
-    material_slots: Vec<PmxMaterialSlot>,
-    primitives: Vec<PmxPrimitiveInfo>,
-    warnings: Vec<String>,
+    pub(crate) source: PmxSourceIdentity,
+    pub(crate) name: String,
+    pub(crate) vertex_count: usize,
+    pub(crate) index_count: usize,
+    pub(crate) material_slots: Vec<PmxMaterialSlot>,
+    pub(crate) primitives: Vec<PmxPrimitiveInfo>,
+    pub(crate) warnings: Vec<String>,
 }
 
 impl PmxSceneInfo {
@@ -194,537 +185,6 @@ impl PmxSceneInfo {
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
-}
-
-pub(crate) struct PreparedPmxScene {
-    pub info: PmxSceneInfo,
-    pub(crate) model: Pmx,
-    pub(crate) primitive_splits: Vec<Option<PrimitiveSplit>>,
-    textures: Vec<DecodedTexture>,
-    pub(crate) bounds_min: Vec3,
-    pub(crate) bounds_max: Vec3,
-}
-
-impl PreparedPmxScene {
-    pub fn normalized_bounds(&self) -> (Vec3, Vec3) {
-        let center = (self.bounds_min + self.bounds_max) * 0.5;
-        let translation = Vec3::new(-center.x, -self.bounds_min.y, -center.z);
-        (self.bounds_min + translation, self.bounds_max + translation)
-    }
-}
-
-struct DecodedTexture {
-    image: Image,
-    has_alpha: bool,
-}
-
-pub(crate) fn prepare_pmx_scene(
-    request: &ResolvedPmxLoadRequest,
-    mut report: impl FnMut(PmxLoadStage, Option<usize>, Option<usize>),
-) -> Result<PreparedPmxScene, String> {
-    let source = request.source.as_ref();
-    report(PmxLoadStage::ReadingPmx, None, None);
-    let bytes = source.read_pmx_bytes().map_err(|error| {
-        format!(
-            "failed to read PMX file {} (resolved to {}): {error}",
-            source.identity().path().display(),
-            source.pmx_location()
-        )
-    })?;
-    report(PmxLoadStage::ReadingPmx, Some(1), Some(1));
-
-    // `bevy_pmx` does not expose parser callbacks. Keep this stage explicitly
-    // indeterminate instead of deriving a percentage from bytes or elapsed
-    // time, then report its boundary once parsing/import has returned.
-    report(PmxLoadStage::ParsingPmx, None, None);
-    let document = parse_pmx(&bytes).map_err(|error| error.to_string())?;
-    let model = import_pmx(
-        document,
-        &PmxImportContext::with_source(source.bevy_source().clone()),
-    )
-    .model;
-    report(PmxLoadStage::ParsingPmx, Some(1), Some(1));
-
-    let (bounds_min, bounds_max) = bounds_for_model(&model).ok_or_else(|| {
-        format!(
-            "{} contains no vertices",
-            source.identity().path().display()
-        )
-    })?;
-    let (textures, warnings) = load_textures(source, model.texture_paths(), |completed, total| {
-        report(PmxLoadStage::LoadingTextures, Some(completed), Some(total));
-    });
-    let primitive_splits = build_primitive_splits(&model);
-    let info = scene_info(
-        source.identity(),
-        &model,
-        warnings,
-        &request.existing_slot_ids,
-        &primitive_splits,
-    );
-
-    Ok(PreparedPmxScene {
-        info,
-        model,
-        primitive_splits,
-        textures,
-        bounds_min,
-        bounds_max,
-    })
-}
-
-pub(crate) struct SpawnedPmxScene {
-    entities: Vec<Entity>,
-    images: Vec<Handle<Image>>,
-    meshes: Vec<Handle<Mesh>>,
-    primitive_entities: Vec<Option<Entity>>,
-    primitive_component_counts: Vec<usize>,
-    overlays: PreviewOverlays,
-    pub(crate) materials: Vec<Handle<CharmeMaterial>>,
-    default_material_parameters: Vec<CharmeMaterialParams>,
-    pub(crate) material_slot_ids: Vec<MaterialSlotId>,
-}
-
-impl SpawnedPmxScene {
-    pub(crate) fn material_for_slot(
-        &self,
-        slot_id: MaterialSlotId,
-    ) -> Option<&Handle<CharmeMaterial>> {
-        self.material_slot_ids
-            .iter()
-            .position(|candidate| *candidate == slot_id)
-            .and_then(|index| self.materials.get(index))
-    }
-
-    pub(crate) fn material_state_for_slot(
-        &self,
-        slot_id: MaterialSlotId,
-    ) -> Option<(&Handle<CharmeMaterial>, CharmeMaterialParams)> {
-        let index = self
-            .material_slot_ids
-            .iter()
-            .position(|candidate| *candidate == slot_id)?;
-        Some((
-            self.materials.get(index)?,
-            *self.default_material_parameters.get(index)?,
-        ))
-    }
-
-    pub(crate) fn split_primitives_by_connectivity(
-        &mut self,
-        app: &mut App,
-        primitive_indices: &[usize],
-    ) -> bool {
-        self.overlays.show_connectivity(
-            app,
-            &self.primitive_entities,
-            &self.primitive_component_counts,
-            primitive_indices,
-        )
-    }
-}
-
-impl SpawnedPmxScene {
-    pub fn despawn(self, app: &mut App) {
-        self.overlays.despawn(app);
-        for entity in self.entities {
-            let _ = app.world_mut().despawn(entity);
-        }
-        for handle in self.materials {
-            app.world_mut()
-                .resource_mut::<Assets<CharmeMaterial>>()
-                .remove(handle.id());
-        }
-        for handle in self.meshes {
-            app.world_mut()
-                .resource_mut::<Assets<Mesh>>()
-                .remove(handle.id());
-        }
-        for handle in self.images {
-            app.world_mut()
-                .resource_mut::<Assets<Image>>()
-                .remove(handle.id());
-        }
-    }
-}
-
-pub(crate) fn spawn_pmx_scene(
-    app: &mut App,
-    prepared: &PreparedPmxScene,
-    mut report: impl FnMut(usize, usize),
-) -> SpawnedPmxScene {
-    let can_spawn_primitive = prepared.model.primitives().iter().any(|primitive| {
-        prepared
-            .model
-            .material_records()
-            .get(primitive.material_index)
-            .is_some()
-    });
-    let total = prepared.textures.len()
-        + prepared.model.material_records().len()
-        + prepared.model.primitives().len()
-        + usize::from(!can_spawn_primitive);
-    let mut completed = 0;
-    report(completed, total);
-
-    let mut texture_handles = Vec::with_capacity(prepared.textures.len());
-    for texture in &prepared.textures {
-        texture_handles.push(
-            app.world_mut()
-                .resource_mut::<Assets<Image>>()
-                .add(texture.image.clone()),
-        );
-        completed += 1;
-        report(completed, total);
-    }
-    let texture_has_alpha = prepared
-        .textures
-        .iter()
-        .map(|texture| texture.has_alpha)
-        .collect::<Vec<_>>();
-    let center = (prepared.bounds_min + prepared.bounds_max) * 0.5;
-    let transform =
-        Transform::from_translation(Vec3::new(-center.x, -prepared.bounds_min.y, -center.z));
-    let mut entities = Vec::new();
-    let mut mesh_handles = Vec::new();
-    let mut primitive_entities = vec![None; prepared.model.primitives().len()];
-    // Keep one material asset per PMX slot. Apart from avoiding duplicate
-    // assets for slots used by multiple primitives, this gives the renderer a
-    // stable slot-to-material mapping for material-ball previews.
-    let mut material_handles = Vec::with_capacity(prepared.model.material_records().len());
-    let mut default_material_parameters =
-        Vec::with_capacity(prepared.model.material_records().len());
-    for record in prepared.model.material_records() {
-        let material = material_for_record(record, &texture_handles, &texture_has_alpha);
-        default_material_parameters.push(material.parameters);
-        material_handles.push(
-            app.world_mut()
-                .resource_mut::<Assets<CharmeMaterial>>()
-                .add(material),
-        );
-        completed += 1;
-        report(completed, total);
-    }
-
-    for (primitive_index, primitive) in prepared.model.primitives().iter().enumerate() {
-        if let (Some(record), Some(material)) = (
-            prepared
-                .model
-                .material_records()
-                .get(primitive.material_index),
-            material_handles.get(primitive.material_index).cloned(),
-        ) {
-            let mesh = app
-                .world_mut()
-                .resource_mut::<Assets<Mesh>>()
-                .add(prepared.model.geometry().to_mesh_for_primitive(*primitive));
-            mesh_handles.push(mesh.clone());
-            let entity = app
-                .world_mut()
-                .spawn((
-                    Name::new(format!(
-                        "PMX Primitive {primitive_index} ({})",
-                        record.material.name
-                    )),
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material.clone()),
-                    transform,
-                ))
-                .id();
-            primitive_entities[primitive_index] = Some(entity);
-            entities.push(entity);
-        }
-        completed += 1;
-        report(completed, total);
-    }
-
-    if entities.is_empty() {
-        let mesh = app
-            .world_mut()
-            .resource_mut::<Assets<Mesh>>()
-            .add(prepared.model.geometry().to_mesh());
-        let material = app
-            .world_mut()
-            .resource_mut::<Assets<CharmeMaterial>>()
-            .add(CharmeMaterial::default());
-        mesh_handles.push(mesh.clone());
-        material_handles.push(material.clone());
-        default_material_parameters.push(CharmeMaterialParams::default());
-        entities.push(
-            app.world_mut()
-                .spawn((
-                    Name::new("PMX Model"),
-                    Mesh3d(mesh),
-                    MeshMaterial3d(material),
-                    transform,
-                ))
-                .id(),
-        );
-        completed += 1;
-        report(completed, total);
-    }
-
-    SpawnedPmxScene {
-        entities,
-        images: texture_handles,
-        meshes: mesh_handles,
-        primitive_entities,
-        primitive_component_counts: prepared
-            .primitive_splits
-            .iter()
-            .map(|split| split.as_ref().map_or(0, |split| split.components.len()))
-            .collect(),
-        overlays: PreviewOverlays::default(),
-        material_slot_ids: prepared
-            .info
-            .material_slots()
-            .iter()
-            .map(PmxMaterialSlot::id)
-            .collect(),
-        materials: material_handles,
-        default_material_parameters,
-    }
-}
-
-fn scene_info(
-    source: &PmxSourceIdentity,
-    model: &Pmx,
-    warnings: Vec<String>,
-    existing_slot_ids: &[(u32, MaterialSlotId)],
-    primitive_splits: &[Option<PrimitiveSplit>],
-) -> PmxSceneInfo {
-    let name = model
-        .raw_document()
-        .and_then(|document| {
-            (!document.header.model_name.is_empty())
-                .then(|| document.header.model_name.clone())
-                .or_else(|| {
-                    (!document.header.model_name_english.is_empty())
-                        .then(|| document.header.model_name_english.clone())
-                })
-        })
-        .or_else(|| {
-            source
-                .archive_entry()
-                .map(Path::new)
-                .or_else(|| Some(source.path()))
-                .and_then(Path::file_stem)
-                .and_then(|value| value.to_str())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "PMX Model".to_owned());
-    let material_slots = model
-        .material_records()
-        .iter()
-        .enumerate()
-        .map(|(index, record)| PmxMaterialSlot {
-            id: existing_slot_ids
-                .iter()
-                .find(|(source_index, _)| *source_index == index as u32)
-                .map(|(_, id)| *id)
-                .unwrap_or_else(MaterialSlotId::new),
-            index,
-            name: record.material.name.clone(),
-            english_name: record.material.name_english.clone(),
-            diffuse_texture: texture_path(model, record.material.texture_index),
-            sphere_texture: texture_path(model, record.material.sphere_texture_index),
-            toon_texture: if record.material.toon_sharing {
-                (record.material.toon_texture_index >= 0)
-                    .then(|| format!("shared_toon_{:02}", record.material.toon_texture_index + 1))
-            } else {
-                texture_path(model, record.material.toon_texture_index)
-            },
-        })
-        .collect::<Vec<_>>();
-    let primitives = model
-        .primitives()
-        .iter()
-        .enumerate()
-        .map(|(index, primitive)| PmxPrimitiveInfo {
-            index,
-            index_count: primitive.index_count,
-            material_slot_id: material_slots
-                .get(primitive.material_index)
-                .map(PmxMaterialSlot::id),
-            components: primitive_splits
-                .get(index)
-                .and_then(Option::as_ref)
-                .map(primitive_component_infos)
-                .unwrap_or_default(),
-        })
-        .collect();
-
-    PmxSceneInfo {
-        source: source.clone(),
-        name,
-        vertex_count: model.geometry().positions.len(),
-        index_count: model.geometry().indices.len(),
-        material_slots,
-        primitives,
-        warnings,
-    }
-}
-
-fn build_primitive_splits(model: &Pmx) -> Vec<Option<PrimitiveSplit>> {
-    let geometry = model.geometry();
-    model
-        .primitives()
-        .iter()
-        .map(|primitive| {
-            split_primitive(
-                &geometry.indices,
-                geometry.positions.len(),
-                PrimitiveRange::new(primitive.index_start, primitive.index_count),
-            )
-            .ok()
-        })
-        .collect()
-}
-
-fn primitive_component_infos(split: &PrimitiveSplit) -> Vec<PmxPrimitiveComponentInfo> {
-    split
-        .components
-        .iter()
-        .enumerate()
-        .map(|(index, component)| PmxPrimitiveComponentInfo {
-            index,
-            triangle_count: component.triangle_count(),
-            index_count: component.index_count(),
-            vertex_count: component.vertex_indices.len(),
-        })
-        .collect()
-}
-
-fn texture_path(model: &Pmx, index: i32) -> Option<String> {
-    (index >= 0)
-        .then_some(index as usize)
-        .and_then(|index| model.texture_paths().get(index))
-        .map(|path| path.original.clone())
-}
-
-fn load_textures(
-    source: &dyn PmxInputSource,
-    paths: &[PmxResolvedPath],
-    mut report: impl FnMut(usize, usize),
-) -> (Vec<DecodedTexture>, Vec<String>) {
-    let mut textures = Vec::with_capacity(paths.len());
-    let mut warnings = Vec::new();
-    let total = paths.len();
-    report(0, total);
-
-    for (completed, path) in paths.iter().enumerate() {
-        match load_texture(source, path) {
-            Ok(texture) => textures.push(texture),
-            Err(error) => {
-                warnings.push(format!(
-                    "failed to load texture {} (resolved to {}): {error}",
-                    path.original,
-                    path.location()
-                ));
-                textures.push(DecodedTexture {
-                    image: placeholder_texture(),
-                    has_alpha: false,
-                });
-            }
-        }
-        report(completed + 1, total);
-    }
-
-    (textures, warnings)
-}
-
-fn load_texture(
-    source: &dyn PmxInputSource,
-    path: &PmxResolvedPath,
-) -> Result<DecodedTexture, io::Error> {
-    let location = path.location();
-    let bytes = source.read_texture_bytes(path).map_err(|error| {
-        io::Error::other(format!(
-            "failed to read {} through the PMX source: {error}",
-            path.original
-        ))
-    })?;
-    let extension = location.extension().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("texture {location} does not have a file extension"),
-        )
-    })?;
-    let image = Image::from_buffer(
-        &bytes,
-        ImageType::Extension(extension.to_ascii_lowercase().as_str()),
-        CompressedImageFormats::all(),
-        true,
-        ImageSampler::Default,
-        RenderAssetUsages::default(),
-    )
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let has_alpha = image_has_alpha(&image);
-    Ok(DecodedTexture { image, has_alpha })
-}
-
-fn material_for_record(
-    record: &PmxMaterialRecord,
-    textures: &[Handle<Image>],
-    texture_has_alpha: &[bool],
-) -> CharmeMaterial {
-    let [red, green, blue, alpha] = record.material.diffuse;
-    let texture_index =
-        (record.material.texture_index >= 0).then_some(record.material.texture_index as usize);
-    let base_color_texture = texture_index.and_then(|index| textures.get(index).cloned());
-    let has_texture_alpha = texture_index
-        .and_then(|index| texture_has_alpha.get(index).copied())
-        .unwrap_or(false);
-
-    CharmeMaterial {
-        parameters: CharmeMaterialParams::with_tint([red, green, blue, alpha]),
-        base_color_texture,
-        alpha_mode: if alpha < 0.999 {
-            AlphaMode::Blend
-        } else if has_texture_alpha {
-            AlphaMode::AlphaToCoverage
-        } else {
-            AlphaMode::Opaque
-        },
-    }
-}
-
-fn bounds_for_model(model: &Pmx) -> Option<(Vec3, Vec3)> {
-    let first = Vec3::from(*model.geometry().positions.first()?);
-    let mut minimum = first;
-    let mut maximum = first;
-    for position in &model.geometry().positions[1..] {
-        let position = Vec3::from(*position);
-        minimum = minimum.min(position);
-        maximum = maximum.max(position);
-    }
-    Some((minimum, maximum))
-}
-
-fn image_has_alpha(image: &Image) -> bool {
-    matches!(
-        image.texture_descriptor.format,
-        TextureFormat::Rgba8Unorm
-            | TextureFormat::Rgba8UnormSrgb
-            | TextureFormat::Bgra8Unorm
-            | TextureFormat::Bgra8UnormSrgb
-            | TextureFormat::Rgba16Float
-            | TextureFormat::Rgba32Float
-    )
-}
-
-fn placeholder_texture() -> Image {
-    Image::new_fill(
-        Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &[255, 0, 255, 255],
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    )
 }
 
 #[cfg(test)]

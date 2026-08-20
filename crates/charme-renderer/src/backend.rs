@@ -37,8 +37,9 @@ use charme_core::{MaterialSlotId, ParameterValue};
 use crate::{
     BackgroundColor, Frame, OutputSize, PixelFormat, PmxLoadProgress, PmxLoadRequest, PmxLoadStage,
     PmxSourceIdentity, RendererConfig, RendererError,
+    pmx_import::{PreparedPmxScene, prepare_pmx_scene},
     renderer::{RendererNotification, ViewportSelectionAction},
-    scene::{PreparedPmxScene, SpawnedPmxScene, prepare_pmx_scene, spawn_pmx_scene},
+    scene_runtime::{SpawnedPmxScene, spawn_pmx_scene},
     scheduler::RenderScheduler,
     selection::SelectionGeometry,
 };
