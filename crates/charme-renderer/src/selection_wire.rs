@@ -2,10 +2,13 @@
 //!
 //! The wireframe mimics Blender's selected-object wire overlay:
 //!
-//! * Every mesh edge of the selection participates in the wireframe; interior
-//!   lines and fragments hidden behind the object's own surface are discarded
-//!   by the GPU depth test instead of a CPU-side edge classification (see
-//!   [`update_selection_wire`]).
+//! * The wireframe is the union of two layers, mirroring Blender's object
+//!   mode selection overlay: sharp mesh edges (boundary, non-manifold, and
+//!   dihedral angles above Blender's default threshold, see
+//!   [`selection_wire_lines`]) drawn as line quads, plus a screen-space
+//!   silhouette outline extracted from the mask depth buffer
+//!   (`selection_wire_outline.wgsl`). Flat interior edges never participate,
+//!   so subdivided surfaces stay clean.
 //! * The wireframe is never occluded by other objects, but is occluded by the
 //!   selected object itself.
 //!
@@ -13,7 +16,8 @@
 //!
 //! * The mask camera runs a custom render schedule containing only the depth
 //!   prepass (writing the selected object's depth into the mask view depth
-//!   buffer), a line pass that draws the wireframe quads directly, and the
+//!   buffer), a line pass that draws the wireframe quads directly, an outline
+//!   pass that blends the screen-space silhouette over the mask color, and the
 //!   upscaling blit that writes the mask image.
 //! * Because no other geometry renders into the mask camera, the hardware
 //!   depth test of the line pipeline provides self-occlusion for free while
@@ -54,16 +58,16 @@ use bevy::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
         render_resource::{
-            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
-            BufferId, BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
-            ColorWrites, CompareFunction, DepthStencilState, Extent3d, FilterMode, FragmentState,
-            LoadOp, MultisampleState, Operations, PipelineCache, PrimitiveState,
-            RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
-            SamplerBindingType, SamplerDescriptor, ShaderStages, SpecializedRenderPipeline,
-            SpecializedRenderPipelines, StoreOp, TextureDimension, TextureFormat,
-            TextureSampleType, TextureUsages, TextureViewId, VertexAttribute, VertexFormat,
-            VertexStepMode,
-            binding_types::{sampler, texture_2d, uniform_buffer},
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
+            BlendState, Buffer, BufferId, BufferInitDescriptor, BufferUsages,
+            CachedRenderPipelineId, ColorTargetState, ColorWrites, CompareFunction,
+            DepthStencilState, Extent3d, FilterMode, FragmentState, LoadOp, MultisampleState,
+            Operations, PipelineCache, PrimitiveState, RenderPassColorAttachment,
+            RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType,
+            SamplerDescriptor, ShaderStages, SpecializedRenderPipeline, SpecializedRenderPipelines,
+            StoreOp, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
+            TextureViewId, VertexAttribute, VertexFormat, VertexStepMode,
+            binding_types::{sampler, texture_2d, texture_depth_2d, uniform_buffer},
         },
         renderer::{RenderContext, RenderDevice, ViewQuery},
         texture::GpuImage,
@@ -161,12 +165,14 @@ pub(crate) fn install_selection_wire(app: &mut App) {
             .add_schedule(selection_wire_mask_schedule())
             .init_gpu_resource::<SpecializedRenderPipelines<SelectionWireCompositePipeline>>()
             .init_gpu_resource::<SpecializedRenderPipelines<SelectionWireLinePipeline>>()
+            .init_gpu_resource::<SpecializedRenderPipelines<SelectionWireOutlinePipeline>>()
             .init_resource::<SelectionWireGpuBuffer>()
             .add_systems(
                 RenderStartup,
                 (
                     init_selection_wire_composite_pipeline,
                     init_selection_wire_line_pipeline,
+                    init_selection_wire_outline_pipeline,
                 ),
             )
             .add_systems(
@@ -180,6 +186,7 @@ pub(crate) fn install_selection_wire(app: &mut App) {
                 (
                     prepare_view_selection_wire_composite_pipelines,
                     prepare_view_selection_wire_line_pipelines,
+                    prepare_view_selection_wire_outline_pipelines,
                     prepare_selection_wire_gpu_buffer,
                 )
                     .in_set(RenderSystems::Prepare),
@@ -187,6 +194,7 @@ pub(crate) fn install_selection_wire(app: &mut App) {
     }
 
     bevy::asset::embedded_asset!(app, "selection_wire_lines.wgsl");
+    bevy::asset::embedded_asset!(app, "selection_wire_outline.wgsl");
     bevy::asset::embedded_asset!(app, "selection_wire_composite.wgsl");
 }
 
@@ -204,7 +212,15 @@ pub(crate) fn spawn_selection_wire(app: &mut App, size: OutputSize) -> Selection
     let mask_camera = world
         .spawn((
             SelectionMaskCamera,
-            Camera3d::default(),
+            Camera3d {
+                // The outline pass samples the mask depth with `textureLoad`,
+                // which requires TEXTURE_BINDING on the view depth texture.
+                depth_texture_usages: (TextureUsages::RENDER_ATTACHMENT
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::TEXTURE_BINDING)
+                    .into(),
+                ..Default::default()
+            },
             CameraRenderGraph::new(SelectionWireMaskGraph),
             Tonemapping::None,
             DepthPrepass,
@@ -218,6 +234,10 @@ pub(crate) fn spawn_selection_wire(app: &mut App, size: OutputSize) -> Selection
             },
             main_projection,
             main_transform,
+            // The outline pass reads the mask depth with `textureLoad`, which
+            // requires a single-sampled depth texture; the line quads are
+            // anti-aliased by their feather instead.
+            Msaa::Off,
         ))
         .id();
 
@@ -311,12 +331,18 @@ fn update_selection_wire(
     lines_resource.lines = lines;
 }
 
-/// Collects every mesh edge of the selected primitives.
+/// Blender's default wireframe threshold: only edges whose sharpness factor
+/// collapses to 0 (boundary, non-manifold, dihedral angles above ~5.7°) are
+/// drawn; flat interior edges are culled like in Blender's overlay.
+const SELECTION_WIRE_SHARPNESS_THRESHOLD: f32 = 0.0;
+
+/// Collects the sharp wireframe edges of the selected primitives.
 ///
-/// Like Blender's selected-object overlay, no CPU-side boundary/silhouette
-/// classification is performed: all edges are submitted and the mask camera's
-/// depth prepass plus the hardware depth test hide the interior edges and the
-/// fragments occluded by the object's own surface.
+/// Like Blender's overlay wireframe, every mesh edge is a candidate but flat
+/// edges are culled by their precomputed sharpness; visibility against the
+/// object's own surface is then resolved by the mask camera's depth test. The
+/// smooth silhouette is contributed separately by the screen-space outline
+/// pass.
 fn selection_wire_lines(selection: &SelectionGeometry) -> Vec<(Vec3, Vec3)> {
     let selected_primitives = selection.selected_primitives();
     let selected_slot = selection.selected_slot();
@@ -330,7 +356,13 @@ fn selection_wire_lines(selection: &SelectionGeometry) -> Vec<(Vec3, Vec3)> {
                 && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
     }) {
         for component in &primitive.components {
-            lines.extend(component.edges.iter().map(|edge| (edge.start, edge.end)));
+            lines.extend(
+                component
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.sharpness <= SELECTION_WIRE_SHARPNESS_THRESHOLD)
+                    .map(|edge| (edge.start, edge.end)),
+            );
         }
     }
     lines
@@ -369,7 +401,15 @@ fn selection_wire_mask_schedule() -> Schedule {
     // Depth prepass (selected object only) -> wireframe line quads (drawn
     // directly; no other material reaches the mask color target) -> write the
     // mask to its image.
-    schedule.add_systems((early_prepass, selection_wire_line_pass, upscaling).chain());
+    schedule.add_systems(
+        (
+            early_prepass,
+            selection_wire_line_pass,
+            selection_wire_outline_pass,
+            upscaling,
+        )
+            .chain(),
+    );
     schedule
 }
 
@@ -440,13 +480,13 @@ fn init_selection_wire_line_pipeline(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct SelectionWireLinePipelineKey {
+struct SelectionWireMaskKey {
     format: TextureFormat,
     msaa_samples: u32,
 }
 
 impl SpecializedRenderPipeline for SelectionWireLinePipeline {
-    type Key = SelectionWireLinePipelineKey;
+    type Key = SelectionWireMaskKey;
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         RenderPipelineDescriptor {
@@ -518,7 +558,7 @@ fn prepare_view_selection_wire_line_pipelines(
         let pipeline_id = pipelines.specialize(
             &pipeline_cache,
             &pipeline,
-            SelectionWireLinePipelineKey {
+            SelectionWireMaskKey {
                 format: view.target_format,
                 msaa_samples: msaa.samples(),
             },
@@ -614,6 +654,157 @@ fn selection_wire_line_pass(
         render_pass.draw(0..gpu.vertex_count, 0..1);
     }
     drop(render_pass);
+}
+
+/// Pipeline for the screen-space silhouette outline on the mask camera.
+#[derive(Resource)]
+struct SelectionWireOutlinePipeline {
+    layout: BindGroupLayoutDescriptor,
+    fragment_shader: Handle<Shader>,
+    fullscreen_shader: FullscreenShader,
+}
+
+fn init_selection_wire_outline_pipeline(
+    asset_server: Res<bevy::asset::AssetServer>,
+    fullscreen_shader: Res<FullscreenShader>,
+    mut commands: Commands,
+) {
+    commands.insert_resource(SelectionWireOutlinePipeline {
+        layout: BindGroupLayoutDescriptor::new(
+            "selection_wire_outline_layout",
+            &BindGroupLayoutEntries::single(ShaderStages::FRAGMENT, texture_depth_2d()),
+        ),
+        fragment_shader: load_embedded_asset!(asset_server.as_ref(), "selection_wire_outline.wgsl"),
+        fullscreen_shader: fullscreen_shader.clone(),
+    });
+}
+
+impl SpecializedRenderPipeline for SelectionWireOutlinePipeline {
+    type Key = SelectionWireMaskKey;
+
+    fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("selection_wire_outline_pipeline".into()),
+            layout: vec![self.layout.clone()],
+            vertex: self.fullscreen_shader.to_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: self.fragment_shader.clone(),
+                entry_point: Some("fragment".into()),
+                targets: vec![Some(ColorTargetState {
+                    format: key.format,
+                    // Non-silhouette pixels emit transparent black, so the
+                    // line layer loaded from the mask color target survives.
+                    blend: Some(BlendState::ALPHA_BLENDING),
+                    write_mask: ColorWrites::ALL,
+                })],
+                ..default()
+            }),
+            primitive: PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: MultisampleState {
+                count: key.msaa_samples,
+                ..Default::default()
+            },
+            ..default()
+        }
+    }
+}
+
+/// Marker for a view's outline pipeline.
+#[derive(Component)]
+struct ViewSelectionWireOutlinePipeline(CachedRenderPipelineId);
+
+#[allow(clippy::type_complexity)]
+fn prepare_view_selection_wire_outline_pipelines(
+    mut commands: Commands,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<SelectionWireOutlinePipeline>>,
+    pipeline: Res<SelectionWireOutlinePipeline>,
+    views: Query<(Entity, &ExtractedView, &Msaa), (With<ViewTarget>, With<SelectionMaskCamera>)>,
+) {
+    for (entity, view, msaa) in &views {
+        let pipeline_id = pipelines.specialize(
+            &pipeline_cache,
+            &pipeline,
+            SelectionWireMaskKey {
+                format: view.target_format,
+                msaa_samples: msaa.samples(),
+            },
+        );
+        commands
+            .entity(entity)
+            .insert(ViewSelectionWireOutlinePipeline(pipeline_id));
+    }
+}
+
+#[derive(Default)]
+struct SelectionWireOutlineBindGroupCache(Option<(TextureViewId, BindGroup)>);
+
+/// Blends the screen-space silhouette outline over the mask color target.
+///
+/// Runs after the line pass and loads (instead of clearing) the mask color;
+/// non-silhouette pixels emit transparent black so alpha blending leaves the
+/// line layer untouched while silhouette pixels add the outline.
+#[allow(clippy::type_complexity)]
+fn selection_wire_outline_pass(
+    world: &World,
+    view: ViewQuery<(
+        &ViewTarget,
+        &ViewDepthTexture,
+        Option<&ViewSelectionWireOutlinePipeline>,
+    )>,
+    pipeline_cache: Res<PipelineCache>,
+    mut cache: Local<SelectionWireOutlineBindGroupCache>,
+    mut ctx: RenderContext,
+) {
+    let (target, depth, view_pipeline) = view.into_inner();
+    let Some(view_pipeline) = view_pipeline else {
+        return;
+    };
+    let Some(render_pipeline) = pipeline_cache.get_render_pipeline(view_pipeline.0) else {
+        return;
+    };
+
+    // Prepare the bind group before starting the pass so `ctx` stays free.
+    let bind_group = match cache.0.as_ref() {
+        Some((depth_id, bind_group)) if *depth_id == depth.view().id() => Some(bind_group.clone()),
+        _ => {
+            let bind_group = ctx.render_device().create_bind_group(
+                "selection_wire_outline_view_bind_group",
+                &pipeline_cache.get_bind_group_layout(
+                    &world.resource::<SelectionWireOutlinePipeline>().layout,
+                ),
+                &BindGroupEntries::single(depth.view()),
+            );
+            cache.0 = Some((depth.view().id(), bind_group.clone()));
+            Some(bind_group)
+        }
+    };
+    let Some(bind_group) = bind_group else {
+        return;
+    };
+
+    let mut render_pass = ctx
+        .command_encoder()
+        .begin_render_pass(&RenderPassDescriptor {
+            label: Some("selection_wire_outline_pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target.main_texture_view(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    render_pass.set_pipeline(render_pipeline);
+    render_pass.set_bind_group(0, &bind_group, &[]);
+    render_pass.draw(0..3, 0..1);
 }
 
 /// Pipeline for the fullscreen composite pass on the main camera.

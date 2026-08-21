@@ -26,8 +26,8 @@ const NEAR_PLANE_EPSILON: f32 = 4.88e-04;
 // genuinely closer surfaces still occlude the line.
 const LINE_DEPTH_EPSILON: f32 = 1e-4;
 // Half of the feather distance in pixels: the outermost pixels of the quad
-// fade out to zero alpha; combined with the mask camera's MSAA this produces
-// smooth line edges.
+// fade out to zero alpha, producing smooth line edges (the mask camera runs
+// without MSAA so the outline pass can read its depth with `textureLoad`).
 const EDGE_FEATHER_PX: f32 = 0.75;
 
 struct VertexInput {

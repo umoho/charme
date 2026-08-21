@@ -31,11 +31,15 @@ pub(crate) struct PrimitiveComponentSelectionGeometry {
 #[derive(Clone, Copy)]
 pub(crate) struct SelectionFace {
     pub(crate) vertices: [Vec3; 3],
+    pub(crate) normal: Vec3,
 }
 
 pub(crate) struct SelectionEdge {
     pub(crate) start: Vec3,
     pub(crate) end: Vec3,
+    /// Blender-style edge sharpness (`wd`): 0 for boundary/non-manifold and
+    /// sharp edges, approaching 1 for flat edges. See `edge_sharpness`.
+    pub(crate) sharpness: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -181,9 +185,25 @@ impl SelectionGeometry {
 }
 
 pub(crate) fn selection_face(first: Vec3, second: Vec3, third: Vec3) -> SelectionFace {
+    let raw_normal = (second - first).cross(third - first);
+    let normal = if raw_normal.length_squared() > f32::EPSILON {
+        raw_normal.normalize()
+    } else {
+        Vec3::ZERO
+    };
     SelectionFace {
         vertices: [first, second, third],
+        normal,
     }
+}
+
+/// Mirrors Blender's `edge_factor_calc` (extract_mesh_vbo_edge_fac.cc): the
+/// cosine of the dihedral angle rescaled so that edges sharper than the
+/// default threshold collapse to 0 and flat edges approach 1.
+fn edge_sharpness(first: Vec3, second: Vec3) -> f32 {
+    let cosine = first.dot(second);
+    let factor = (200.0 * (cosine - 1.0) + 1.0).clamp(0.0, 1.0);
+    factor * (254.0 / 255.0)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -198,8 +218,14 @@ impl From<Vec3> for PositionKey {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct EdgeKey(PositionKey, PositionKey);
 
+struct EdgeAccumulator {
+    start: Vec3,
+    end: Vec3,
+    face_normals: Vec<Vec3>,
+}
+
 pub(crate) fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
-    let mut edges = HashMap::<EdgeKey, (Vec3, Vec3)>::new();
+    let mut edges = HashMap::<EdgeKey, EdgeAccumulator>::new();
     for face in faces {
         for (start, end) in [
             (face.vertices[0], face.vertices[1]),
@@ -213,13 +239,32 @@ pub(crate) fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
             } else {
                 (EdgeKey(end_key, start_key), end, start)
             };
-            edges.entry(key).or_insert((start, end));
+            let edge = edges.entry(key).or_insert_with(|| EdgeAccumulator {
+                start,
+                end,
+                face_normals: Vec::new(),
+            });
+            edge.face_normals.push(face.normal);
         }
     }
 
     edges
         .into_values()
-        .map(|(start, end)| SelectionEdge { start, end })
+        .map(|edge| {
+            // Boundary and non-manifold edges are always visible, matching
+            // Blender's reserved values.
+            let sharpness = match edge.face_normals.as_slice() {
+                [first, second] if *first != Vec3::ZERO && *second != Vec3::ZERO => {
+                    edge_sharpness(*first, *second)
+                }
+                _ => 0.0,
+            };
+            SelectionEdge {
+                start: edge.start,
+                end: edge.end,
+                sharpness,
+            }
+        })
         .collect()
 }
 
