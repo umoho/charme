@@ -642,14 +642,32 @@ impl Backend {
             let Some(entity) = entity else {
                 continue;
             };
-            let Some(mut layers) = world.get_mut::<RenderLayers>(*entity) else {
-                continue;
-            };
-            *layers = if selected.contains(&index) {
+            let new_layers = if selected.contains(&index) {
                 mask_layers.clone()
             } else {
                 RenderLayers::default()
             };
+            let mut layers_changed = false;
+            if let Some(mut layers) = world.get_mut::<RenderLayers>(*entity) {
+                if *layers != new_layers {
+                    *layers = new_layers;
+                    layers_changed = true;
+                }
+            } else if selected.contains(&index) {
+                // Entities without a RenderLayers component default to layer 0.
+                world.entity_mut(*entity).insert(mask_layers.clone());
+                layers_changed = true;
+            }
+            if layers_changed
+                && let Some(material) = world.get::<MeshMaterial3d<CharmeMaterial>>(*entity)
+            {
+                // Bevy's prepass specialization tracks mesh/material changes,
+                // not render layer changes. Re-insert the material handle so
+                // the mesh gets re-specialized for the mask camera's depth
+                // prepass, keeping the selection wireframe self-occluded.
+                let material = material.clone();
+                world.entity_mut(*entity).insert(material);
+            }
         }
     }
 

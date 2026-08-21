@@ -267,7 +267,12 @@ fn sync_selection_mask_camera(
         ),
     >,
     mut mask: Query<
-        (&mut Projection, &mut GlobalTransform, &mut Camera),
+        (
+            &mut Projection,
+            &mut GlobalTransform,
+            &mut Camera,
+            &mut bevy::camera::primitives::Frustum,
+        ),
         (
             With<SelectionMaskCamera>,
             bevy::ecs::query::Without<MainPreviewCamera>,
@@ -277,12 +282,19 @@ fn sync_selection_mask_camera(
     let Ok((projection, transform, camera)) = main.single() else {
         return;
     };
-    let Ok((mut mask_projection, mut mask_transform, mut mask_camera)) = mask.single_mut() else {
+    let Ok((mut mask_projection, mut mask_transform, mut mask_camera, mut mask_frustum)) =
+        mask.single_mut()
+    else {
         return;
     };
     *mask_projection = projection.clone();
     *mask_transform = *transform;
     mask_camera.is_active = camera.is_active;
+    // Keep the frustum in sync with the copied camera state. `update_frusta`
+    // only recomputes it when the mask camera's own components change, which
+    // would leave a stale frustum (and cull the selected object out of the
+    // mask view) whenever the main camera stops moving.
+    *mask_frustum = projection.compute_frustum(transform);
 }
 
 /// Reclassifies the selected wireframe edges when the selection or the camera
