@@ -2,8 +2,9 @@
 //!
 //! The wireframe mimics Blender's selected-object wire overlay:
 //!
-//! * Back-face wireframe is culled and interior mesh lines stay silhouette-only
-//!   (the CPU-side edge classification in [`update_selection_wire`]).
+//! * Interior front-side mesh lines stay hidden, while back-side edges
+//!   participate in the wireframe (the CPU-side edge classification in
+//!   [`update_selection_wire`]).
 //! * The wireframe is never occluded by other objects, but is occluded by the
 //!   selected object itself.
 //!
@@ -305,9 +306,11 @@ fn update_selection_wire(
 
 /// Classifies the selected wireframe edges for the current camera position.
 ///
-/// Interior edges stay silhouette-only: they are drawn only where front- and
-/// back-facing faces meet, keeping internal mesh lines hidden. Boundary edges
-/// follow their only face and are culled when it faces away from the camera.
+/// Interior edges stay hidden only when every adjacent face faces the camera
+/// (internal front-side mesh lines). Any edge touching a back-facing face is
+/// part of the wireframe, and boundary edges always are: the GPU depth test
+/// against the object's own surface then hides the fragments that are
+/// actually occluded.
 fn selection_wire_lines(selection: &SelectionGeometry, camera_position: Vec3) -> Vec<(Vec3, Vec3)> {
     let selected_primitives = selection.selected_primitives();
     let selected_slot = selection.selected_slot();
@@ -323,12 +326,8 @@ fn selection_wire_lines(selection: &SelectionGeometry, camera_position: Vec3) ->
         for component in &primitive.components {
             for edge in &component.edges {
                 let draw_edge = if edge.faces.len() == 1 {
-                    component
-                        .faces
-                        .get(edge.faces[0])
-                        .is_none_or(|face| faces_camera(face, camera_position))
+                    true
                 } else {
-                    let mut has_front_face = false;
                     let mut has_back_face = false;
                     for &face_index in &edge.faces {
                         let Some(face) = component.faces.get(face_index) else {
@@ -337,13 +336,12 @@ fn selection_wire_lines(selection: &SelectionGeometry, camera_position: Vec3) ->
                         if face.normal == Vec3::ZERO {
                             continue;
                         }
-                        if faces_camera(face, camera_position) {
-                            has_front_face = true;
-                        } else {
+                        if !faces_camera(face, camera_position) {
                             has_back_face = true;
+                            break;
                         }
                     }
-                    has_front_face && has_back_face
+                    has_back_face
                 };
                 if draw_edge {
                     lines.push((edge.start, edge.end));
