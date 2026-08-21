@@ -22,7 +22,8 @@ const DEPTH_BIAS: f32 = -0.1;
 const LINE_COLOR: vec4<f32> = vec4(1.0, 0.42, 0.02, 1.0);
 const NEAR_PLANE_EPSILON: f32 = 4.88e-04;
 // Half of the feather distance in pixels: the outermost pixels of the quad
-// fade out to fake anti-aliasing on the mask camera.
+// fade out to zero alpha; combined with the mask camera's MSAA this produces
+// smooth line edges.
 const EDGE_FEATHER_PX: f32 = 0.75;
 
 struct VertexInput {
@@ -97,8 +98,5 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         0.0,
         1.0,
     );
-    if coverage < 0.5 {
-        discard;
-    }
     return vec4(LINE_COLOR.rgb, coverage);
 }
