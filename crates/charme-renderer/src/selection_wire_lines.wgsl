@@ -17,7 +17,7 @@
 // View uniform from the pipeline's view bind group.
 @group(0) @binding(0) var<uniform> view: View;
 
-const LINE_WIDTH_PX: f32 = 2.5;
+const LINE_WIDTH_PX: f32 = 5.0;
 const DEPTH_BIAS: f32 = -0.1;
 const LINE_COLOR: vec4<f32> = vec4(1.0, 0.42, 0.02, 1.0);
 const NEAR_PLANE_EPSILON: f32 = 4.88e-04;
