@@ -2,9 +2,10 @@
 //!
 //! The wireframe mimics Blender's selected-object wire overlay:
 //!
-//! * Interior mesh lines on both sides stay hidden, while boundary edges and
-//!   silhouette edges participate in the wireframe (the CPU-side edge
-//!   classification in [`update_selection_wire`]).
+//! * Every mesh edge of the selection participates in the wireframe; interior
+//!   lines and fragments hidden behind the object's own surface are discarded
+//!   by the GPU depth test instead of a CPU-side edge classification (see
+//!   [`update_selection_wire`]).
 //! * The wireframe is never occluded by other objects, but is occluded by the
 //!   selected object itself.
 //!
@@ -76,11 +77,7 @@ use bevy::{
     utils::default,
 };
 
-use crate::{
-    OutputSize,
-    backend::MainPreviewCamera,
-    selection::{SelectionFace, SelectionGeometry},
-};
+use crate::{OutputSize, backend::MainPreviewCamera, selection::SelectionGeometry};
 
 /// Render layer of the selection mask camera.
 pub(crate) const SELECTION_WIRE_LAYER: usize = 1;
@@ -106,7 +103,7 @@ pub(crate) struct SelectionWireActive(bool);
 #[derive(Resource, ExtractResource, Clone, Debug, Default)]
 pub(crate) struct SelectionWireMaskHandle(pub(crate) Handle<Image>);
 
-/// The classified wireframe line segments, extracted for the line pass.
+/// The wireframe line segments, extracted for the line pass.
 #[derive(Resource, ExtractResource, Clone, Debug, Default, PartialEq)]
 pub(crate) struct SelectionWireLines {
     lines: Vec<(Vec3, Vec3)>,
@@ -297,33 +294,30 @@ fn sync_selection_mask_camera(
     *mask_frustum = projection.compute_frustum(transform);
 }
 
-/// Reclassifies the selected wireframe edges when the selection or the camera
-/// changes.
+/// Rebuilds the selected wireframe lines when the selection changes.
+///
+/// The lines no longer depend on the camera: visibility is resolved on the
+/// GPU by the mask camera's depth test, mirroring Blender's overlay.
 fn update_selection_wire(
     selection: Res<SelectionGeometry>,
-    main_camera: Query<bevy::ecs::change_detection::Ref<GlobalTransform>, With<MainPreviewCamera>>,
     mut lines_resource: ResMut<SelectionWireLines>,
     mut active: ResMut<SelectionWireActive>,
 ) {
-    let Ok(camera_transform) = main_camera.single() else {
-        return;
-    };
-    if !selection.is_changed() && !camera_transform.is_changed() {
+    if !selection.is_changed() {
         return;
     }
-    let lines = selection_wire_lines(&selection, camera_transform.translation());
+    let lines = selection_wire_lines(&selection);
     active.0 = !lines.is_empty();
     lines_resource.lines = lines;
 }
 
-/// Classifies the selected wireframe edges for the current camera position.
+/// Collects every mesh edge of the selected primitives.
 ///
-/// Interior edges stay silhouette-only: they are drawn only where front- and
-/// back-facing faces meet, which hides internal mesh lines on both sides of
-/// the object. Boundary edges always participate in the wireframe; the GPU
-/// depth test against the object's own surface then hides the fragments that
-/// are actually occluded.
-fn selection_wire_lines(selection: &SelectionGeometry, camera_position: Vec3) -> Vec<(Vec3, Vec3)> {
+/// Like Blender's selected-object overlay, no CPU-side boundary/silhouette
+/// classification is performed: all edges are submitted and the mask camera's
+/// depth prepass plus the hardware depth test hide the interior edges and the
+/// fragments occluded by the object's own surface.
+fn selection_wire_lines(selection: &SelectionGeometry) -> Vec<(Vec3, Vec3)> {
     let selected_primitives = selection.selected_primitives();
     let selected_slot = selection.selected_slot();
     if selected_primitives.is_empty() && selected_slot.is_none() {
@@ -336,39 +330,10 @@ fn selection_wire_lines(selection: &SelectionGeometry, camera_position: Vec3) ->
                 && selected_slot.is_some_and(|slot_id| primitive.slot_id == slot_id)
     }) {
         for component in &primitive.components {
-            for edge in &component.edges {
-                let draw_edge = if edge.faces.len() == 1 {
-                    true
-                } else {
-                    let mut has_front_face = false;
-                    let mut has_back_face = false;
-                    for &face_index in &edge.faces {
-                        let Some(face) = component.faces.get(face_index) else {
-                            continue;
-                        };
-                        if face.normal == Vec3::ZERO {
-                            continue;
-                        }
-                        if faces_camera(face, camera_position) {
-                            has_front_face = true;
-                        } else {
-                            has_back_face = true;
-                        }
-                    }
-                    has_front_face && has_back_face
-                };
-                if draw_edge {
-                    lines.push((edge.start, edge.end));
-                }
-            }
+            lines.extend(component.edges.iter().map(|edge| (edge.start, edge.end)));
         }
     }
     lines
-}
-
-fn faces_camera(face: &SelectionFace, camera_position: Vec3) -> bool {
-    // Degenerate faces have no orientation; keep their edges visible.
-    face.normal == Vec3::ZERO || face.normal.dot(camera_position - face.center) > 0.0
 }
 
 fn new_selection_mask_image(size: OutputSize) -> Image {
@@ -416,7 +381,7 @@ struct SelectionWireGpuBuffer {
     cached_lines: Vec<(Vec3, Vec3)>,
 }
 
-/// Rebuilds the line vertex buffer when the classified lines change.
+/// Rebuilds the line vertex buffer when the lines change.
 fn prepare_selection_wire_gpu_buffer(
     lines: Res<SelectionWireLines>,
     render_device: Res<RenderDevice>,

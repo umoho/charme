@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError},
     thread,
@@ -17,9 +17,9 @@ use bevy::{
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::VertexAttributeValues,
     prelude::{
-        Color, Commands, Component, Cuboid, DirectionalLight, Entity, GlobalTransform, Mesh,
-        Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat, Sphere, StandardMaterial,
-        Transform, Vec2, Vec3,
+        AlphaMode, ChildOf, Color, Commands, Component, Cuboid, DirectionalLight, Entity,
+        GlobalTransform, Mesh, Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat,
+        Sphere, StandardMaterial, Transform, Vec2, Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
@@ -296,6 +296,11 @@ struct Backend {
     placeholder_entities: Vec<Entity>,
     placeholder_materials: Vec<bevy::prelude::Handle<CharmeMaterial>>,
     pmx_scene: Option<SpawnedPmxScene>,
+    /// Opaque stand-in material for the selection depth proxies.
+    depth_proxy_material: bevy::prelude::Handle<StandardMaterial>,
+    /// Child entities mirroring selected primitives into the mask camera's
+    /// depth prepass (Bevy's prepass skips alpha-blended materials).
+    selection_depth_proxies: HashMap<usize, Entity>,
     scene_request_id: Option<u64>,
     orbit: OrbitState,
     initial_orbit: OrbitState,
@@ -460,6 +465,10 @@ impl Backend {
             .world_mut()
             .resource_mut::<Assets<Mesh>>()
             .add(Sphere::new(1.0).mesh().ico(3).unwrap());
+        let depth_proxy_material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
         let orbit = OrbitState::default();
         let (camera, placeholder_entities, placeholder_materials) = spawn_scene(
             &mut app,
@@ -505,6 +514,8 @@ impl Backend {
             placeholder_entities,
             placeholder_materials,
             pmx_scene: None,
+            depth_proxy_material,
+            selection_depth_proxies: HashMap::new(),
             scene_request_id: None,
             orbit,
             initial_orbit: orbit,
@@ -668,6 +679,87 @@ impl Backend {
                 let material = material.clone();
                 world.entity_mut(*entity).insert(material);
             }
+        }
+        Self::sync_selection_depth_proxies(
+            &mut self.selection_depth_proxies,
+            &self.depth_proxy_material,
+            &selected,
+            scene,
+            world,
+        );
+    }
+
+    /// Mirrors blended selected primitives into the mask camera's depth
+    /// prepass.
+    ///
+    /// Bevy's prepass queue skips alpha-blended materials entirely, so
+    /// transparent PMX surfaces would never occlude the wireframe. For every
+    /// selected primitive whose material blends, an opaque child proxy is
+    /// spawned on the mask layer only: the main camera, lights, and picking
+    /// never see it, but the mask camera's prepass receives depth for those
+    /// surfaces too. Opaque and alpha-to-coverage materials already write
+    /// prepass depth and need no proxy.
+    fn sync_selection_depth_proxies(
+        proxies: &mut HashMap<usize, Entity>,
+        depth_proxy_material: &bevy::prelude::Handle<StandardMaterial>,
+        selected: &std::collections::HashSet<usize>,
+        scene: &SpawnedPmxScene,
+        world: &mut bevy::ecs::world::World,
+    ) {
+        let mut removed = Vec::new();
+        proxies.retain(|index, proxy| {
+            let keep = selected.contains(index);
+            if !keep {
+                removed.push(*proxy);
+            }
+            keep
+        });
+        for proxy in removed {
+            let _ = world.despawn(proxy);
+        }
+        for (index, entity) in scene.primitive_entities().iter().enumerate() {
+            let Some(entity) = entity else {
+                continue;
+            };
+            if !selected.contains(&index) || proxies.contains_key(&index) {
+                continue;
+            }
+            // Opaque and alpha-to-coverage materials already write prepass
+            // depth; only blended materials are skipped by Bevy's prepass
+            // queue and need a proxy.
+            let needs_proxy = world
+                .get::<MeshMaterial3d<CharmeMaterial>>(*entity)
+                .and_then(|handle| world.resource::<Assets<CharmeMaterial>>().get(handle.id()))
+                .is_some_and(|material| material.alpha_mode == AlphaMode::Blend);
+            if !needs_proxy {
+                continue;
+            }
+            let Some(mesh) = world.get::<Mesh3d>(*entity).cloned() else {
+                continue;
+            };
+            let proxy = world
+                .spawn((
+                    mesh,
+                    MeshMaterial3d(depth_proxy_material.clone()),
+                    RenderLayers::layer(SELECTION_WIRE_LAYER),
+                    Transform::IDENTITY,
+                    ChildOf(*entity),
+                ))
+                .id();
+            proxies.insert(index, proxy);
+        }
+    }
+
+    /// Despawns every selection depth proxy. Must run before the PMX scene is
+    /// despawned, as scene teardown is non-recursive and would orphan the
+    /// proxy children.
+    fn clear_selection_depth_proxies(&mut self) {
+        if self.selection_depth_proxies.is_empty() {
+            return;
+        }
+        let world = self.app.world_mut();
+        for proxy in self.selection_depth_proxies.drain().map(|(_, proxy)| proxy) {
+            let _ = world.despawn(proxy);
         }
     }
 
@@ -916,6 +1008,7 @@ impl Backend {
                 .resource_mut::<Assets<CharmeMaterial>>()
                 .remove(handle.id());
         }
+        self.clear_selection_depth_proxies();
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }
@@ -965,6 +1058,7 @@ impl Backend {
         self.latest_load_request_id = None;
         self.scene_request_id = None;
         self.clear_material_previews();
+        self.clear_selection_depth_proxies();
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }

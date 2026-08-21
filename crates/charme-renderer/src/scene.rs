@@ -225,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn coplanar_triangle_diagonals_are_not_silhouette_boundaries() {
+    fn shared_triangle_edges_are_deduplicated() {
         let faces = vec![
             selection_face(
                 Vec3::new(-1.0, -1.0, 0.0),
@@ -240,8 +240,8 @@ mod tests {
         ];
         let edges = selection_edges(&faces);
 
+        // Two triangles sharing a diagonal contribute five unique edges.
         assert_eq!(edges.len(), 5);
-        assert_eq!(edges.iter().filter(|edge| edge.faces.len() == 2).count(), 1);
     }
 
     #[test]

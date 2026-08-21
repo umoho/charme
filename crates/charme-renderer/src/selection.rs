@@ -31,14 +31,11 @@ pub(crate) struct PrimitiveComponentSelectionGeometry {
 #[derive(Clone, Copy)]
 pub(crate) struct SelectionFace {
     pub(crate) vertices: [Vec3; 3],
-    pub(crate) normal: Vec3,
-    pub(crate) center: Vec3,
 }
 
 pub(crate) struct SelectionEdge {
     pub(crate) start: Vec3,
     pub(crate) end: Vec3,
-    pub(crate) faces: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,16 +181,8 @@ impl SelectionGeometry {
 }
 
 pub(crate) fn selection_face(first: Vec3, second: Vec3, third: Vec3) -> SelectionFace {
-    let raw_normal = (second - first).cross(third - first);
-    let normal = if raw_normal.length_squared() > f32::EPSILON {
-        raw_normal.normalize()
-    } else {
-        Vec3::ZERO
-    };
     SelectionFace {
         vertices: [first, second, third],
-        normal,
-        center: (first + second + third) / 3.0,
     }
 }
 
@@ -209,15 +198,9 @@ impl From<Vec3> for PositionKey {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct EdgeKey(PositionKey, PositionKey);
 
-struct EdgeAccumulator {
-    start: Vec3,
-    end: Vec3,
-    faces: Vec<usize>,
-}
-
 pub(crate) fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
-    let mut edges = HashMap::<EdgeKey, EdgeAccumulator>::new();
-    for (face_index, face) in faces.iter().enumerate() {
+    let mut edges = HashMap::<EdgeKey, (Vec3, Vec3)>::new();
+    for face in faces {
         for (start, end) in [
             (face.vertices[0], face.vertices[1]),
             (face.vertices[1], face.vertices[2]),
@@ -230,24 +213,13 @@ pub(crate) fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
             } else {
                 (EdgeKey(end_key, start_key), end, start)
             };
-            let edge = edges.entry(key).or_insert_with(|| EdgeAccumulator {
-                start,
-                end,
-                faces: Vec::new(),
-            });
-            if !edge.faces.contains(&face_index) {
-                edge.faces.push(face_index);
-            }
+            edges.entry(key).or_insert((start, end));
         }
     }
 
     edges
         .into_values()
-        .map(|edge| SelectionEdge {
-            start: edge.start,
-            end: edge.end,
-            faces: edge.faces,
-        })
+        .map(|(start, end)| SelectionEdge { start, end })
         .collect()
 }
 

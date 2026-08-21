@@ -9,18 +9,22 @@
 // Depth handling: the mask camera's depth buffer contains only the selected
 // object (written by the depth prepass of the mask schedule), so the hardware
 // depth test of the line pipeline provides "occluded by itself, never by
-// other objects" for free. `DEPTH_BIAS` pushes the line slightly towards the
-// camera so that fragments lying exactly on the object surface pass the depth
-// comparison.
+// other objects" for free. `LINE_DEPTH_EPSILON` pushes the line by a tiny
+// constant NDC offset towards the camera so that fragments lying exactly on
+// the object surface pass the depth comparison, while genuinely closer
+// surfaces keep occluding the line.
 #import bevy_render::view::View
 
 // View uniform from the pipeline's view bind group.
 @group(0) @binding(0) var<uniform> view: View;
 
 const LINE_WIDTH_PX: f32 = 3.5;
-const DEPTH_BIAS: f32 = -0.1;
 const LINE_COLOR: vec4<f32> = vec4(1.0, 0.42, 0.02, 1.0);
 const NEAR_PLANE_EPSILON: f32 = 4.88e-04;
+// Constant NDC offset towards the camera: just enough for line fragments to
+// win against the surface they lie on (equal depth), yet small enough that
+// genuinely closer surfaces still occlude the line.
+const LINE_DEPTH_EPSILON: f32 = 1e-4;
 // Half of the feather distance in pixels: the outermost pixels of the quad
 // fade out to zero alpha; combined with the mask camera's MSAA this produces
 // smooth line edges.
@@ -70,9 +74,7 @@ fn vertex(vertex: VertexInput) -> VertexOutput {
     let x_offset = LINE_WIDTH_PX * position.x * x_basis;
     let screen = mix(screen_a, screen_b, position.y) + x_offset;
 
-    // Bias the depth towards the near plane so the line always wins against
-    // the surface it lies on. This mirrors bevy_gizmos' depth_bias handling.
-    let depth = clip.z * exp2(-DEPTH_BIAS * log2(clip.w / clip.z - NEAR_PLANE_EPSILON));
+    let depth = clip.z + LINE_DEPTH_EPSILON * clip.w;
 
     let clip_position = vec4(clip.w * ((2.0 * screen) / resolution - 1.0), depth, clip.w);
 
