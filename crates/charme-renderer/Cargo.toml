@@ -20,5 +20,11 @@ charme-core = { path = "../charme-core" }
 charme-geometry = { path = "../charme-geometry" }
 zip.workspace = true
 
+[dev-dependencies]
+# Only used by the offline debugging examples to write PNG frames directly.
+# Restrict to the PNG codec so the debug examples don't drag in the whole
+# image-format dependency tree (avif/webp/tiff/...).
+image = { version = "0.25.9", default-features = false, features = ["png"] }
+
 [lints]
 workspace = true

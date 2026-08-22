@@ -1363,6 +1363,7 @@ dependencies = [
  "charme-bevy",
  "charme-core",
  "charme-geometry",
+ "image",
  "zip",
 ]
 

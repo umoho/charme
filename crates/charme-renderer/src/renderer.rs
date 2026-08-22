@@ -297,6 +297,30 @@ impl Renderer {
         self.send(Command::ResetCamera)
     }
 
+    /// Sets the absolute orbit-camera state. Debugging aid used by the offline
+    /// sweep tool to reproduce the GUI framing exactly.
+    pub fn set_camera_absolute(
+        &self,
+        yaw: f32,
+        pitch: f32,
+        distance: f32,
+        target: [f32; 3],
+    ) -> Result<(), RendererError> {
+        for value in [yaw, pitch, distance, target[0], target[1], target[2]] {
+            if !value.is_finite() {
+                return Err(RendererError::InvalidConfiguration {
+                    message: "camera values must be finite".to_owned(),
+                });
+            }
+        }
+        self.send(Command::SetCameraAbsolute {
+            yaw,
+            pitch,
+            distance,
+            target,
+        })
+    }
+
     /// Sets the material slot whose primitives should receive the selection outline.
     ///
     /// Passing `None` clears the renderer-side outline. Selection is transient

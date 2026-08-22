@@ -55,6 +55,14 @@ pub(crate) enum Command {
     },
     Zoom(f32),
     ResetCamera,
+    /// Sets the absolute orbit-camera state. Debugging aid used by the offline
+    /// camera sweep tool to reproduce the GUI's current framing exactly.
+    SetCameraAbsolute {
+        yaw: f32,
+        pitch: f32,
+        distance: f32,
+        target: [f32; 3],
+    },
     LoadPmx(PmxLoadRequest),
     ClearPmx,
     SetMaterialParameter {
@@ -366,6 +374,15 @@ impl Backend {
                 self.reset_camera()?;
                 CommandOutcome::redraw()
             }
+            Command::SetCameraAbsolute {
+                yaw,
+                pitch,
+                distance,
+                target,
+            } => {
+                self.set_camera_absolute(yaw, pitch, distance, target)?;
+                CommandOutcome::redraw()
+            }
             Command::LoadPmx(request) => CommandOutcome {
                 redraw: self.load_pmx(request)?,
                 ..Default::default()
@@ -601,6 +618,21 @@ impl Backend {
 
     fn reset_camera(&mut self) -> Result<(), RendererError> {
         self.orbit = self.initial_orbit;
+        self.update_camera_transform()
+    }
+
+    fn set_camera_absolute(
+        &mut self,
+        yaw: f32,
+        pitch: f32,
+        distance: f32,
+        target: [f32; 3],
+    ) -> Result<(), RendererError> {
+        self.orbit.yaw = yaw;
+        self.orbit.pitch = pitch.clamp(-1.45, 1.45);
+        self.orbit.distance =
+            distance.clamp(self.orbit.minimum_distance, self.orbit.maximum_distance);
+        self.orbit.target = Vec3::from_array(target);
         self.update_camera_transform()
     }
 
@@ -1398,6 +1430,28 @@ impl Backend {
                 message: "the internal camera transform is unavailable".to_owned(),
             })?;
         *transform = self.orbit.transform();
+
+        // Debug aid: when CHARME_CAMERA_DUMP is set (debug builds only), mirror
+        // the orbit-camera state to that path so the offline `camera_debug`
+        // example can reproduce the GUI framing exactly. Opt-in only: the path
+        // is never written unless the variable is present, so the offline tool
+        // cannot clobber the GUI's authoritative dump.
+        #[cfg(debug_assertions)]
+        if let Some(dump_path) = std::env::var_os("CHARME_CAMERA_DUMP") {
+            let _ = std::fs::write(
+                dump_path,
+                format!(
+                    "{} {} {} {} {} {}\n",
+                    self.orbit.yaw,
+                    self.orbit.pitch,
+                    self.orbit.distance,
+                    self.orbit.target.x,
+                    self.orbit.target.y,
+                    self.orbit.target.z,
+                ),
+            );
+        }
+
         Ok(())
     }
 
