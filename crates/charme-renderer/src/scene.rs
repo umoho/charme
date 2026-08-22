@@ -9,7 +9,7 @@ use crate::{
     pmx_import::{build_primitive_splits, primitive_component_infos},
     selection::{
         PrimitiveComponentSelectionGeometry, PrimitiveSelectionGeometry, SelectionGeometry,
-        selection_edges, selection_face,
+        selection_face,
     },
 };
 #[cfg(test)]
@@ -225,26 +225,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_triangle_edges_are_deduplicated() {
-        let faces = vec![
-            selection_face(
-                Vec3::new(-1.0, -1.0, 0.0),
-                Vec3::new(1.0, -1.0, 0.0),
-                Vec3::new(1.0, 1.0, 0.0),
-            ),
-            selection_face(
-                Vec3::new(-1.0, -1.0, 0.0),
-                Vec3::new(1.0, 1.0, 0.0),
-                Vec3::new(-1.0, 1.0, 0.0),
-            ),
-        ];
-        let edges = selection_edges(&faces);
-
-        // Two triangles sharing a diagonal contribute five unique edges.
-        assert_eq!(edges.len(), 5);
-    }
-
-    #[test]
     fn picking_returns_the_nearest_primitive() {
         let slot = MaterialSlotId::new();
         let faces = vec![selection_face(
@@ -257,10 +237,7 @@ mod tests {
             primitives: vec![PrimitiveSelectionGeometry {
                 primitive_index: 3,
                 slot_id: slot,
-                components: vec![PrimitiveComponentSelectionGeometry {
-                    edges: selection_edges(&faces),
-                    faces,
-                }],
+                components: vec![PrimitiveComponentSelectionGeometry { faces }],
             }],
             selected_slot: None,
             selected_primitives: Vec::new(),

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bevy::{
     math::Ray3d,
     prelude::{Resource, Vec3},
@@ -25,21 +23,11 @@ pub(crate) struct PrimitiveSelectionGeometry {
 
 pub(crate) struct PrimitiveComponentSelectionGeometry {
     pub(crate) faces: Vec<SelectionFace>,
-    pub(crate) edges: Vec<SelectionEdge>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct SelectionFace {
     pub(crate) vertices: [Vec3; 3],
-    pub(crate) normal: Vec3,
-}
-
-pub(crate) struct SelectionEdge {
-    pub(crate) start: Vec3,
-    pub(crate) end: Vec3,
-    /// Blender-style edge sharpness (`wd`): 0 for boundary/non-manifold and
-    /// sharp edges, approaching 1 for flat edges. See `edge_sharpness`.
-    pub(crate) sharpness: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,8 +84,7 @@ impl SelectionGeometry {
                     if faces.is_empty() {
                         return None;
                     }
-                    let edges = selection_edges(&faces);
-                    Some(PrimitiveComponentSelectionGeometry { faces, edges })
+                    Some(PrimitiveComponentSelectionGeometry { faces })
                 })
                 .collect::<Vec<_>>();
             if !components.is_empty() {
@@ -185,87 +172,9 @@ impl SelectionGeometry {
 }
 
 pub(crate) fn selection_face(first: Vec3, second: Vec3, third: Vec3) -> SelectionFace {
-    let raw_normal = (second - first).cross(third - first);
-    let normal = if raw_normal.length_squared() > f32::EPSILON {
-        raw_normal.normalize()
-    } else {
-        Vec3::ZERO
-    };
     SelectionFace {
         vertices: [first, second, third],
-        normal,
     }
-}
-
-/// Mirrors Blender's `edge_factor_calc` (extract_mesh_vbo_edge_fac.cc): the
-/// cosine of the dihedral angle rescaled so that edges sharper than the
-/// default threshold collapse to 0 and flat edges approach 1.
-fn edge_sharpness(first: Vec3, second: Vec3) -> f32 {
-    let cosine = first.dot(second);
-    let factor = (200.0 * (cosine - 1.0) + 1.0).clamp(0.0, 1.0);
-    factor * (254.0 / 255.0)
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-struct PositionKey([u32; 3]);
-
-impl From<Vec3> for PositionKey {
-    fn from(value: Vec3) -> Self {
-        Self([value.x.to_bits(), value.y.to_bits(), value.z.to_bits()])
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct EdgeKey(PositionKey, PositionKey);
-
-struct EdgeAccumulator {
-    start: Vec3,
-    end: Vec3,
-    face_normals: Vec<Vec3>,
-}
-
-pub(crate) fn selection_edges(faces: &[SelectionFace]) -> Vec<SelectionEdge> {
-    let mut edges = HashMap::<EdgeKey, EdgeAccumulator>::new();
-    for face in faces {
-        for (start, end) in [
-            (face.vertices[0], face.vertices[1]),
-            (face.vertices[1], face.vertices[2]),
-            (face.vertices[2], face.vertices[0]),
-        ] {
-            let start_key = PositionKey::from(start);
-            let end_key = PositionKey::from(end);
-            let (key, start, end) = if start_key <= end_key {
-                (EdgeKey(start_key, end_key), start, end)
-            } else {
-                (EdgeKey(end_key, start_key), end, start)
-            };
-            let edge = edges.entry(key).or_insert_with(|| EdgeAccumulator {
-                start,
-                end,
-                face_normals: Vec::new(),
-            });
-            edge.face_normals.push(face.normal);
-        }
-    }
-
-    edges
-        .into_values()
-        .map(|edge| {
-            // Boundary and non-manifold edges are always visible, matching
-            // Blender's reserved values.
-            let sharpness = match edge.face_normals.as_slice() {
-                [first, second] if *first != Vec3::ZERO && *second != Vec3::ZERO => {
-                    edge_sharpness(*first, *second)
-                }
-                _ => 0.0,
-            };
-            SelectionEdge {
-                start: edge.start,
-                end: edge.end,
-                sharpness,
-            }
-        })
-        .collect()
 }
 
 fn ray_triangle_intersection(origin: Vec3, direction: Vec3, vertices: [Vec3; 3]) -> Option<f32> {

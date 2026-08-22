@@ -17,9 +17,9 @@ use bevy::{
     image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::VertexAttributeValues,
     prelude::{
-        AlphaMode, ChildOf, Color, Commands, Component, Cuboid, DirectionalLight, Entity,
-        GlobalTransform, Mesh, Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat,
-        Sphere, StandardMaterial, Transform, Vec2, Vec3,
+        ChildOf, Color, Commands, Component, Cuboid, DirectionalLight, Entity, GlobalTransform,
+        Mesh, Mesh3d, MeshBuilder, MeshMaterial3d, Meshable, On, Plane3d, Quat, Sphere,
+        StandardMaterial, Transform, Vec2, Vec3,
     },
     render::{
         RenderApp, RenderPlugin,
@@ -40,9 +40,9 @@ use crate::{
     scene_runtime::{SpawnedPmxScene, spawn_pmx_scene},
     scheduler::RenderScheduler,
     selection::SelectionGeometry,
-    selection_wire::{
-        SELECTION_WIRE_LAYER, SelectionWire, SelectionWireMaskHandle, install_selection_wire,
-        spawn_selection_wire,
+    selection_outline::{
+        OutlineIdMaterial, SELECTION_ID_LAYER, SelectionOutline, SelectionOutlineActive,
+        SelectionOutlineIdHandle, SelectionOutlinePlugin, spawn_selection_outline,
     },
 };
 
@@ -292,15 +292,14 @@ struct Backend {
     pixel_format: PixelFormat,
     target: bevy::prelude::Handle<Image>,
     camera: Entity,
-    selection_wire: SelectionWire,
+    selection_outline: SelectionOutline,
+    /// Shared material that renders the per-primitive object ID.
+    outline_id_material: bevy::prelude::Handle<OutlineIdMaterial>,
+    /// Child entities mirroring selected primitives into the ID camera.
+    selection_outline_proxies: HashMap<usize, Entity>,
     placeholder_entities: Vec<Entity>,
     placeholder_materials: Vec<bevy::prelude::Handle<CharmeMaterial>>,
     pmx_scene: Option<SpawnedPmxScene>,
-    /// Opaque stand-in material for the selection depth proxies.
-    depth_proxy_material: bevy::prelude::Handle<StandardMaterial>,
-    /// Child entities mirroring selected primitives into the mask camera's
-    /// depth prepass (Bevy's prepass skips alpha-blended materials).
-    selection_depth_proxies: HashMap<usize, Entity>,
     scene_request_id: Option<u64>,
     orbit: OrbitState,
     initial_orbit: OrbitState,
@@ -441,7 +440,7 @@ impl Backend {
                 .build(),
         );
         app.add_plugins(CharmeMaterialPlugin);
-        install_selection_wire(&mut app);
+        app.add_plugins(SelectionOutlinePlugin);
         app.init_resource::<SelectionGeometry>();
 
         while app.plugins_state() == PluginsState::Adding {
@@ -455,20 +454,20 @@ impl Backend {
         }
 
         let texture_size = usable_texture_size(config.output_size);
-        // The mask camera must render before the main camera so the composite
-        // node samples the current frame's mask. Cameras are sorted by
-        // (order, target); both cameras use order 0, so creating the mask
-        // target first keeps the mask camera ahead.
-        let selection_wire = spawn_selection_wire(&mut app, texture_size);
+        // The ID camera must render before the main camera so the composite
+        // node samples the current frame's ID texture. Cameras are sorted by
+        // (order, target); both cameras use order 0, so creating the ID
+        // target first keeps the ID camera ahead.
+        let selection_outline = spawn_selection_outline(&mut app, texture_size);
         let target = add_target_image(&mut app, texture_size, config.pixel_format);
         let thumbnail_mesh = app
             .world_mut()
             .resource_mut::<Assets<Mesh>>()
             .add(Sphere::new(1.0).mesh().ico(3).unwrap());
-        let depth_proxy_material = app
+        let outline_id_material = app
             .world_mut()
-            .resource_mut::<Assets<StandardMaterial>>()
-            .add(StandardMaterial::default());
+            .resource_mut::<Assets<OutlineIdMaterial>>()
+            .add(OutlineIdMaterial::default());
         let orbit = OrbitState::default();
         let (camera, placeholder_entities, placeholder_materials) = spawn_scene(
             &mut app,
@@ -478,9 +477,10 @@ impl Backend {
             orbit,
         );
 
-        app.world_mut().insert_resource(selection_wire.clone());
-        app.world_mut()
-            .insert_resource(SelectionWireMaskHandle(selection_wire.mask_target.clone()));
+        app.world_mut().insert_resource(selection_outline.clone());
+        app.world_mut().insert_resource(SelectionOutlineIdHandle(
+            selection_outline.id_target.clone(),
+        ));
 
         let thumbnail_preview = spawn_material_preview_studio(
             &mut app,
@@ -510,12 +510,12 @@ impl Backend {
             pixel_format: config.pixel_format,
             target,
             camera,
-            selection_wire,
+            selection_outline,
+            outline_id_material,
+            selection_outline_proxies: HashMap::new(),
             placeholder_entities,
             placeholder_materials,
             pmx_scene: None,
-            depth_proxy_material,
-            selection_depth_proxies: HashMap::new(),
             scene_request_id: None,
             orbit,
             initial_orbit: orbit,
@@ -556,13 +556,13 @@ impl Backend {
             return Ok(());
         }
 
-        // Recreate the mask target first so its asset index stays below the
-        // main target's and the mask camera keeps rendering first.
-        self.selection_wire.resize(&mut self.app, size);
+        // Recreate the ID target first so its asset index stays below the
+        // main target's and the ID camera keeps rendering first.
+        self.selection_outline.resize(&mut self.app, size);
         self.app
             .world_mut()
-            .insert_resource(SelectionWireMaskHandle(
-                self.selection_wire.mask_target.clone(),
+            .insert_resource(SelectionOutlineIdHandle(
+                self.selection_outline.id_target.clone(),
             ));
 
         let target = add_target_image(&mut self.app, size, self.pixel_format);
@@ -611,7 +611,7 @@ impl Backend {
             .resource_mut::<SelectionGeometry>()
             .set_selected_slot(slot_id);
         if changed {
-            self.sync_selection_render_layers();
+            self.sync_selection_outline();
         }
         changed
     }
@@ -623,12 +623,12 @@ impl Backend {
             .resource_mut::<SelectionGeometry>()
             .set_selected_primitives(primitive_indices);
         if changed {
-            self.sync_selection_render_layers();
+            self.sync_selection_outline();
         }
         changed
     }
 
-    fn sync_selection_render_layers(&mut self) {
+    fn sync_selection_outline(&mut self) {
         let Some(scene) = &self.pmx_scene else {
             return;
         };
@@ -647,61 +647,29 @@ impl Backend {
                 .map(|primitive| primitive.primitive_index)
                 .collect::<std::collections::HashSet<_>>()
         };
-        let mask_layers = RenderLayers::from_layers(&[0, SELECTION_WIRE_LAYER]);
-        let world = self.app.world_mut();
-        for (index, entity) in scene.primitive_entities().iter().enumerate() {
-            let Some(entity) = entity else {
-                continue;
-            };
-            let new_layers = if selected.contains(&index) {
-                mask_layers.clone()
-            } else {
-                RenderLayers::default()
-            };
-            let mut layers_changed = false;
-            if let Some(mut layers) = world.get_mut::<RenderLayers>(*entity) {
-                if *layers != new_layers {
-                    *layers = new_layers;
-                    layers_changed = true;
-                }
-            } else if selected.contains(&index) {
-                // Entities without a RenderLayers component default to layer 0.
-                world.entity_mut(*entity).insert(mask_layers.clone());
-                layers_changed = true;
-            }
-            if layers_changed
-                && let Some(material) = world.get::<MeshMaterial3d<CharmeMaterial>>(*entity)
-            {
-                // Bevy's prepass specialization tracks mesh/material changes,
-                // not render layer changes. Re-insert the material handle so
-                // the mesh gets re-specialized for the mask camera's depth
-                // prepass, keeping the selection wireframe self-occluded.
-                let material = material.clone();
-                world.entity_mut(*entity).insert(material);
-            }
-        }
-        Self::sync_selection_depth_proxies(
-            &mut self.selection_depth_proxies,
-            &self.depth_proxy_material,
+        self.app
+            .world_mut()
+            .insert_resource(SelectionOutlineActive(!selected.is_empty()));
+        Self::sync_selection_outline_proxies(
+            &mut self.selection_outline_proxies,
+            &self.outline_id_material,
             &selected,
             scene,
-            world,
+            self.app.world_mut(),
         );
     }
 
-    /// Mirrors blended selected primitives into the mask camera's depth
-    /// prepass.
+    /// Mirrors selected primitives into the ID camera.
     ///
-    /// Bevy's prepass queue skips alpha-blended materials entirely, so
-    /// transparent PMX surfaces would never occlude the wireframe. For every
-    /// selected primitive whose material blends, an opaque child proxy is
-    /// spawned on the mask layer only: the main camera, lights, and picking
-    /// never see it, but the mask camera's prepass receives depth for those
-    /// surfaces too. Opaque and alpha-to-coverage materials already write
-    /// prepass depth and need no proxy.
-    fn sync_selection_depth_proxies(
+    /// The original primitive entities stay on the main camera's layer and
+    /// keep their PMX material; a dedicated child proxy with the shared ID
+    /// material renders the same mesh into the ID camera only. The ID material
+    /// is opaque, so transparent PMX surfaces contribute a full silhouette to
+    /// the ID map (matching Blender's object outline) without any extra depth
+    /// handling.
+    fn sync_selection_outline_proxies(
         proxies: &mut HashMap<usize, Entity>,
-        depth_proxy_material: &bevy::prelude::Handle<StandardMaterial>,
+        outline_id_material: &bevy::prelude::Handle<OutlineIdMaterial>,
         selected: &std::collections::HashSet<usize>,
         scene: &SpawnedPmxScene,
         world: &mut bevy::ecs::world::World,
@@ -724,24 +692,14 @@ impl Backend {
             if !selected.contains(&index) || proxies.contains_key(&index) {
                 continue;
             }
-            // Opaque and alpha-to-coverage materials already write prepass
-            // depth; only blended materials are skipped by Bevy's prepass
-            // queue and need a proxy.
-            let needs_proxy = world
-                .get::<MeshMaterial3d<CharmeMaterial>>(*entity)
-                .and_then(|handle| world.resource::<Assets<CharmeMaterial>>().get(handle.id()))
-                .is_some_and(|material| material.alpha_mode == AlphaMode::Blend);
-            if !needs_proxy {
-                continue;
-            }
             let Some(mesh) = world.get::<Mesh3d>(*entity).cloned() else {
                 continue;
             };
             let proxy = world
                 .spawn((
                     mesh,
-                    MeshMaterial3d(depth_proxy_material.clone()),
-                    RenderLayers::layer(SELECTION_WIRE_LAYER),
+                    MeshMaterial3d(outline_id_material.clone()),
+                    RenderLayers::layer(SELECTION_ID_LAYER),
                     Transform::IDENTITY,
                     ChildOf(*entity),
                 ))
@@ -750,15 +708,19 @@ impl Backend {
         }
     }
 
-    /// Despawns every selection depth proxy. Must run before the PMX scene is
-    /// despawned, as scene teardown is non-recursive and would orphan the
+    /// Despawns every selection outline proxy. Must run before the PMX scene
+    /// is despawned, as scene teardown is non-recursive and would orphan the
     /// proxy children.
-    fn clear_selection_depth_proxies(&mut self) {
-        if self.selection_depth_proxies.is_empty() {
+    fn clear_selection_outline_proxies(&mut self) {
+        if self.selection_outline_proxies.is_empty() {
             return;
         }
         let world = self.app.world_mut();
-        for proxy in self.selection_depth_proxies.drain().map(|(_, proxy)| proxy) {
+        for proxy in self
+            .selection_outline_proxies
+            .drain()
+            .map(|(_, proxy)| proxy)
+        {
             let _ = world.despawn(proxy);
         }
     }
@@ -1008,7 +970,7 @@ impl Backend {
                 .resource_mut::<Assets<CharmeMaterial>>()
                 .remove(handle.id());
         }
-        self.clear_selection_depth_proxies();
+        self.clear_selection_outline_proxies();
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }
@@ -1058,7 +1020,7 @@ impl Backend {
         self.latest_load_request_id = None;
         self.scene_request_id = None;
         self.clear_material_previews();
-        self.clear_selection_depth_proxies();
+        self.clear_selection_outline_proxies();
         if let Some(scene) = self.pmx_scene.take() {
             scene.despawn(&mut self.app);
         }

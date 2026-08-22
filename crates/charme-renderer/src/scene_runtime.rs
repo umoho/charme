@@ -8,6 +8,7 @@ use crate::{
     overlay::PreviewOverlays,
     pmx_import::{PreparedPmxScene, material_for_record},
     scene::PmxMaterialSlot,
+    selection_outline::bake_outline_id,
 };
 
 pub(crate) struct SpawnedPmxScene {
@@ -156,10 +157,9 @@ pub(crate) fn spawn_pmx_scene(
                 .get(primitive.material_index),
             material_handles.get(primitive.material_index).cloned(),
         ) {
-            let mesh = app
-                .world_mut()
-                .resource_mut::<Assets<Mesh>>()
-                .add(prepared.model.geometry().to_mesh_for_primitive(*primitive));
+            let mut mesh = prepared.model.geometry().to_mesh_for_primitive(*primitive);
+            bake_outline_id(&mut mesh, primitive_index);
+            let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
             mesh_handles.push(mesh.clone());
             let entity = app
                 .world_mut()
@@ -181,10 +181,9 @@ pub(crate) fn spawn_pmx_scene(
     }
 
     if entities.is_empty() {
-        let mesh = app
-            .world_mut()
-            .resource_mut::<Assets<Mesh>>()
-            .add(prepared.model.geometry().to_mesh());
+        let mut mesh = prepared.model.geometry().to_mesh();
+        bake_outline_id(&mut mesh, 0);
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
         let material = app
             .world_mut()
             .resource_mut::<Assets<CharmeMaterial>>()
