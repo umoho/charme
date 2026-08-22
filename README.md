@@ -39,6 +39,9 @@ Implemented foundations:
   WGSL reflection with metadata-driven native float and integer Inspector controls.
 - Bidirectional material-slot selection between the hierarchy and viewport, with
   camera-aware Gizmos silhouette outlines and viewport ray picking.
+- Unsaved-changes confirmation (Save / Don't Save / Cancel) when closing the
+  editor window, quitting the application, or replacing the document with a
+  new or opened project.
 
 Inspector scalar edits are recorded in the core document model and now flow
 through the renderer into Charme's reusable Bevy material ABI. The first fixed

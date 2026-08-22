@@ -62,6 +62,8 @@
 "PmxArchiveContainsNoModel" = "This ZIP archive does not contain a PMX model.";
 "Import" = "Import";
 "Cancel" = "Cancel";
+"Save" = "Save";
+"DontSave" = "Don't Save";
 "ChooseShaderMessage" = "Choose a WGSL material Shader to inspect.";
 "FileMenu" = "File";
 "OpenProjectMenu" = "Open Project…";
@@ -97,6 +99,8 @@
 "UntitledProject" = "Untitled Project";
 "Unchanged" = "Unchanged";
 "UnsavedChanges" = "Unsaved Changes";
+"UnsavedChangesTitle" = "Do you want to save the changes you made to “{name}”?";
+"UnsavedChangesMessage" = "Your changes will be lost if you don't save them.";
 "RecentProjectTitle" = "{name} · {path}";
 "FrameStatus" = "Frame {sequence} · {width}×{height}px · Drag to rotate · Trackpad scroll to orbit · Pinch or ⌘/Ctrl-scroll to zoom";
 "LoadingPmx" = "Loading…\n{path}";

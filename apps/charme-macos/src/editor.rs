@@ -57,7 +57,7 @@ use self::{
     viewport::{NavigationGizmo, OrbitInputView, ToolPalette, make_image},
 };
 use crate::{
-    app::{CharmeApp, EditorMessage, MenuContext, Message},
+    app::{CharmeApp, EditorMessage, MenuContext, Message, ensure_charme_extension},
     localization::{self, Key},
     preview::RenderBridge,
     shader_inspection::{self, ShaderInspection},
@@ -725,6 +725,72 @@ impl EditorWindow {
             self.publish_view_model();
         }
         result
+    }
+
+    /// Asks the user what to do with unsaved changes, if any.
+    ///
+    /// Returns `true` when it is safe to discard the current document (it is
+    /// clean, the user chose to discard, or the user chose to save and the
+    /// save succeeded). Returns `false` to keep the document open.
+    pub(crate) fn confirm_unsaved_changes(&self) -> bool {
+        let view_model = self.controller.borrow().view_model();
+        if !view_model.dirty {
+            return true;
+        }
+        match unsaved_changes_alert_choice(&view_model.document_name) {
+            UnsavedChangesChoice::Save => self.save_for_close(),
+            UnsavedChangesChoice::Discard => true,
+            UnsavedChangesChoice::Cancel => false,
+        }
+    }
+
+    fn save_for_close(&self) -> bool {
+        let needs_panel = self.controller.borrow().project_path().is_none();
+        let result = if needs_panel {
+            self.run_save_project_panel()
+                .map(|path| self.save_project_as(path))
+        } else {
+            Some(self.save_project())
+        };
+        match result {
+            Some(Ok(())) => true,
+            Some(Err(error)) => {
+                tracing::error!(error = %error, "Failed to save the project before closing");
+                self.show_error(localization::text(Key::SaveProjectFailed));
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn run_save_project_panel(&self) -> Option<PathBuf> {
+        let suggested = format!(
+            "{}.charme",
+            self.controller.borrow().view_model().document_name
+        );
+        unsafe {
+            let panel: id = msg_send![class!(NSSavePanel), savePanel];
+            let name = NSString::new(&suggested);
+            let message = NSString::new(localization::text(Key::SaveProjectMessage));
+            let _: () = msg_send![panel, setNameFieldStringValue: &*name];
+            let _: () = msg_send![panel, setMessage: &*message];
+            let response: NSInteger = msg_send![panel, runModal];
+            let result = if response == NS_MODAL_RESPONSE_OK {
+                let url: id = msg_send![panel, URL];
+                if url.is_null() {
+                    None
+                } else {
+                    let path: id = msg_send![url, path];
+                    Some(PathBuf::from(NSString::retain(path).to_string()))
+                }
+            } else {
+                None
+            };
+            result.map(|path| {
+                let path = path.to_string_lossy().into_owned();
+                PathBuf::from(ensure_charme_extension(path))
+            })
+        }
     }
 
     fn publish_view_model(&self) {
@@ -2102,6 +2168,10 @@ impl WindowDelegate for EditorWindow {
         }
     }
 
+    fn should_close(&self) -> bool {
+        self.confirm_unsaved_changes()
+    }
+
     fn will_close(&self) {
         self.bridge.borrow_mut().take();
     }
@@ -2140,6 +2210,51 @@ fn is_zip_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+}
+
+const NS_ALERT_FIRST_BUTTON_RETURN: NSInteger = 1000;
+const NS_ALERT_SECOND_BUTTON_RETURN: NSInteger = 1001;
+const NS_ALERT_THIRD_BUTTON_RETURN: NSInteger = 1002;
+const NS_MODAL_RESPONSE_OK: NSInteger = 1;
+
+/// The user's choice in the unsaved-changes confirmation alert.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UnsavedChangesChoice {
+    /// Save the document first, then proceed.
+    Save,
+    /// Discard the unsaved changes and proceed.
+    Discard,
+    /// Keep the document open and do nothing.
+    Cancel,
+}
+
+/// Runs a modal `NSAlert` asking whether to save the current document.
+///
+/// `Save` is the default (rightmost) button, followed by `Cancel` and
+/// `Don't Save`, matching the standard macOS close/quit confirmation.
+fn unsaved_changes_alert_choice(document_name: &str) -> UnsavedChangesChoice {
+    let title = localization::format(Key::UnsavedChangesTitle, &[("name", &document_name)]);
+    unsafe {
+        let alert: id = msg_send![class!(NSAlert), new];
+        let title = NSString::new(&title);
+        let message = NSString::new(localization::text(Key::UnsavedChangesMessage));
+        let save = NSString::new(localization::text(Key::Save));
+        let cancel = NSString::new(localization::text(Key::Cancel));
+        let dont_save = NSString::new(localization::text(Key::DontSave));
+        let _: () = msg_send![alert, setMessageText: &*title];
+        let _: () = msg_send![alert, setInformativeText: &*message];
+        let _: id = msg_send![alert, addButtonWithTitle: &*save];
+        let _: id = msg_send![alert, addButtonWithTitle: &*cancel];
+        let _: id = msg_send![alert, addButtonWithTitle: &*dont_save];
+        let response: NSInteger = msg_send![alert, runModal];
+        let _: () = msg_send![alert, release];
+        match response {
+            NS_ALERT_FIRST_BUTTON_RETURN => UnsavedChangesChoice::Save,
+            NS_ALERT_SECOND_BUTTON_RETURN => UnsavedChangesChoice::Cancel,
+            NS_ALERT_THIRD_BUTTON_RETURN => UnsavedChangesChoice::Discard,
+            _ => UnsavedChangesChoice::Cancel,
+        }
+    }
 }
 
 fn choose_pmx_archive_entry(path: &Path, entries: &[String]) -> Option<String> {

@@ -862,7 +862,7 @@ fn set_menu_item_checked(menu: id, tag: MenuTag, checked: bool) {
     }
 }
 
-pub(super) fn ensure_charme_extension(path: String) -> String {
+pub(crate) fn ensure_charme_extension(path: String) -> String {
     if path.to_ascii_lowercase().ends_with(".charme") {
         path
     } else {

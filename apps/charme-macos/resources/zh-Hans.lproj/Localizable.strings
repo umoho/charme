@@ -62,6 +62,8 @@
 "PmxArchiveContainsNoModel" = "此ZIP压缩包不包含PMX模型。";
 "Import" = "导入";
 "Cancel" = "取消";
+"Save" = "保存";
+"DontSave" = "不保存";
 "ChooseShaderMessage" = "选择一个WGSL材质Shader进行检查。";
 "FileMenu" = "文件";
 "OpenProjectMenu" = "打开项目…";
@@ -97,6 +99,8 @@
 "UntitledProject" = "未命名项目";
 "Unchanged" = "未更改";
 "UnsavedChanges" = "未保存更改";
+"UnsavedChangesTitle" = "是否要保存对“{name}”所做的更改？";
+"UnsavedChangesMessage" = "如果不保存，你的更改将会丢失。";
 "RecentProjectTitle" = "{name} · {path}";
 "FrameStatus" = "第{sequence}帧 · {width}×{height}px · 拖动旋转 · 双指滚动旋转 · 捏合或⌘/Ctrl滚动缩放";
 "LoadingPmx" = "加载中…\n{path}";

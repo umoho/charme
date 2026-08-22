@@ -7,7 +7,7 @@ use std::{
 
 use cacao::{
     appkit::{
-        Alert, App, AppDelegate,
+        Alert, App, AppDelegate, TerminateResponse,
         window::{Window, WindowConfig, WindowToolbarStyle},
     },
     defaults::{UserDefaults, Value},
@@ -34,11 +34,11 @@ use crate::{
 };
 
 use menu::{
-    activate_app, ensure_charme_extension, install_native_menus, refresh_recent_projects_menu,
-    set_application_menu_name, update_menu_state,
+    activate_app, install_native_menus, refresh_recent_projects_menu, set_application_menu_name,
+    update_menu_state,
 };
 
-pub(crate) use menu::menu_target;
+pub(crate) use menu::{ensure_charme_extension, menu_target};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MenuContext {
@@ -53,6 +53,7 @@ pub(crate) enum Message {
     SaveProject,
     ChooseSaveProject,
     SaveProjectAs(PathBuf),
+    ConfirmQuit,
     Undo,
     Redo,
     SelectAll,
@@ -195,6 +196,21 @@ impl AppDelegate for CharmeApp {
         }
     }
 
+    fn should_terminate(&self) -> TerminateResponse {
+        let dirty = self
+            .editor
+            .borrow()
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+            .is_some_and(|window| window.controller.borrow().view_model().dirty);
+        if dirty {
+            App::<CharmeApp, Message>::dispatch_main(Message::ConfirmQuit);
+            TerminateResponse::Later
+        } else {
+            TerminateResponse::Now
+        }
+    }
+
     fn should_terminate_after_last_window_closed(&self) -> bool {
         true
     }
@@ -211,6 +227,7 @@ impl Dispatcher for CharmeApp {
             Message::SaveProject => self.save_project(),
             Message::ChooseSaveProject => self.choose_save_project(),
             Message::SaveProjectAs(path) => self.save_project_as(path),
+            Message::ConfirmQuit => self.confirm_quit(),
             Message::Undo => self.undo(),
             Message::Redo => self.redo(),
             Message::SelectAll => self.select_all_primitives(),
@@ -511,6 +528,9 @@ impl CharmeApp {
     }
 
     fn open_project(&self, path: PathBuf) {
+        if !self.confirm_replace_editor_document() {
+            return;
+        }
         if !path
             .extension()
             .and_then(|extension| extension.to_str())
@@ -549,7 +569,34 @@ impl CharmeApp {
     }
 
     fn new_project(&self) {
+        if !self.confirm_replace_editor_document() {
+            return;
+        }
         self.with_editor(|editor| editor.reset_controller());
+    }
+
+    /// Resolves a pending application-termination request after the user has
+    /// answered the unsaved-changes confirmation.
+    fn confirm_quit(&self) {
+        let proceed = self
+            .editor
+            .borrow()
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+            .map(|window| window.confirm_unsaved_changes())
+            .unwrap_or(true);
+        App::reply_to_termination_request(proceed);
+    }
+
+    /// Confirms that the current document may be replaced by a new or
+    /// opened project without losing unsaved changes.
+    fn confirm_replace_editor_document(&self) -> bool {
+        self.editor
+            .borrow()
+            .as_ref()
+            .and_then(|window| window.delegate.as_ref())
+            .map(|window| window.confirm_unsaved_changes())
+            .unwrap_or(true)
     }
 
     fn ensure_editor(&self) {
