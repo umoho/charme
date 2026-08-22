@@ -1,0 +1,6 @@
+# Keep the Apple deployment target consistent across direct `cargo build` /
+# `cargo run` and the packaging script (Packager.toml's beforePackagingCommand
+# sets MACOSX_DEPLOYMENT_TARGET=11.0). Without this, cargo sees a changed
+# deployment-target environment variable and rebuilds the whole dependency tree.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "11.0"
