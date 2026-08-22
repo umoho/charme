@@ -15,14 +15,13 @@ cargo install cargo-packager --version 0.11.8 --locked
 从仓库根目录运行单个脚本即可构建并启动 debug 应用：
 
 ```sh
-scripts/run-macos-app.sh                 # debug，默认启用 Bevy 动态链接
+scripts/run-macos-app.sh                 # debug，构建并运行
 ```
 
-也可以指定 release、关闭 debug 动态链接，或只构建/只运行：
+也可以指定 release，或只构建/只运行：
 
 ```sh
 scripts/run-macos-app.sh --release
-scripts/run-macos-app.sh --no-dynamic-linking
 scripts/run-macos-app.sh --build-only --release
 scripts/run-macos-app.sh --run-only
 ```
