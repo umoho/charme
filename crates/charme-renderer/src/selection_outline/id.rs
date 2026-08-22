@@ -22,11 +22,15 @@ use bevy::{
     },
     image::Image,
     math::Vec4,
-    pbr::{Material, MaterialPlugin},
+    pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin},
     prelude::{AlphaMode, Color, Component, Mesh},
     reflect::TypePath,
     render::{
-        render_resource::{AsBindGroup, Extent3d, TextureDimension, TextureFormat, TextureUsages},
+        mesh::MeshVertexBufferLayoutRef,
+        render_resource::{
+            AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+            TextureDimension, TextureFormat, TextureUsages,
+        },
         view::Msaa,
     },
     shader::{Shader, ShaderRef},
@@ -88,6 +92,23 @@ impl Material for OutlineIdMaterial {
 
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Opaque
+    }
+
+    /// Renders the object-ID with both faces enabled.
+    ///
+    /// Back-face culling is turned off so back-facing surfaces that form the
+    /// silhouette at grazing angles still write an ID. This mirrors Blender's
+    /// outline prepass, which does not cull back faces, and keeps the selection
+    /// outline on the full silhouette instead of dropping the segments where
+    /// the outermost surface happens to face away from the camera.
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        descriptor.primitive.cull_mode = None;
+        Ok(())
     }
 }
 
