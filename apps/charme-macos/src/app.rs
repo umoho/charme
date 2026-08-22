@@ -197,13 +197,15 @@ impl AppDelegate for CharmeApp {
     }
 
     fn should_terminate(&self) -> TerminateResponse {
-        let dirty = self
-            .editor
-            .borrow()
-            .as_ref()
-            .and_then(|window| window.delegate.as_ref())
-            .is_some_and(|window| window.controller.borrow().view_model().dirty);
-        if dirty {
+        let (dirty, confirmed) = {
+            let editor = self.editor.borrow();
+            let window = editor.as_ref().and_then(|window| window.delegate.as_ref());
+            (
+                window.is_some_and(|window| window.controller.borrow().view_model().dirty),
+                window.is_some_and(|window| window.has_discard_confirmed()),
+            )
+        };
+        if dirty && !confirmed {
             App::<CharmeApp, Message>::dispatch_main(Message::ConfirmQuit);
             TerminateResponse::Later
         } else {
@@ -578,13 +580,17 @@ impl CharmeApp {
     /// Resolves a pending application-termination request after the user has
     /// answered the unsaved-changes confirmation.
     fn confirm_quit(&self) {
-        let proceed = self
-            .editor
-            .borrow()
-            .as_ref()
-            .and_then(|window| window.delegate.as_ref())
-            .map(|window| window.confirm_unsaved_changes())
-            .unwrap_or(true);
+        let proceed = {
+            let editor = self.editor.borrow();
+            let window = editor.as_ref().and_then(|window| window.delegate.as_ref());
+            let proceed = window
+                .map(|window| window.confirm_unsaved_changes())
+                .unwrap_or(true);
+            if proceed && let Some(window) = window {
+                window.mark_discard_confirmed();
+            }
+            proceed
+        };
         App::reply_to_termination_request(proceed);
     }
 

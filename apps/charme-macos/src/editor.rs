@@ -6,7 +6,7 @@ mod viewport;
 pub(crate) use hierarchy::HierarchyItemId;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::BTreeMap,
     panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
@@ -348,6 +348,10 @@ pub(crate) struct EditorWindow {
     current_image: RefCell<Option<Image>>,
     current_inspector_preview: RefCell<Option<Image>>,
     bridge: RefCell<Option<RenderBridge>>,
+    /// Set once the user accepted discarding (or saving) the current document,
+    /// so the follow-up close/quit confirmations triggered by the AppKit
+    /// termination flow do not ask a second time.
+    discard_confirmed: Cell<bool>,
 }
 
 impl EditorWindow {
@@ -522,11 +526,13 @@ impl EditorWindow {
             current_image: RefCell::new(None),
             current_inspector_preview: RefCell::new(None),
             bridge: RefCell::new(None),
+            discard_confirmed: Cell::new(false),
         }
     }
 
     pub(crate) fn install_controller(&self, controller: EditorController) {
         self.controller.replace(controller);
+        self.discard_confirmed.set(false);
         self.reset_project_views();
         self.publish_view_model();
     }
@@ -536,6 +542,7 @@ impl EditorWindow {
             .replace(EditorController::new(localization::text(
                 Key::UntitledProject,
             )));
+        self.discard_confirmed.set(false);
         self.reset_project_views();
         self.publish_view_model();
     }
@@ -742,6 +749,18 @@ impl EditorWindow {
             UnsavedChangesChoice::Discard => true,
             UnsavedChangesChoice::Cancel => false,
         }
+    }
+
+    /// Records that the user already accepted losing the current document's
+    /// unsaved changes, so subsequent close/quit confirmations are skipped.
+    pub(crate) fn mark_discard_confirmed(&self) {
+        self.discard_confirmed.set(true);
+    }
+
+    /// Whether the user already accepted losing the current document's
+    /// unsaved changes.
+    pub(crate) fn has_discard_confirmed(&self) -> bool {
+        self.discard_confirmed.get()
     }
 
     fn save_for_close(&self) -> bool {
@@ -2169,7 +2188,14 @@ impl WindowDelegate for EditorWindow {
     }
 
     fn should_close(&self) -> bool {
-        self.confirm_unsaved_changes()
+        if self.has_discard_confirmed() {
+            return true;
+        }
+        let proceed = self.confirm_unsaved_changes();
+        if proceed {
+            self.mark_discard_confirmed();
+        }
+        proceed
     }
 
     fn will_close(&self) {
